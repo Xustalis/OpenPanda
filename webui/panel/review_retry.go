@@ -21,5 +21,5 @@ func (h *handler) retryTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, errors.New("task execution engine is unavailable"))
 		return
 	}
-	h.startTaskOperation(w, r, eng, id, "", true)
+	h.startTaskOperation(w, r, eng, id, "", operationRetry)
 }

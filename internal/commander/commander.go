@@ -914,7 +914,7 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 		// past this block so the retried run gets the same .mcp.json the first
 		// attempt had; removing it between attempts would silently strip the
 		// task's MCP tools from exactly the run that decides the outcome.
-		if !ar.OK && transientAgentFailure(ar) {
+		if !ar.OK && ar.RescueError == "" && transientAgentFailure(ar) {
 			timer := time.NewTimer(retryBackoff)
 			select {
 			case <-ctx.Done():
@@ -953,6 +953,7 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 			SessionID:      ar.SessionID,
 			Model:          ar.Model,
 			Injected:       ar.Injected,
+			RescueError:    ar.RescueError,
 			Structured:     ar.Structured,
 			SubagentStats:  ar.SubagentStats,
 			ResumeRejected: rejectedResume(runCtx, ag.Adapter, ar),
@@ -1156,6 +1157,8 @@ type Result struct {
 	SessionID string
 	Model     string `json:"model,omitempty"`
 	Injected  bool   `json:"injected,omitempty"`
+	// RescueError is the native provider error that triggered model injection.
+	RescueError string
 	// Structured carries the harness's validated structured output when the
 	// run used a result schema — the parsed protocol fields the run loop
 	// prefers over text markers. SubagentStats is the harness's own
@@ -1196,6 +1199,26 @@ type AgentResult struct {
 	SessionDead bool `json:"session_dead,omitempty"`
 	// WorkObserved is trusted Go-side tool activity, never adapter-authored.
 	WorkObserved bool `json:"-"`
+	// RescueError is set by the router, not by the adapter.
+	RescueError string `json:"-"`
+}
+
+type recoveryModelKey struct{}
+
+type recoveryModelRequest struct {
+	agent, sessionID, cause string
+}
+
+// WithRecoveryModel lets a new Panda recovery instruction resume Claude's
+// checkpoint with injected credentials. It does not replay the old prompt.
+func WithRecoveryModel(ctx context.Context, failed Result) context.Context {
+	if failed.OK || failed.Injected || failed.Agent == "" || failed.Adapter != "claude_code.py" ||
+		failed.SessionID == "" || !claudeProviderFailure(AgentResult{Result: failed.Stdout}) {
+		return ctx
+	}
+	return context.WithValue(ctx, recoveryModelKey{}, recoveryModelRequest{
+		agent: failed.Agent, sessionID: failed.SessionID, cause: security.Redact(strings.TrimSpace(failed.Stdout)),
+	})
 }
 
 // runAdapterDefault shells out to a Python adapter in adapters/, injecting
@@ -1219,6 +1242,8 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 	// the env, and the failure-time retry below all have to read the same
 	// resolved config rather than r.model.
 	injModel := r.injectionModelFor(name, adapter)
+	canRescue := r.injectionModel != config.InjectionModelNever && !ModelCredsWithheld(ctx) &&
+		modelConfigured(injModel) && injModel.APIKey != "" && supportsModelInjection(name, adapter, injModel)
 	if ModelCredsWithheld(ctx) && dec.Inject {
 		// Trust-zone cred withholding: the task's admission tier is
 		// sub-mesh, and this node's model credentials do not serve its
@@ -1229,6 +1254,15 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 			Inject: false,
 			Reason: "trust zone: model credentials withheld from sub-mesh origin",
 		}
+	}
+	recovery, _ := ctx.Value(recoveryModelKey{}).(recoveryModelRequest)
+	resumeAdapter := ResumeAdapter(ctx)
+	resumingWithInjection := canRescue && !dec.Inject && adapter == "claude_code.py" &&
+		recovery.agent == name && recovery.sessionID != "" && recovery.sessionID == ResumeID(ctx) &&
+		(resumeAdapter == "" || resumeAdapter == adapter)
+	if resumingWithInjection {
+		dec.Inject = true
+		dec.Model = effectiveModelNameFor(name, adapter, injModel)
 	}
 	var env []string
 	// The agent's own model preference list (routing.agent_models) is
@@ -1276,19 +1310,25 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 		credEnv = adapterCredentialEnv(name, adapter)
 	}
 	env = mergeAdapterEnv(credEnv, env)
+	if resumingWithInjection {
+		DropAgentSession(ctx, name, adapter)
+	}
 	res := r.runProcess(ctx, adapter, prompt, cwd, env)
+	if resumingWithInjection {
+		return injectedRescueResult(res, recovery.cause, dec.Model, recovery.sessionID)
+	}
 	if dec.Inject {
 		res.Injected = true
 		res.Model = dec.Model
+	} else if res.Injected && res.Model == "" {
+		res.Model = effectiveModelNameFor(name, adapter, injModel)
 	}
 	// Dynamic injection fallback (Requirement 5):
 	// If the agent failed with authentication, quota, provider errors, or timeouts
 	// and PANDA had not injected its model key (because the agent declared its own credentials which failed),
 	// automatically inject PANDA's configured model API key when no work or timeout was observed.
-	// The retried result REPLACES the original only when it succeeded: a
-	// different failure under injection is not more informative than the
-	// original failure — swapping it in would mask the real reason the task
-	// failed (e.g. report exit-code noise instead of "quota exhausted").
+	// Keep the original diagnosis alongside the injected attempt, including
+	// when the latter fails. Its checkpoint and work evidence own recovery.
 	//
 	// injection.model=never opts out of this too: "never" is documented as
 	// "agents always use their own models", and a retry that hands the task
@@ -1301,7 +1341,7 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 	// have refused a plaintext endpoint the model explicitly opted into.
 	// A kill the commander itself performed is not a provider failure even
 	// though its verdict says "timeout" — see commanderKill.
-	if ctx.Err() == nil && !res.OK && replayableFailure(res) && !dec.Inject && r.injectionModel != config.InjectionModelNever && !ModelCredsWithheld(ctx) && modelConfigured(injModel) && supportsModelInjection(name, adapter, injModel) && injModel.APIKey != "" && !commanderKill(res) && isProviderFailureOrAuth(res.Result+" "+res.Stderr) {
+	if ctx.Err() == nil && !res.Injected && canRescue && providerRescueEligible(adapter, res) {
 		if ep := effectiveBaseURLFor(name, adapter, injModel); ep == "" || security.CheckModelEndpoint(ep, injModel.AllowPlaintext) == nil {
 			// Merged with the first attempt's environment, not replacing it:
 			// the retry is the same run with a different model endpoint, so the
@@ -1309,16 +1349,48 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 			// belong in its environment.
 			injectedEnv := mergeAdapterEnv(env, modelEnvForAdapter(injModel, name, adapter))
 			if len(injectedEnv) > 0 {
+				DropAgentSession(ctx, name, adapter)
 				retryRes := r.runProcess(ctx, adapter, prompt, cwd, injectedEnv)
-				if retryRes.OK {
-					retryRes.Injected = true
-					retryRes.Model = effectiveModelNameFor(name, adapter, injModel)
-					return retryRes
+				cause := strings.TrimSpace(res.Result)
+				if cause == "" {
+					cause = describeAgentFailure(res)
 				}
+				return injectedRescueResult(retryRes, cause, effectiveModelNameFor(name, adapter, injModel), "")
 			}
 		}
 	}
 	return res
+}
+
+func injectedRescueResult(res AgentResult, cause, model, checkpoint string) AgentResult {
+	res.Injected = true
+	res.Model = model
+	res.RescueError = security.Redact(cause)
+	if !res.OK {
+		res.Stderr = res.RescueError + "\nPanda model injection failed: " + security.Redact(describeAgentFailure(res))
+		if res.SessionID == "" {
+			res.SessionID = checkpoint
+		}
+	}
+	return res
+}
+
+func providerRescueEligible(adapter string, res AgentResult) bool {
+	// Claude emits a session id before its first provider response. Its
+	// api_retry failure envelope can precede any work. Tool activity, token
+	// usage and all ordinary checkpoints still forbid a full replay.
+	if adapter == "claude_code.py" && claudeProviderFailure(res) {
+		res.SessionID = ""
+	}
+	text := res.Result + " " + res.Stderr
+	return replayableFailure(res) && !commanderKill(res) &&
+		(isProviderFailureOrAuth(text) || IsModelConfigFailure(text))
+}
+
+func claudeProviderFailure(res AgentResult) bool {
+	text := strings.ToLower(strings.TrimSpace(res.Result))
+	return strings.HasPrefix(text, "api_retry error ") ||
+		(strings.HasPrefix(text, "api error:") && (isProviderFailureOrAuth(text) || IsModelConfigFailure(text)))
 }
 
 // SetAdapterProcessRunner swaps the process runner (test seam).

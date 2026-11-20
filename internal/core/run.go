@@ -1196,6 +1196,26 @@ func (c *Core) decorateExecCtx(execCtx, ctx context.Context, taskID string, task
 				})
 				return
 			}
+			if ev.Ev == "context" && ev.ContextTokens > 0 {
+				// One request-scoped context sample ("how full is the agent's
+				// window right now"). Recorded as its own quiet event rather
+				// than a transcript block: a long run emits one per model
+				// request, which is exactly the gauge's refresh rate and far
+				// too much for the timeline. Returned before the transcript
+				// archive so it never becomes an agent_event row.
+				data := map[string]any{
+					"adapter": ev.Adapter, "context_tokens": ev.ContextTokens,
+					"attempt_id": task.AttemptID, "executor_id": c.nodeID,
+				}
+				if ev.Model != "" {
+					data["model"] = ev.Model
+				}
+				if err := c.store.RecordEvent(context.WithoutCancel(ctx), taskID,
+					EvAgentContext, data); err != nil {
+					c.logger.Warn("record agent context", "task", taskID, "err", err)
+				}
+				return
+			}
 			// Fold the event into the round's evidence before the transcript
 			// archive: the judge uses a separate bounded evidence summary.
 			evidence.observe(ev)
@@ -1479,6 +1499,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		})
 	}
 	var lastAgent, lastOutput, lastStderr string
+	var modelRecovery commander.Result
 	// lastChanged carries the last completed round's workdir footprint out of
 	// the loop: the judge sees it as evidence (an agent claiming done while
 	// touching nothing is the classic failure), and the result contract below
@@ -1780,7 +1801,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		var extraTokens int
 		var extraCost float64
 		for {
-			runCtx := execCtx
+			runCtx := commander.WithRecoveryModel(execCtx, modelRecovery)
 			// Attach the resume hint whenever this task carries one. Which
 			// attempt may actually use it is decided one level down, per
 			// attempt, by buildAdapterRequest's adapter affinity: the minting
@@ -1791,7 +1812,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			// round-level drop cold-starts the very checkpoint a timeout retry
 			// exists to resume.
 			if sessionID != "" {
-				runCtx = commander.WithResume(execCtx, sessionID, sessionAdapter)
+				runCtx = commander.WithResume(runCtx, sessionID, sessionAdapter)
 			}
 			if delta != "" && !overflowRetried && !resumeRetried {
 				runCtx = commander.WithIncrementalPrompt(runCtx, prompt, delta, deliveredSession, deliveredAdapter)
@@ -1842,6 +1863,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				roundCtx = commander.WithRestricted(roundCtx)
 			}
 			res = router.Execute(roundCtx, *plan, prompt, workDir, roundAuthorized)
+			modelRecovery = commander.Result{}
 			if steerable {
 				c.clearInterrupt(taskID)
 				interrupted = roundCtx.Err() != nil && c.steerUnseen(execCtx, taskID, boardSeen)
@@ -1962,7 +1984,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// waits for their results, and re-runs the round with the products
 		// folded into the intent. The delegation never reaches a judge: the
 		// round is re-driven, not verified.
-		if plan.Kind == "agent" {
+		if plan.Kind == "agent" && res.OK {
 			// Sibling-board posts (§inter-task messages) parse FIRST: the
 			// delegation branch below may re-run the round (round--), and
 			// any PANDA_MSG that shared the same output would be lost with
@@ -2146,8 +2168,8 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		}
 
 		// — Trace: supervision_round, part 1. Judged rounds trace after the
-		// judge pass below, where their verdict becomes known; only rounds that
-		// never reach a judge trace here, so the detail view's "2/5" badge and
+		// completion judge below, where their verdict becomes known; other
+		// rounds trace here, so the detail view's "2/5" badge and
 		// verdict pill always reflect a decided round. The judge runs on ANY
 		// successful agent round under a supervisor — the final round included —
 		// so the predicate is the same one that gates the Supervise call below,
@@ -2158,11 +2180,8 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		if !judgeWillRun && !commander.IsAuthorizationRefusal(res.Stderr) {
 			status := string(verdict.Status)
 			if !res.OK {
-				// A failed round is never judged (the failure branch below
-				// returns before Supervise runs), so reporting the verdict
-				// variable — its zero value, or the previous round's — would paint
-				// "done" over a failed attempt. The execution outcome is the only
-				// truthful status here.
+				// Recovery can plan the next action, while this round's
+				// execution status remains failed.
 				status = "failed"
 			} else if tokenExhausted {
 				// The verdict-review assignment below parks this round before a
@@ -2218,6 +2237,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			// model endpoint, say so at the top of the output, in the audit log,
 			// and in the task event stream the Web task detail replays. Gated on
 			// the adapter actually running (a tier refusal spawns nothing).
+			roundInjection := injection
 			if res.Injected {
 				// res.Injected is set by two different things: the policy
 				// decision (inject up front) or the failure-time rescue inside
@@ -2225,13 +2245,13 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				// means the decision itself said "don't inject", so its reason
 				// describes the opposite of what happened — name the rescue
 				// instead of repeating "the agent ships its own model".
-				rescued := !injection.Inject
-				injection.Inject = true
+				rescued := res.RescueError != "" || !roundInjection.Inject
+				roundInjection.Inject = true
 				if res.Model != "" {
-					injection.Model = res.Model
+					roundInjection.Model = res.Model
 				}
 				if rescued {
-					injection.Kind = commander.InjectionKindRescue
+					roundInjection.Kind = commander.InjectionKindRescue
 					// The retry injected the per-agent pin (injection.agents),
 					// not the node model, so resolve the endpoint the same way
 					// the adapter did. Reporting the node's URL here would
@@ -2248,34 +2268,35 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 							}
 						}
 						model, endpoint := router.InjectedModelEndpoint(res.Agent, adapter)
-						if injection.Model == "" {
-							injection.Model = model
+						if roundInjection.Model == "" {
+							roundInjection.Model = model
 						}
-						injection.BaseURL = endpoint
+						roundInjection.BaseURL = endpoint
 					}
 				}
-				if injection.BaseURL == "" {
-					injection.BaseURL = commander.EffectiveBaseURL(model)
+				if roundInjection.BaseURL == "" {
+					roundInjection.BaseURL = commander.EffectiveBaseURL(model)
 				}
-				if rescued || injection.Reason == "" {
-					injection.Reason = "credential rescue: the agent's own model failed, panda's model was injected for the retry"
+				if rescued || roundInjection.Reason == "" {
+					roundInjection.Reason = "credential rescue: the agent's own model failed, panda's model was injected for the retry"
 				}
 			}
-			if injection.Inject && res.Agent != "" {
-				notice := commander.InjectionNotice(injection, res.Agent)
+			if roundInjection.Inject && res.Agent != "" {
+				notice := commander.InjectionNotice(roundInjection, res.Agent)
 				if res.Stdout != "" {
 					res.Stdout = notice + "\n" + res.Stdout
 				} else {
 					res.Stdout = notice
 				}
 				c.audit(ctx, taskID, "model:injected", res.Agent, "injected",
-					"model="+injection.Model+" endpoint="+injection.BaseURL+" reason="+injection.Reason)
-				key := res.Agent + "|" + injection.Model + "|" + injection.BaseURL + "|" + string(injection.Kind)
+					"model="+roundInjection.Model+" endpoint="+roundInjection.BaseURL+" reason="+roundInjection.Reason)
+				key := res.Agent + "|" + roundInjection.Model + "|" + roundInjection.BaseURL + "|" + string(roundInjection.Kind)
 				if key != lastInjectionKey {
 					lastInjectionKey = key
 					if err := c.store.RecordEvent(ctx, taskID, EvModelInjection, map[string]any{
-						"agent": res.Agent, "model": injection.Model, "base_url": injection.BaseURL,
-						"reason": injection.Reason, "kind": string(injection.Kind),
+						"agent": res.Agent, "model": roundInjection.Model, "base_url": roundInjection.BaseURL,
+						"reason": roundInjection.Reason, "kind": string(roundInjection.Kind),
+						"provider_error": boundedEvidenceText(res.RescueError, 4096),
 					}); err != nil {
 						c.logger.Warn("record model injection event", "task", taskID, "err", err)
 					}
@@ -2320,16 +2341,22 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			c.audit(ctx, taskID, "native:tier2", plan.Command, result, "")
 		}
 
-		// The round's workdir diff is computed once for every agent that came
-		// back OK: the scope check diffs it for drift, the judge reads it as
-		// evidence, and the result contract reports it as files_changed.
-		// Host-noise paths are filtered here so all three consumers agree.
-		if plan.Kind == "agent" && res.OK && beforeOK {
+		// Capture partial edits after a failed execution too, so Panda can
+		// plan from the actual workspace and check its scope before resuming.
+		collectFailureEvidence := !res.OK && supervisor != nil && execCtx.Err() == nil &&
+			!commander.IsAuthorizationRefusal(res.Stderr)
+		if plan.Kind == "agent" && beforeOK && (res.OK || collectFailureEvidence) {
 			after, err := defense.SnapshotDir(workDir)
 			if err != nil {
 				c.logger.Warn("snapshot workdir after agent", "task", taskID, "err", err)
+				if collectFailureEvidence {
+					filesTruncated = true
+				}
 			} else {
 				filesTruncated = after.Truncated()
+				if collectFailureEvidence {
+					filesTruncated = filesTruncated || before.Truncated() || before.Skipped() > 0 || after.Skipped() > 0
+				}
 				if after.Truncated() || after.Skipped() > 0 {
 					c.logger.Info("workdir snapshot partial", "task", taskID,
 						"truncated", after.Truncated(), "skipped", after.Skipped())
@@ -2406,6 +2433,43 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		}
 
 		if !res.OK {
+			var recovery *entry.SuperviseVerdict
+			turnCapped := plan.Kind == "agent" && turnCapFailure(res)
+			overflowed := plan.Kind == "agent" && commander.ContextOverflow(res.Stderr)
+			if plan.Kind == "agent" && supervisor != nil && ctx.Err() == nil && execCtx.Err() == nil &&
+				!tokenExhausted && !turnCapped && !overflowed && !commander.IsAuthorizationRefusal(res.Stderr) {
+				recoveryEvidence := evidence.render(scout.Cached(workDir).Test)
+				v := c.superviseAgentFailure(execCtx, supervisor, taskID, fullIntent(), res,
+					lastChanged, recoveryEvidence, round+1, maxRounds)
+				recovery = &v
+				tier := plan.Tier
+				if ag, ok := router.Agent(res.Agent); ok {
+					tier = max(tier, ag.Tier)
+				}
+				// A new instruction can continue the same bounded task under
+				// the existing router and permissions. Executor refusal,
+				// special checkpoint recovery and irreversible operations
+				// retain their dedicated handling.
+				if v.Status == entry.VerdictContinue && round+1 < maxRounds && execCtx.Err() == nil &&
+					tier < defense.TierIrreversible &&
+					(scope.Empty() || (beforeOK && !filesTruncated && len(scope.DriftUnder(workDir, lastChanged)) == 0)) {
+					var safeAlternates []string
+					for _, alt := range plan.Alternates {
+						if ag, ok := router.Agent(alt); ok && ag.Tier < defense.TierIrreversible {
+							safeAlternates = append(safeAlternates, alt)
+						}
+					}
+					plan.Alternates = safeAlternates
+					modelRecovery = res
+					// The adapter can still be alive after its CLI has stopped.
+					// Reopen the checkpoint instead of sending to that process.
+					commander.DropAgentSession(execCtx, res.Agent, res.Adapter)
+					intentNotes = append(intentNotes, "[Panda recovery instruction; original scope and permissions apply]\n"+
+						"Inspect the existing work before continuing. Do not repeat completed actions.\n"+v.Followup)
+					continue
+				}
+			}
+
 			// A run that stopped at its CLI turn cap is interrupted work, not
 			// a failed task. The CLI mints a resumable session before it
 			// stops, so one more round with a higher cap continues the same
@@ -2413,7 +2477,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			// Without this, a long repo task that is simply bigger than the
 			// adapter default fails on the cap and every retry hits the same
 			// wall.
-			if plan.Kind == "agent" && round+1 < maxRounds && sessionID != "" && !tokenExhausted && execCtx.Err() == nil && turnCapFailure(res) {
+			if turnCapped && round+1 < maxRounds && sessionID != "" && !tokenExhausted && execCtx.Err() == nil {
 				c.EvTrace(execCtx, taskID, "turn_cap_continue", map[string]any{
 					"round": round + 1, "agent": res.Agent, "session": sessionID,
 				})
@@ -2424,7 +2488,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				continue
 			}
 			// Exhausted continuation must not enter the outer generic retry loop.
-			if plan.Kind == "agent" && turnCapFailure(res) {
+			if turnCapped {
 				msg := "agent turn budget exhausted; task remains incomplete; revise the budget or scope before continuing"
 				if err := c.store.pauseWithResultDisposition(context.WithoutCancel(ctx), taskID, c.nodeID, map[string]any{"ok": false, "needs_followup": true, "verdict": "continue", "stderr": msg, "agent_session_id": sessionID, "agent_session_adapter": sessionAdapter}, ApprovalNeedsChangedInput, msg, attemptID); err != nil {
 					if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
@@ -2445,7 +2509,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			// its one shot — surviving here means the intent/manifest alone
 			// exceeds the agent's window, so park the task for a human to
 			// compress/split it rather than burning another round.
-			if plan.Kind == "agent" && commander.ContextOverflow(res.Stderr) {
+			if overflowed {
 				msg := "agent context window overflow: " + res.Stderr
 				c.EvTrace(context.WithoutCancel(ctx), taskID, EvContextOverflow, map[string]any{
 					"agent": res.Agent, "round": round, "detail": res.Stderr,
@@ -2505,6 +2569,40 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 					Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 				}}, nil
 			}
+			if recovery != nil && execCtx.Err() == nil {
+				// No viable recovery remained. Preserve the execution error
+				// and Panda's decision without a blind outer retry.
+				reason := strings.TrimSpace(res.Stderr)
+				if reason == "" {
+					reason = fmt.Sprintf("agent execution failed (exit %d)", res.ExitCode)
+				}
+				reviewReason := recovery.Reason
+				if recovery.Status == entry.VerdictContinue {
+					reviewReason = "Panda proposed recovery, but no eligible execution round remained: " + recovery.Reason
+				}
+				if err := c.store.pauseWithReviewResult(context.WithoutCancel(ctx), taskID, c.nodeID, map[string]any{
+					"ok": false, "stderr": reason, "stdout": res.Stdout, "verdict": recovery.Status,
+					"verdict_reason": reviewReason, "followup": recovery.Followup, "needs_followup": true,
+					"agent": res.Agent, "model": res.Model, "injected": res.Injected,
+					"files_changed": lastChanged[:min(len(lastChanged), maxFilesChangedReport)], "files_truncated": filesTruncated,
+					"agent_session_id": sessionID, "agent_session_adapter": sessionAdapter,
+				}, ApprovalNeedsChangedInput, map[string]any{"reason": reason, "execution_failed": true}, attemptID); err != nil {
+					if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
+						return roundOutcome{}, ErrCancelled
+					}
+					return roundOutcome{}, fmt.Errorf("park failed agent recovery: %w", err)
+				}
+				c.logProjectTask(task.Title, false, task.Project)
+				trackTask(c, task.Project, required, task.Title, false)
+				return roundOutcome{done: true, payload: bus.TaskResultPayload{
+					TaskID: taskID, AttemptID: attemptID, State: StateReview,
+					ApprovalDisposition: string(ApprovalNeedsChangedInput), ExitCode: res.ExitCode, Stderr: reason,
+					Verdict: recovery.Status, VerdictReason: reviewReason, Followup: recovery.Followup, NeedsFollowup: true,
+					Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
+					AgentSessionID: sessionID, AgentSessionAdapter: sessionAdapter,
+					FilesChanged: lastChanged[:min(len(lastChanged), maxFilesChangedReport)], FilesTruncated: filesTruncated,
+				}}, nil
+			}
 			wCtx, cancel := c.storeWriteCtx(ctx)
 			defer cancel()
 			if err := c.store.FailAttempt(wCtx, taskID, c.nodeID, attemptID, res.Stderr); err != nil {
@@ -2534,7 +2632,6 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			verdict.Reason = "token budget exhausted"
 			break
 		}
-		usageBefore := supervisor.Usage()
 		// — Trace: judge_start. The reviewing stage's on-screen duration runs
 		// until the next event lands, so the judge call needs its own opening
 		// marker — otherwise its runtime is billed to the executing stage.
@@ -2544,10 +2641,15 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			"round":  round + 1,
 			"budget": maxRounds,
 		})
-		judgeStart := time.Now()
 		judgeResult := res.Stdout
 		if strings.TrimSpace(res.Stderr) != "" {
 			judgeResult = judgeResult + "\n\n错误输出（stderr）：\n" + res.Stderr
+		}
+		if res.RescueError != "" {
+			judgeResult += "\n\n[模型注入前的错误] " + boundedEvidenceText(res.RescueError, 4096)
+		}
+		if res.FallbackReason != "" {
+			judgeResult += "\n\n[执行器切换前的错误] " + boundedEvidenceText(security.Redact(res.FallbackReason), 4096)
 		}
 		// Deterministic evidence rides the judge payload: the exit code and the
 		// declared scope are facts the prose cannot dress up, and a judge that
@@ -2587,9 +2689,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// scoped to. Using ctx here meant a dropped peer link aborted the judge
 		// mid-call, parking work for review that a live judge would have
 		// accepted (or rejected with a real verdict).
-		v, serr := entry.Supervise(execCtx, supervisor, fullIntent(), judgeResult)
-		c.recordEntryUsage(context.WithoutCancel(ctx), taskID, supervisor, supervisor.Usage().Sub(usageBefore),
-			v.Status == entry.VerdictDone, time.Since(judgeStart))
+		v, serr := entry.Supervise(execCtx, supervisor, fullIntent(), judgeResult, c.supervisionOptions(execCtx, taskID, supervisor))
 		if serr != nil {
 			// Supervisor unreachable: Supervise parks the result for review rather
 			// than accepting it unverified (review P1-6). The work stops here and

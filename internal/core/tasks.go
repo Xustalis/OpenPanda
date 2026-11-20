@@ -1423,6 +1423,10 @@ func (s *TaskStore) PauseForAnswerAttempt(ctx context.Context, taskID, owner, at
 }
 
 func (s *TaskStore) pauseWithResultDisposition(ctx context.Context, taskID, owner string, result any, disposition ApprovalDisposition, reason string, expectAttempt ...string) error {
+	return s.pauseWithReviewResult(ctx, taskID, owner, result, disposition, map[string]any{"reason": reason}, expectAttempt...)
+}
+
+func (s *TaskStore) pauseWithReviewResult(ctx context.Context, taskID, owner string, result any, disposition ApprovalDisposition, review map[string]any, expectAttempt ...string) error {
 	cur, err := s.Get(ctx, taskID)
 	if err != nil {
 		return err
@@ -1437,8 +1441,7 @@ func (s *TaskStore) pauseWithResultDisposition(ctx context.Context, taskID, owne
 		}
 		attemptID = expectAttempt[0]
 	}
-	if err := s.applyReviewCAS(ctx, taskID, StateRunning, owner, attemptID, EvReview,
-		map[string]any{"reason": reason}, result, disposition); err != nil {
+	if err := s.applyReviewCAS(ctx, taskID, StateRunning, owner, attemptID, EvReview, review, result, disposition); err != nil {
 		return err
 	}
 	updated, err := s.Get(ctx, taskID)
@@ -2555,11 +2558,10 @@ func (s *TaskStore) SettleExpired(ctx context.Context, r ExpiredRow, selfNode st
 	// an attempt that rotated after the scan still dies when its time ran out.
 	deadline := r.Deadline || (t.DeadlineUnix > 0 && t.DeadlineUnix < s.now())
 	if deadline {
-		if r.State == StateRunning {
-			if err := s.ForceFail(ctx, r.TaskID, "deadline exceeded"); err != nil {
-				return ExpirySkipped, err
+		if err := s.finishExpired(ctx, t, true, "deadline exceeded"); err != nil {
+			if errors.Is(err, ErrConflict) {
+				return ExpirySkipped, nil
 			}
-		} else if err := s.MarkExpired(ctx, r.TaskID, "deadline exceeded"); err != nil {
 			return ExpirySkipped, err
 		}
 		return ExpiryFailed, nil
@@ -2589,11 +2591,52 @@ func (s *TaskStore) SettleExpired(ctx context.Context, r ExpiredRow, selfNode st
 	// The monitor acts on behalf of the lease holder regardless of the stored
 	// owner (a crashed process may no longer hold it). The verdict still binds
 	// the scanned attempt — a row rotated in the Get→fail gap is fresh custody.
-	if err := s.ForceFailAttempt(ctx, r.TaskID, r.AttemptID, s.leaseExpiredReason(ctx, r.TaskID)); err != nil {
+	if err := s.finishExpired(ctx, t, false, s.leaseExpiredReason(ctx, r.TaskID)); err != nil {
+		if errors.Is(err, ErrConflict) {
+			return ExpirySkipped, nil
+		}
 		return ExpirySkipped, err
 	}
 	s.logger.Info("task failed by timeout", "task", r.TaskID)
 	return ExpiryFailed, nil
+}
+
+// finishExpired commits the timeout and its audit event only while the expiry
+// is still true. A renewal between Get and UPDATE wins against a lease scan;
+// an absolute deadline remains independent of the renewed lease.
+func (s *TaskStore) finishExpired(ctx context.Context, t Task, deadline bool, reason string) error {
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		state, event := StateFailed, EvResult
+		data := map[string]any{"failed": reason}
+		predicate := `lease_expires_at > 0 AND lease_expires_at < ?`
+		if deadline {
+			predicate = `deadline_unix > 0 AND deadline_unix < ?`
+			if t.State != StateRunning {
+				state, event = StateExpired, EvExpire
+				data = map[string]any{"reason": reason}
+			}
+		}
+		body, err := json.Marshal(data)
+		if err != nil {
+			return err
+		}
+		var result any = string(body)
+		if state == StateExpired {
+			result = nil // expiration preserves any previously stored work
+		}
+		now := s.now()
+		res, err := tx.ExecContext(ctx, `UPDATE tasks SET state=?, result_json=COALESCE(?,result_json), lease_expires_at=NULL,
+			state_version=state_version+1, updated_at=?
+			WHERE task_id=? AND state=? AND owner_node=? AND attempt_id=? AND `+predicate,
+			state, result, now, t.TaskID, t.State, t.OwnerNode, t.AttemptID, now)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			return ErrConflict
+		}
+		return s.recordEventTx(ctx, tx, t.TaskID, event, data)
+	})
 }
 
 // requeueExpiredRun returns an expired active row to the queue under a fresh
@@ -2645,8 +2688,10 @@ func (s *TaskStore) requeueExpiredRun(ctx context.Context, t Task, selfNode stri
 			// (SetAgentSession writes "" for absent handles).
 			q += `, agent_session_id='', agent_session_node='', agent_session_adapter=''`
 		}
-		q += ` WHERE task_id=? AND state=? AND owner_node=? AND attempt_id=?`
-		args = append(args, t.TaskID, t.State, t.OwnerNode, t.AttemptID)
+		q += ` WHERE task_id=? AND state=? AND owner_node=? AND attempt_id=?
+			AND lease_expires_at > 0 AND lease_expires_at < ?
+			AND (deadline_unix IS NULL OR deadline_unix <= 0 OR deadline_unix >= ?)`
+		args = append(args, t.TaskID, t.State, t.OwnerNode, t.AttemptID, s.now(), s.now())
 		res, err := tx.ExecContext(ctx, q, args...)
 		if err != nil {
 			return fmt.Errorf("requeue expired run: %w", err)

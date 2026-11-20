@@ -649,6 +649,33 @@ def _parent_id(ev):
     return ev.get("parent_tool_use_id") or ev.get("parentToolUseID") or ""
 
 
+def _emit_context(msg):
+    """Report the context footprint of the request behind one assistant message.
+
+    input_tokens counts only the uncached part of the prompt; the cached
+    prefix rides cache_read_input_tokens (already seen) and
+    cache_creation_input_tokens (written this turn). Their sum is what the
+    model's window held, which is the number the console's context gauge
+    means. Usage is optional on the wire — a CLI too old to report it emits
+    nothing, and the gauge falls back to the task's round total.
+    """
+    raw = msg.get("usage")
+    if not isinstance(raw, dict):
+        return
+
+    def num(key):
+        v = raw.get(key)
+        return int(v) if isinstance(v, (int, float)) and v else 0
+
+    tokens = (num("input_tokens") + num("cache_read_input_tokens")
+              + num("cache_creation_input_tokens"))
+    if tokens <= 0:
+        return
+    model = msg.get("model")
+    harness.emit_event("context", context_tokens=tokens,
+                       model=model if isinstance(model, str) else "")
+
+
 def _emit_assistant_events(ev):
     """Emit typed events + progress notes for one assistant event's blocks.
 
@@ -662,6 +689,15 @@ def _emit_assistant_events(ev):
     if not isinstance(msg, dict):
         return
     parent = _parent_id(ev)
+    # The request that produced this message, measured the way a context
+    # window measures it: uncached input plus both cache buckets. The result
+    # envelope's usage is cumulative for the whole run, so it cannot answer
+    # "how full is the agent's window right now" — this per-message block is
+    # the only request-scoped number the CLI reports. A sub-agent's message
+    # carries the parent's tool_use id and its own (separate) window, so it
+    # must not overwrite the agent the thread is watching.
+    if not parent:
+        _emit_context(msg)
     for block in msg.get("content") or []:
         if not isinstance(block, dict):
             continue
@@ -828,9 +864,11 @@ def _main_session(req, model, max_turns):
         harness.emit(False, "claude binary not found", 127)
         return
     deadline = harness.TurnDeadline(proc)
+    session_id = ""
 
     def serve_turn(text):
         """One user message → events until this turn's result event."""
+        nonlocal session_id
         if not harness.write_line(proc.stdin, {
                 "type": "user",
                 "message": {"role": "user",
@@ -844,6 +882,10 @@ def _main_session(req, model, max_turns):
                 ev = harness.parse_json_line(line)
                 if ev is None:
                     continue
+                sid = ev.get("session_id")
+                if isinstance(sid, str) and sid and sid != session_id:
+                    session_id = sid
+                    harness.emit_event("session", id=session_id)
                 et = ev.get("type")
                 if et == "assistant":
                     _emit_assistant_events(ev)
@@ -891,7 +933,7 @@ def _main_session(req, model, max_turns):
     except ProviderFailure as e:
         # The CLI may still be mid-retry — don't let it outlive the session.
         harness.kill_tree(proc)
-        harness.emit(False, str(e), 1, session_dead=True)
+        harness.emit(False, str(e), 1, session_dead=True, session_id=session_id or None)
     try:
         proc.stdin.close()
     except OSError:

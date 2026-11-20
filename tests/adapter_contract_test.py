@@ -428,6 +428,40 @@ print(json.dumps({"type":"result", "is_error":False, "result":"read-only",
         )
         self.assertTrue(payload["ok"], payload)
 
+    def test_claude_reports_request_context_per_message(self):
+        """The console's context gauge reads the agent's own window.
+
+        Each assistant message carries the usage of the request that made
+        it (uncached input + both cache buckets); the adapter forwards that
+        as a "context" event so the gauge can show the working agent's
+        window instead of the entry model's turn. The result envelope's
+        usage is cumulative for the run, so it cannot answer the same
+        question. A sub-agent's message belongs to its own window and must
+        not overwrite the parent's reading.
+        """
+        payload, lines, _ = run_adapter(
+            "claude_code.py", "claude", r'''
+import json, sys
+print(json.dumps({"type":"assistant", "message":{
+  "model":"claude-sonnet-4-5-20250929",
+  "content":[{"type":"text","text":"working"}],
+  "usage":{"input_tokens":1200,"cache_read_input_tokens":30000,
+           "cache_creation_input_tokens":800,"output_tokens":40}}}))
+print(json.dumps({"type":"assistant", "parent_tool_use_id":"toolu_sub", "message":{
+  "model":"claude-haiku-4-5",
+  "content":[{"type":"text","text":"sub"}],
+  "usage":{"input_tokens":50,"output_tokens":5}}}))
+print(json.dumps({"type":"result","is_error":False,"result":"done",
+                  "usage":{"input_tokens":1250,"output_tokens":45}}))
+''',
+        )
+        self.assertTrue(payload["ok"], payload)
+        events = [json.loads(line) for line in lines if line.startswith("{")]
+        contexts = [e for e in events if e.get("ev") == "context"]
+        self.assertEqual(len(contexts), 1, contexts)
+        self.assertEqual(contexts[0]["context_tokens"], 32000)
+        self.assertEqual(contexts[0]["model"], "claude-sonnet-4-5-20250929")
+
     def test_codex_workspace_write_contract(self):
         payload, progress, _ = run_adapter(
             "codex.py", "codex", r'''
@@ -457,6 +491,13 @@ print(json.dumps({"type":"turn.completed","usage":{"input_tokens":4,"output_toke
         # The session id from the session envelope rides the wire for resume.
         self.assertEqual(payload["session_id"], "codex-sess-1")
         self.assertTrue(any("shell: git status" in line for line in progress), progress)
+        # The turn envelope's prompt size is the request-scoped context
+        # sample the console's gauge reads (cached tokens are a subset of
+        # input_tokens, so the number needs no addition).
+        events = [json.loads(line) for line in progress if line.startswith("{")]
+        contexts = [e for e in events if e.get("ev") == "context"]
+        self.assertEqual(len(contexts), 1, contexts)
+        self.assertEqual(contexts[0]["context_tokens"], 4)
 
     def test_codex_injected_key_never_rides_argv(self):
         """The injected provider token reaches codex through the environment.
@@ -578,6 +619,20 @@ print(json.dumps({"type":"item.completed","item":{"id":"i3","type":"agent_messag
         self.assertFalse(events[3]["is_error"])
         self.assertEqual(events[4]["text"], "codex answer")
         self.assertEqual(events[4]["id"], "i3")
+
+    def test_codex_updated_text_keeps_item_id_and_only_completion_is_delivered(self):
+        payload, lines, _ = run_adapter(
+            "codex.py", "codex", r'''
+import json
+for kind, text in [("item.updated", "First"), ("item.updated", "First draft"), ("item.completed", "Final answer")]:
+    print(json.dumps({"type": kind, "item": {"id": "message-1", "type": "agent_message", "text": text}}))
+''',
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "Final answer")
+        events = [json.loads(line) for line in lines if line.startswith("{")]
+        text = [(e["id"], e["text"]) for e in events if e.get("ev") == "text"]
+        self.assertEqual(text, [("message-1", "First"), ("message-1", "First draft"), ("message-1", "Final answer")])
 
     def test_codex_nonzero_command_is_error_even_when_completed(self):
         payload, lines, _ = run_adapter(
@@ -1834,6 +1889,23 @@ print(json.dumps({"type":"result","is_error":False,"result":"hi","session_id":"s
                     if e.get("type") == "event" and e.get("ev") == "session"]
         self.assertTrue(sessions, f"no session event in {lines}")
         self.assertEqual(sessions[0]["id"], "sess-ann")
+
+    def test_claude_session_provider_failure_reports_checkpoint(self):
+        payload, lines, _ = run_adapter(
+            "claude_code.py", "claude", r'''
+import json, sys
+sys.stdin.readline()
+print(json.dumps({"type":"system","subtype":"init","session_id":"sess-partial"}), flush=True)
+print(json.dumps({"type":"system","subtype":"api_retry","attempt":3,"error_status":429}), flush=True)
+''',
+            extra_request={"session": True},
+        )
+        self.assertFalse(payload["ok"], payload)
+        self.assertTrue(payload["session_dead"], payload)
+        self.assertIn("429", payload["result"])
+        self.assertEqual(payload.get("session_id"), "sess-partial")
+        events = [json.loads(line) for line in lines if line.startswith("{")]
+        self.assertTrue(any(e.get("ev") == "session" and e.get("id") == "sess-partial" for e in events))
 
     def test_opencode_provider_failure_reports_session_checkpoint(self):
         """A mid-run provider error rides the result with the minted session —

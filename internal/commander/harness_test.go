@@ -84,6 +84,27 @@ func tier1Plan(t *testing.T, r *Router) Plan {
 	return plan
 }
 
+// TestProgressWriterCarriesContextSample pins the wire contract of the
+// adapter's "context" event: the request's prompt size and the model id land
+// on AgentEvent, stamped with the adapter that reported them. The console's
+// context gauge attributes the number from these fields, so a dropped or
+// renamed key would silently fall back to the entry model's turn.
+func TestProgressWriterCarriesContextSample(t *testing.T) {
+	var got AgentEvent
+	w := progressWriter{
+		adapterName: "claude_code.py",
+		evSink:      func(ev AgentEvent) { got = ev },
+	}
+	line := `{"type":"event","ev":"context","context_tokens":48213,"model":"claude-sonnet-4-5-20250929"}`
+	if _, err := w.Write([]byte(line + "\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if got.Ev != "context" || got.ContextTokens != 48213 ||
+		got.Model != "claude-sonnet-4-5-20250929" || got.Adapter != "claude_code.py" {
+		t.Fatalf("event = %+v", got)
+	}
+}
+
 // TestProgressWriterSplitsStream verifies the stderr splitter: NDJSON
 // progress lines reach the sink and are excluded from the diagnostic
 // buffer; plain lines stay in the buffer.
@@ -462,6 +483,52 @@ else:
 	res := r.Execute(ctx, plan, "first", t.TempDir(), true)
 	if !res.OK || res.Stdout != "oneshot:first" {
 		t.Fatalf("fallback oneshot = %+v", res)
+	}
+}
+
+func TestAgentSessionProviderFailureSwitchesToInjectedProcess(t *testing.T) {
+	cleanCredentialEnv(t)
+	t.Setenv("ANTHROPIC_API_KEY", "native-test-key")
+	dir := t.TempDir()
+	old := adapterDir
+	adapterDir = dir
+	t.Cleanup(func() { adapterDir = old })
+	stub := `import json, os, sys
+req = json.loads(sys.stdin.readline())
+mode = "injected" if os.environ.get("OPENPANDA_INJECTED_MODEL") == "1" else "native"
+with open("attempts.log", "a") as log:
+    log.write(mode + "\n")
+def emit(data):
+    print(json.dumps(data), flush=True)
+if mode == "native":
+    emit({"ok": False, "result": "api_retry error 429: rate_limited", "exit_code": 1, "session_dead": True, "session_id": "startup"})
+else:
+    emit({"ok": True, "result": req["prompt"], "session_id": "checkpoint"})
+    for line in sys.stdin:
+        emit({"ok": True, "result": json.loads(line)["text"], "session_id": "checkpoint"})
+`
+	if err := os.WriteFile(filepath.Join(dir, "claude_code.py"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewRouter(tier1Card(), NewExecutor(), flashModel, config.InjectionConfig{}, config.RoutingConfig{})
+	r.SetAgentProber(func(string, ledger.Agent) bool { return true })
+	plan := tier1Plan(t, r)
+	ctx, pool := WithSessionPool(context.Background())
+	defer pool.CloseAll()
+	ctx = WithSessionMode(ctx)
+	cwd := t.TempDir()
+	res := r.Execute(ctx, plan, "initial", cwd, true)
+	if !res.OK || !res.Injected || !strings.Contains(res.RescueError, "429") || res.SessionID != "checkpoint" {
+		t.Fatalf("first turn did not switch to the injected process: %+v", res)
+	}
+	res = r.Execute(WithResume(ctx, res.SessionID, res.Adapter), plan, "resume", cwd, true)
+	if !res.OK || !res.Injected || res.Stdout != "resume" {
+		t.Fatalf("follow-up lost the injected session: %+v", res)
+	}
+	attempts, err := os.ReadFile(filepath.Join(cwd, "attempts.log"))
+	if err != nil || strings.Join(strings.Fields(string(attempts)), ",") != "native,injected" {
+		t.Fatalf("expected one native and one injected process: %q, %v", attempts, err)
 	}
 }
 
