@@ -66,6 +66,16 @@ const (
 	VerdictBlocked  = "blocked"
 )
 
+// SuperviseOptions scopes cache policy, a pure acceptance validator, and usage
+// settlement to one judgment. It never changes shared client settings.
+type SuperviseOptions struct {
+	BypassCache bool
+	Contract    string
+	Validate    func(SuperviseVerdict) error
+	BeforeCall  func() error
+	AfterCall   func(Usage, error, time.Duration)
+}
+
 // Supervise asks the configured entry model whether an agent's result fully
 // satisfies the task described by intent (which carries the success criteria).
 // A model that answers without producing a verdict returns VerdictReview:
@@ -78,15 +88,19 @@ const (
 // human can approve (or re-run) once the supervisor recovers. The error still
 // travels to the caller, which logs it. Parked verdicts are never cached — a
 // re-run under a healthy supervisor judges from scratch.
-func Supervise(ctx context.Context, c *Client, intent, result string) (SuperviseVerdict, error) {
+func Supervise(ctx context.Context, c *Client, intent, result string, options ...SuperviseOptions) (SuperviseVerdict, error) {
+	var opt SuperviseOptions
+	if len(options) > 0 {
+		opt = options[0]
+	}
 	dc := c.diskCache()
 	// The verdict is a function of (prompt version, judge model, intent,
 	// result): a model switch — manual or failover — must not serve the
 	// previous judge's done verdict for up to the cache TTL.
-	k1, k2 := hashString(supervisePromptVersion+"\x00"+c.ModelName()+"\x00"+intent), hashString(result)
-	if dc != nil {
+	k1, k2 := hashString(supervisePromptVersion+"\x00"+c.ModelName()+"\x00"+intent+"\x00"+opt.Contract), hashString(result)
+	if dc != nil && !opt.BypassCache {
 		var v SuperviseVerdict
-		if dc.Get(ctx, superviseCacheNS, k1, k2, &v) {
+		if dc.Get(ctx, superviseCacheNS, k1, k2, &v) && v.Status == VerdictDone && (opt.Validate == nil || opt.Validate(v) == nil) {
 			return v, nil
 		}
 	}
@@ -95,7 +109,16 @@ func Supervise(ctx context.Context, c *Client, intent, result string) (Supervise
 	// transport retry ladder. Deadline failure still parks for human review.
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	text, err := c.Complete(ctx, superviseSystemPrompt, user)
+	if opt.BeforeCall != nil {
+		if err := opt.BeforeCall(); err != nil {
+			return SuperviseVerdict{Status: VerdictReview, Reason: err.Error()}, err
+		}
+	}
+	start := time.Now()
+	text, usage, err := c.CompleteUsage(ctx, superviseSystemPrompt, user)
+	if opt.AfterCall != nil {
+		opt.AfterCall(usage, err, time.Since(start))
+	}
 	if err != nil {
 		// Park, don't accept: with no supervisor there is no verification, and
 		// an unverified result must not be promoted to done (review P1-6).
@@ -111,10 +134,73 @@ func Supervise(ctx context.Context, c *Client, intent, result string) (Supervise
 	}
 	// Only cache completed (done) verdicts: a continue or review verdict is
 	// transient and must not trap subsequent runs into deterministic repeat loops.
-	if dc != nil && v.Status == VerdictDone {
+	if dc != nil && v.Status == VerdictDone && (opt.Validate == nil || opt.Validate(v) == nil) {
 		dc.Put(ctx, superviseCacheNS, k1, k2, v)
 	}
 	return v, nil
+}
+
+// SuperviseObjectives is Supervise for a result bound to a MAX-objective
+// contract, whose acceptance gate cannot be satisfied without per-criterion
+// evidence. Judges reliably answer the verdict question and unreliably answer
+// the evidence one: a "done" that omits objective_assessments parks work that
+// the judge itself accepted, and no human can approve it afterwards because the
+// gate needs evidence only the judge can produce. When that happens the model
+// is asked once more, with the missing shape and the criteria spelled out.
+//
+// The second answer is final either way: a judge that still refuses to supply
+// evidence leaves the row parked (with its own reason), which is the honest
+// outcome — this never fabricates assessments on the model's behalf.
+func SuperviseObjectives(ctx context.Context, c *Client, intent, result string, criteria []string, options ...SuperviseOptions) (SuperviseVerdict, error) {
+	var opt SuperviseOptions
+	if len(options) > 0 {
+		opt = options[0]
+	}
+	validate := opt.Validate
+	opt.Contract += "\x00criteria:" + strings.Join(criteria, "\n")
+	opt.Validate = func(v SuperviseVerdict) error {
+		seen := make(map[string]bool)
+		for _, a := range v.ObjectiveAssessments {
+			if strings.TrimSpace(a.Evidence) != "" {
+				seen[fmt.Sprintf("%s:%d", a.Dimension, a.Criterion)] = true
+			}
+		}
+		for _, criterion := range criteria {
+			key, _, _ := strings.Cut(criterion, " = ")
+			if !seen[key] {
+				return fmt.Errorf("objectives: MAX criterion %s lacks independent acceptance evidence", key)
+			}
+		}
+		if validate != nil {
+			return validate(v)
+		}
+		return nil
+	}
+	// One timeout covers both judgment and the optional correction.
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	v, err := Supervise(ctx, c, intent, result, opt)
+	if err != nil || v.Status != VerdictDone || len(criteria) == 0 {
+		return v, err
+	}
+	invalid := opt.Validate(v)
+	if invalid == nil {
+		return v, err
+	}
+	// The corrected payload also lands on a different cache key, so this is a
+	// real second call rather than a replay of the cached "done".
+	corrected := result + "\n\n[补充要求] 上次的完成判断未通过目标验收：" + invalid.Error() +
+		"。请重新判断 status，允许 continue 或 blocked；不要编造 passed。请在 objective_assessments 为下列每一项写一条 " +
+		`{"dimension":"<维度>","criterion":<零起始索引>,"status":"passed|deferred|unmet|blocked","evidence":"<实际命令、文件或观察结果>"}` +
+		"；依据任务的 intermediate/final 责任说明如实给出证据，最终交付的每一项都必须 passed，不能以执行者的自我评价代替证据：\n" + strings.Join(criteria, "\n")
+	v, err = Supervise(ctx, c, intent, corrected, opt)
+	if err == nil && v.Status == VerdictDone {
+		if invalid := opt.Validate(v); invalid != nil {
+			v.Status, v.Reason = VerdictReview, invalid.Error()
+			v.Followup = "Provide independent evidence for every unchanged MAX criterion."
+		}
+	}
+	return v, err
 }
 
 // parseSuperviseVerdict extracts a {status, reason, followup} object from the

@@ -226,7 +226,7 @@ func (s *TaskStore) createChildTask(ctx context.Context, parent Task, in TaskInp
 			}
 		}
 		var total, active int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(CASE WHEN state NOT IN ('done','failed','cancelled') THEN 1 ELSE 0 END),0) FROM tasks WHERE parent_id=?`, parent.TaskID).Scan(&total, &active); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(CASE WHEN state NOT IN ('done','failed','cancelled','expired') THEN 1 ELSE 0 END),0) FROM tasks WHERE parent_id=?`, parent.TaskID).Scan(&total, &active); err != nil {
 			return err
 		}
 		if total >= limits.MaxChildren || active >= limits.FanOut {

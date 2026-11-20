@@ -32,6 +32,7 @@ import (
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
+	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/taskflow"
@@ -168,6 +169,7 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("POST /api/tasks/{id}/reject", h.rejectTask)
 	mux.HandleFunc("POST /api/tasks/{id}/continue", h.continueTask)
 	mux.HandleFunc("POST /api/tasks/{id}/retry", h.retryTask)
+	mux.HandleFunc("POST /api/tasks/{id}/rejudge", h.rejudgeTask)
 	mux.HandleFunc("POST /api/tasks/{id}/cancel", h.cancelTask)
 	mux.HandleFunc("POST /api/tasks/{id}/revert", h.revertTask)
 	mux.HandleFunc("POST /api/tasks/{id}/messages", h.sendTaskMessage)
@@ -887,6 +889,12 @@ type taskJSON struct {
 	ReviewReason   string `json:"review_reason,omitempty"`
 	RetryAvailable bool   `json:"retry_available,omitempty"`
 	NeedsFollowup  bool   `json:"needs_followup,omitempty"`
+	// NeedsRejudge marks the one park an approval cannot resolve: a task with
+	// MAX objectives whose stored result carries no acceptance evidence, so
+	// every approve would be refused by the evidence gate. The card offers a
+	// re-review (ask the reviewing model again about the stored work) instead
+	// of a button that can only fail.
+	NeedsRejudge bool `json:"needs_rejudge,omitempty"`
 	// Question/QuestionSpec surface a parked clarification without making the
 	// client parse the whole result JSON (which also carries the run's
 	// stdout): Question is the plain text, QuestionSpec the ClarifySpec JSON
@@ -915,10 +923,21 @@ type taskJSON struct {
 	// `task add --parent-id` rows) so the detail view can render the tree
 	// the parent is orchestrating. Filled by getTask only — listTasks
 	// skips it to avoid an N+1 on the board.
-	Children  []taskChildJSON `json:"children,omitempty"`
-	CreatedAt string          `json:"created_at"`
-	UpdatedAt string          `json:"updated_at"`
-	Events    []eventJSON     `json:"events,omitempty"`
+	Children []taskChildJSON `json:"children,omitempty"`
+	// ContextTokens is the newest request-scoped context sample the agent
+	// reported (agent_context event): prompt tokens of its latest model
+	// call. ContextModel is the model id that served it, when the adapter
+	// knows one, and ContextWindow the window the catalogue resolves for
+	// that id (0 = unknown). The console's context gauge reads these
+	// instead of the entry model's turn: the agent is the one whose window
+	// the reader cares about. All zero/empty for a row that never ran an
+	// adapter or whose CLI does not report per-request usage.
+	ContextTokens int64       `json:"context_tokens,omitempty"`
+	ContextModel  string      `json:"context_model,omitempty"`
+	ContextWindow int         `json:"context_window,omitempty"`
+	CreatedAt     string      `json:"created_at"`
+	UpdatedAt     string      `json:"updated_at"`
+	Events        []eventJSON `json:"events,omitempty"`
 
 	// — Decision-orbit visibility (§5.2). traces are the subset of Events
 	// that belong to the 8-track set, decoded so the client avoids a second
@@ -1243,6 +1262,9 @@ func (h *handler) listTasks(w http.ResponseWriter, r *http.Request) {
 	if session != "" {
 		h.attachSessionTaskActivity(r.Context(), session, out)
 	}
+	// The console's context gauge reads the agent's own request footprint,
+	// not the entry model's turn: one batched read for the whole list.
+	h.attachAgentContext(r.Context(), out)
 	// The board explains a park with the same words the chat card uses, so the
 	// cause rides the list too — one query for every parked row, not one per
 	// row on the page that polls fastest.
@@ -1281,6 +1303,7 @@ func (h *handler) attachReviewCauses(ctx context.Context, tasks []taskJSON) {
 			tasks[i].ReviewReason = cause.Reason
 			tasks[i].RetryAvailable = cause.RetryAvailable
 		}
+		tasks[i].NeedsRejudge = needsObjectiveRejudge(tasks[i])
 	}
 }
 
@@ -1362,7 +1385,8 @@ func (h *handler) lastEventsBatch(ctx context.Context, tasks []taskJSON, last ma
 		   FROM task_events
 		  WHERE id IN (SELECT MAX(id) FROM task_events
 		                WHERE task_id IN (`+strings.Join(marks, ",")+`)
-		                GROUP BY task_id)`, args...)
+		                  AND type <> ?
+		                GROUP BY task_id)`, append(args, core.EvAgentContext)...)
 	if err != nil {
 		return
 	}
@@ -1403,6 +1427,12 @@ func (h *handler) newestEvent(ctx context.Context, taskID, typ string) *traceEve
 	if typ != "" {
 		query += ` AND type = ?`
 		args = append(args, typ)
+	} else {
+		// A context sample is display metadata, not a status line: it must
+		// never answer "what is this task doing right now" (see
+		// EvAgentContext).
+		query += ` AND type <> ?`
+		args = append(args, core.EvAgentContext)
 	}
 	query += ` ORDER BY id DESC LIMIT 1`
 
@@ -1521,6 +1551,7 @@ func (h *handler) getTask(w http.ResponseWriter, r *http.Request) {
 			out.ReviewReason = failure.Reason
 			out.RetryAvailable = failure.RetryAvailable
 		}
+		out.NeedsRejudge = needsObjectiveRejudge(out)
 	}
 	h.enrichPlanMeta(r.Context(), &out, t)
 	// ?after=<eventID> is the poll loop's cursor: the row and its rollups stay
@@ -1535,6 +1566,14 @@ func (h *handler) getTask(w http.ResponseWriter, r *http.Request) {
 	// adapter and the newest event line, so that is all this returns.
 	if r.URL.Query().Get("brief") == "1" {
 		out.LastEvent = h.newestEvent(r.Context(), id, "")
+		if sample, ok := h.newestAgentContext(r.Context(), id); ok {
+			out.ContextTokens = sample.tokens
+			out.ContextModel = sample.model
+			out.ContextWindow = contextWindowForModel(sample.model)
+			if out.Agent == "" && sample.adapter != "" {
+				out.Agent = strings.TrimSuffix(sample.adapter, ".py")
+			}
+		}
 		// The cast line names the employee from the exec_agent_start trace.
 		// One row, not the timeline — but only when the adapter column cannot
 		// answer: that column stays empty for an agent that never mints a
@@ -1567,7 +1606,10 @@ func (h *handler) getTask(w http.ResponseWriter, r *http.Request) {
 			// The rollups below still read the whole timeline — that is what
 			// keeps an incremental poll from degrading the orbit or the
 			// delegation trail to the newest few rows.
-			if e.ID > after {
+			// A context sample is gauge metadata, not timeline material: one
+			// row per model request would drown the detail view, and the
+			// gauge reads the newest one directly.
+			if e.ID > after && e.Type != core.EvAgentContext {
 				out.Events = append(out.Events, eventJSON{ID: e.ID, TS: e.TS, Type: e.Type, Data: e.DataJSON})
 			}
 			if visibleTraceTypes[e.Type] {
@@ -1741,7 +1783,7 @@ type approvalOperation struct {
 	// operation starts. Empty for a plain tier-2/accept approval.
 	answer string
 	cancel context.CancelFunc
-	retry  bool
+	kind   approvalOperationKind
 }
 
 // approveTask accepts completed reviewed work or starts a detached execution
@@ -1824,8 +1866,21 @@ func (h *handler) approveTask(w http.ResponseWriter, r *http.Request) {
 		// can still approve locally.
 		if eng := h.currentEngine(); eng != nil {
 			out := eng.ResumeApproved(r.Context(), id, "", askengine.StreamCallbacks{})
-			if out == nil || out.TaskState != core.StateDone {
+			if out == nil {
 				writeErr(w, http.StatusInternalServerError, errors.New("approve failed"))
+				return
+			}
+			if out.TaskState != core.StateDone {
+				// The accept path refused the work, and its reason is the only
+				// thing that tells the operator what to do next (re-review a
+				// verdict that never arrived, fix a MAX criterion that the judge
+				// marked unmet). A generic "approve failed" left them with a
+				// button that never works and no explanation.
+				reason := strings.TrimSpace(security.Redact(out.Stderr))
+				if reason == "" {
+					reason = "the task is still parked for review"
+				}
+				writeErr(w, http.StatusConflict, errors.New(reason))
 				return
 			}
 			writeJSON(w, map[string]string{"id": id, "status": out.TaskState})
@@ -1847,12 +1902,27 @@ func (h *handler) approveTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, errors.New("task execution engine is unavailable"))
 		return
 	}
-	h.startTaskOperation(w, r, eng, id, answer, false)
+	h.startTaskOperation(w, r, eng, id, answer, operationApprove)
 }
 
-// startTaskOperation detaches execution from the HTTP request for both consent
-// resumes and explicit retries. Both share the duplicate and cancellation guard.
-func (h *handler) startTaskOperation(w http.ResponseWriter, r *http.Request, eng *askengine.Engine, id, answer string, retry bool) {
+// approvalOperationKind names what a detached approval operation does. Every
+// kind shares the duplicate/cancel guard and the durable operation event; only
+// the engine call differs.
+type approvalOperationKind string
+
+const (
+	// operationApprove resumes execution or accepts completed work.
+	operationApprove approvalOperationKind = ""
+	// operationRetry re-runs a failed execution after an explicit operator ask.
+	operationRetry approvalOperationKind = "retry"
+	// operationRejudge re-runs only the reviewing model over stored work.
+	operationRejudge approvalOperationKind = "rejudge"
+)
+
+// startTaskOperation detaches execution from the HTTP request for consent
+// resumes, explicit retries and re-reviews. All three share the duplicate and
+// cancellation guard.
+func (h *handler) startTaskOperation(w http.ResponseWriter, r *http.Request, eng *askengine.Engine, id, answer string, kind approvalOperationKind) {
 	operationID, err := util.UUIDv7()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, errors.New("create approval operation failed"))
@@ -1863,7 +1933,7 @@ func (h *handler) startTaskOperation(w http.ResponseWriter, r *http.Request, eng
 		baseCtx = context.Background()
 	}
 	execCtx, cancel := context.WithCancel(baseCtx)
-	op := approvalOperation{ID: operationID, TaskID: id, Status: core.StateRunning, cancel: cancel, answer: answer, retry: retry}
+	op := approvalOperation{ID: operationID, TaskID: id, Status: core.StateRunning, cancel: cancel, answer: answer, kind: kind}
 	h.approvalMu.Lock()
 	if current, exists := h.approvalOperations[id]; exists && current.Status == core.StateRunning {
 		h.approvalMu.Unlock()
@@ -1893,9 +1963,12 @@ func (h *handler) startTaskOperation(w http.ResponseWriter, r *http.Request, eng
 func (h *handler) runApprovalOperation(ctx context.Context, eng *askengine.Engine, op approvalOperation) {
 	defer op.cancel()
 	var out *askengine.Result
-	if op.retry {
+	switch op.kind {
+	case operationRetry:
 		out = eng.RetryReviewed(ctx, op.TaskID)
-	} else {
+	case operationRejudge:
+		out = eng.RejudgeReviewed(ctx, op.TaskID)
+	default:
 		out = eng.ResumeApproved(ctx, op.TaskID, "", askengine.StreamCallbacks{}, op.answer)
 	}
 	status, message := approvalResultState(out)

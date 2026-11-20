@@ -119,6 +119,44 @@ func (c *Core) recordEntryUsage(ctx context.Context, taskID string, client *entr
 	}
 }
 
+// Each actual supervisor request checks its remaining task quota, then settles
+// its own reported usage before a possible evidence-correction request starts.
+func (c *Core) supervisionOptions(ctx context.Context, taskID string, client *entry.Client) entry.SuperviseOptions {
+	expected, snapshotErr := c.store.Get(ctx, taskID)
+	opt := entry.SuperviseOptions{
+		BeforeCall: func() error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			t, err := c.store.Get(ctx, taskID)
+			if err != nil {
+				return err
+			}
+			if Terminal(t.State) || (snapshotErr == nil && t.AttemptID != expected.AttemptID) {
+				return fmt.Errorf("%w: task changed before supervisor request", ErrConflict)
+			}
+			if t.TokenBudget < 0 {
+				return fmt.Errorf("task token budget exhausted; re-review requires additional quota")
+			}
+			return nil
+		},
+		AfterCall: func(u entry.Usage, err error, elapsed time.Duration) {
+			c.recordEntryUsage(context.WithoutCancel(ctx), taskID, client, u, err == nil, elapsed)
+		},
+	}
+	if t := expected; snapshotErr == nil {
+		opt.Contract = fmt.Sprintf("objective-gate-v1\x00%s\x00%t", t.SpecJSON, objectiveIntermediate(t))
+		opt.Validate = func(v entry.SuperviseVerdict) error {
+			checked := objectiveVerdict(t, v)
+			if checked.Status != v.Status {
+				return errors.New(checked.Reason)
+			}
+			return nil
+		}
+	}
+	return opt
+}
+
 // ListDelegationMetrics returns all recorded delegation metrics, newest first.
 func (s *TaskStore) ListDelegationMetrics(ctx context.Context) ([]DelegationMetric, error) {
 	rows, err := s.db.QueryContext(ctx,

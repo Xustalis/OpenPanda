@@ -4,6 +4,7 @@ package commander
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -617,6 +618,88 @@ func TestDynamicModelInjectionFallbackOnAuthError(t *testing.T) {
 	res := r.runAdapterDefault(context.Background(), "claude_code.py", "test prompt", "")
 	if !res.OK || attempts != 2 {
 		t.Fatalf("expected dynamic injection retry to succeed in 2 attempts: ok=%v attempts=%d res=%+v", res.OK, attempts, res)
+	}
+}
+
+func TestClaudeProviderRescueWithStartupSession(t *testing.T) {
+	cleanCredentialEnv(t)
+	t.Setenv("ANTHROPIC_API_KEY", "native-test-key")
+
+	for _, worked := range []bool{false, true} {
+		t.Run(fmt.Sprintf("work_observed=%t", worked), func(t *testing.T) {
+			r := injectionRouter(flashModel, config.InjectionModelAuto)
+			calls := 0
+			r.SetAdapterProcessRunner(func(_ context.Context, _, _, _ string, env []string) AgentResult {
+				calls++
+				if slices.Contains(env, "OPENPANDA_INJECTED_MODEL=1") {
+					return AgentResult{OK: true, Result: "completed using Panda"}
+				}
+				return AgentResult{Result: "api_retry error 429: rate_limited", ExitCode: 1, SessionID: "startup-session", WorkObserved: worked}
+			})
+			res := r.runAdapterDefault(context.Background(), "claude_code.py", "test prompt", "")
+			if worked {
+				if calls != 1 || res.OK || res.SessionID != "startup-session" {
+					t.Fatalf("interrupted work was replayed or lost: calls=%d result=%+v", calls, res)
+				}
+			} else if calls != 2 || !res.OK || !res.Injected {
+				t.Fatalf("expected injected recovery after startup 429: calls=%d result=%+v", calls, res)
+			}
+		})
+	}
+}
+
+func TestFailedClaudeModelInjectionKeepsSecondCheckpointAndBothErrors(t *testing.T) {
+	cleanCredentialEnv(t)
+	t.Setenv("ANTHROPIC_API_KEY", "native-test-key")
+	r := injectionRouter(flashModel, config.InjectionModelAuto)
+	calls := 0
+	r.SetAdapterProcessRunner(func(_ context.Context, _, _, _ string, env []string) AgentResult {
+		calls++
+		if slices.Contains(env, "OPENPANDA_INJECTED_MODEL=1") {
+			return AgentResult{Result: "provider unavailable", ExitCode: 1, SessionID: "injected-checkpoint", WorkObserved: true}
+		}
+		return AgentResult{Result: "api_retry error 429: rate_limited", ExitCode: 1, SessionID: "startup-session"}
+	})
+	res := r.runAdapterDefault(context.Background(), "claude_code.py", "test prompt", "")
+	if calls != 2 || res.OK || !res.Injected || !res.WorkObserved || res.SessionID != "injected-checkpoint" ||
+		!strings.Contains(res.Stderr, "429") || !strings.Contains(res.Stderr, "provider unavailable") {
+		t.Fatalf("failed injection lost its evidence: calls=%d result=%+v", calls, res)
+	}
+}
+
+func TestClaudeRecoveryInstructionResumesCheckpointWithInjectedModel(t *testing.T) {
+	cleanCredentialEnv(t)
+	t.Setenv("ANTHROPIC_API_KEY", "native-test-key")
+	for _, mode := range []string{config.InjectionModelAuto, config.InjectionModelNever} {
+		t.Run(mode, func(t *testing.T) {
+			r := injectionRouter(flashModel, mode)
+			ctx := WithAgentName(context.Background(), "claude_code")
+			call := 0
+			r.SetAdapterProcessRunner(func(runCtx context.Context, _, prompt, _ string, env []string) AgentResult {
+				call++
+				injected := slices.Contains(env, "OPENPANDA_INJECTED_MODEL=1")
+				if call == 1 {
+					if injected {
+						t.Fatal("original turn should use native credentials")
+					}
+					return AgentResult{Result: "api_retry error 429: rate_limited", ExitCode: 1, SessionID: "checkpoint", WorkObserved: true}
+				}
+				if ResumeID(runCtx) != "checkpoint" || prompt != "verify the existing work" || injected != (mode == config.InjectionModelAuto) {
+					t.Fatal("recovery changed the checkpoint, instructions or injection policy")
+				}
+				return AgentResult{OK: true, Result: "verification passed"}
+			})
+			first := r.runAdapterDefault(ctx, "claude_code.py", "make a change", "")
+			if first.OK || call != 1 {
+				t.Fatal("provider error after work must return for replanning")
+			}
+			ctx = WithResume(ctx, first.SessionID, "claude_code.py")
+			ctx = WithRecoveryModel(ctx, Result{Agent: "claude_code", Adapter: "claude_code.py", SessionID: first.SessionID, Stdout: first.Result})
+			res := r.runAdapterDefault(ctx, "claude_code.py", "verify the existing work", "")
+			if !res.OK || call != 2 || res.Injected != (mode == config.InjectionModelAuto) {
+				t.Fatalf("unexpected continuation result: %+v", res)
+			}
+		})
 	}
 }
 

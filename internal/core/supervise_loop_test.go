@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
@@ -74,6 +76,212 @@ func agentRunner(calls *atomic.Int32) func(context.Context, string, string, stri
 	return func(ctx context.Context, adapter, prompt, cwd string) commander.AgentResult {
 		calls.Add(1)
 		return commander.AgentResult{OK: true, Result: "done", ExitCode: 0}
+	}
+}
+
+func TestAgentFailureReachesPandaBeforeRecovery(t *testing.T) {
+	ctx := context.Background()
+	c := newSuperviseCore(t, "failure-replan", 1)
+	c.sleep = func(time.Duration) {}
+	c.SetSuperviseRounds(2)
+	var modelCalls, runs atomic.Int32
+	const failure = "test runner exited before verification: missing dependency"
+	const followup = "Restore the dependency and run only the missing verification"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		encoded, err := json.Marshal(request)
+		if err != nil {
+			t.Error(err)
+		}
+		verdict := `{"status":"done","reason":"verification completed"}`
+		if modelCalls.Add(1) == 1 {
+			if !strings.Contains(string(encoded), failure) {
+				t.Errorf("first Panda request omitted the agent error")
+			}
+			verdict = `{"status":"continue","reason":"recoverable error","followup":"` + followup + `"}`
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"content": []map[string]string{{"type": "text", "text": verdict}}})
+	}))
+	t.Cleanup(srv.Close)
+	client, err := entry.NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk-test", Model: "deepseek-chat"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.SetSupervisor(client)
+	c.router.SetAdapterRunner(func(runCtx context.Context, _, prompt, _ string) commander.AgentResult {
+		if runs.Add(1) == 1 {
+			return commander.AgentResult{Result: failure, ExitCode: 1, SessionID: "failed-session", WorkObserved: true}
+		}
+		if !strings.Contains(prompt, followup) {
+			t.Error("agent was retried without Panda's recovery instructions")
+		}
+		if commander.ResumeID(runCtx) != "failed-session" {
+			t.Error("recovery discarded the previous agent checkpoint")
+		}
+		return commander.AgentResult{OK: true, Result: "dependency restored and verification passed"}
+	})
+	task, res, err := c.SubmitLocal(ctx, TaskInput{Title: "Verify project", ContextType: "command", Intent: "Verify project", Requires: []string{"code:modify"}})
+	if err != nil || task.State != StateDone || !res.OK || runs.Load() != 2 || modelCalls.Load() != 2 {
+		t.Fatalf("expected fail → Panda → recovery → verification: state=%s runs=%d model_calls=%d err=%v", task.State, runs.Load(), modelCalls.Load(), err)
+	}
+}
+
+func TestAgentFailureWithoutRunnableRecoveryParks(t *testing.T) {
+	for _, tc := range []struct {
+		name, reply, status string
+		rounds, tier        int
+	}{
+		{"blocked", `{"status":"blocked","reason":"provider rejected the credential","followup":"configure a valid provider credential"}`, entry.VerdictBlocked, 2, defense.TierReversible},
+		{"cannot_accept_failed_execution", `{"status":"done","reason":"already completed"}`, entry.VerdictReview, 2, defense.TierReversible},
+		{"budget_exhausted", `{"status":"continue","reason":"failed verification","followup":"install the missing dependency"}`, entry.VerdictContinue, 1, defense.TierReversible},
+		{"irreversible_action", `{"status":"continue","reason":"failed verification","followup":"rerun the failed command"}`, entry.VerdictContinue, 2, defense.TierIrreversible},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newSuperviseCore(t, "recovery-review", tc.tier)
+			c.sleep = func(time.Duration) {}
+			c.SetSuperviseRounds(tc.rounds)
+			var calls, runs atomic.Int32
+			c.SetSupervisor(newFakeSupervisor(t, func(int) string {
+				calls.Add(1)
+				return tc.reply
+			}))
+			const failure = "api_retry error 429: rate_limited"
+			c.router.SetAdapterRunner(func(context.Context, string, string, string) commander.AgentResult {
+				runs.Add(1)
+				return commander.AgentResult{Result: failure, ExitCode: 1, SessionID: "failed-checkpoint"}
+			})
+			task, res, err := c.SubmitLocal(context.Background(), TaskInput{Title: "Verify project", Intent: "verify with HTTP 200", ContextType: "command", Requires: []string{"code:modify"}, Authorized: true})
+			if err != nil || task.State != StateReview || task.ApprovalDisposition != ApprovalNeedsChangedInput ||
+				res.Verdict != tc.status || res.OK || res.Stderr != failure || !strings.Contains(task.ResultJSON, failure) ||
+				calls.Load() != 1 || runs.Load() != 1 {
+				t.Fatalf("failed recovery should park once with evidence: state=%s verdict=%s runs=%d model_calls=%d err=%v", task.State, res.Verdict, runs.Load(), calls.Load(), err)
+			}
+			info, err := c.store.ReviewFailure(context.Background(), task.TaskID)
+			if err != nil || !info.RetryAvailable || info.Cause != "rate_limited" {
+				t.Fatalf("review must retain the explicit execution-retry action: %+v, %v", info, err)
+			}
+		})
+	}
+}
+
+func TestDeterministicAgentFailuresSkipRecoverySupervisor(t *testing.T) {
+	const checkpoint = "turn-cap-checkpoint"
+	const budget = 100
+	const tokensPerRun = 7
+	for _, tc := range []struct {
+		name, stderr, reviewReason string
+		rounds, resultTokens       int
+		resumeID                   string
+	}{
+		{"turn cap", "Agent turn limit reached", "agent turn budget exhausted", 2, tokensPerRun, checkpoint},
+		{"context overflow", "API Error: context_length_exceeded", "agent context window overflow", 1, 2 * tokensPerRun, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			c := newSuperviseCore(t, "deterministic-failure", defense.TierReversible)
+			c.SetTimeouts(config.TimeoutsConfig{SuperviseRounds: tc.rounds, TaskTokenBudget: budget})
+			var modelCalls, runs atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				modelCalls.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"content": []map[string]string{{"type": "text", "text": `{"status":"continue","reason":"partial work","followup":"inspect the partial result"}`}},
+					"usage":   map[string]int{"input_tokens": 10, "output_tokens": 10},
+				})
+			}))
+			t.Cleanup(srv.Close)
+			client, err := entry.NewClient(config.ModelConfig{BaseURL: srv.URL, APIKey: "sk-test", Model: "deepseek-chat"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.SetSupervisor(client)
+			c.router.SetAdapterRunner(func(runCtx context.Context, _, _, _ string) commander.AgentResult {
+				sessionID := tc.resumeID
+				if runs.Add(1) == 1 {
+					sessionID = checkpoint
+				} else if commander.ResumeID(runCtx) != tc.resumeID {
+					t.Errorf("second run resume ID = %q, want %q", commander.ResumeID(runCtx), tc.resumeID)
+				}
+				return commander.AgentResult{Stderr: tc.stderr, ExitCode: 1, Tokens: tokensPerRun, SessionID: sessionID}
+			})
+			task, res, err := c.SubmitLocal(ctx, TaskInput{
+				Title: "Verify before delivery", Intent: "Run the project verification", Requires: []string{"code:modify"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if task.State != StateReview || res.OK || res.ApprovalDisposition != string(ApprovalNeedsChangedInput) ||
+				!strings.Contains(res.Stderr, tc.reviewReason) || res.AgentSessionID != tc.resumeID {
+				t.Errorf("expected specialized review, state=%s result=%+v", task.State, res)
+			}
+			if got := runs.Load(); got != 2 {
+				t.Errorf("agent runs = %d, want 2", got)
+			}
+			if got := modelCalls.Load(); got != 0 {
+				t.Errorf("supervisor requests = %d, want 0", got)
+			}
+			if res.Tokens != tc.resultTokens || task.TokenBudget != budget-2*tokensPerRun {
+				t.Errorf("result tokens = %d, remaining budget = %d, want %d and %d", res.Tokens, task.TokenBudget, tc.resultTokens, budget-2*tokensPerRun)
+			}
+			metrics, err := c.store.DelegationMetricsFor(ctx, task.TaskID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, metric := range metrics {
+				if strings.HasPrefix(metric.Executor, "entry:") {
+					t.Errorf("unexpected supervisor usage metric: %+v", metric)
+				}
+			}
+		})
+	}
+}
+
+func TestPandaReplansClaudeProviderFailureWithCheckpoint(t *testing.T) {
+	c := newSuperviseCore(t, "provider-checkpoint-replan", defense.TierReversible)
+	c.SetSuperviseRounds(2)
+	t.Setenv("ANTHROPIC_API_KEY", "native-test-key")
+	if err := c.SetModel(config.ModelConfig{
+		BaseURL: "https://api.deepseek.com/anthropic", APIType: config.APITypeAnthropic,
+		Model: "deepseek-v4-flash", APIKey: "sk-test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	const followup = "Verify the existing artifact without creating it again"
+	var judgments atomic.Int32
+	c.SetSupervisor(newFakeSupervisor(t, func(int) string {
+		if judgments.Add(1) == 1 {
+			return `{"status":"continue","reason":"provider rate limit after partial work","followup":"` + followup + `"}`
+		}
+		return `{"status":"done","reason":"verification passed"}`
+	}))
+	c.router.SetAgentProber(func(string, ledger.Agent) bool { return true })
+	runs := 0
+	c.router.SetAdapterProcessRunner(func(ctx context.Context, _, prompt, _ string, env []string) commander.AgentResult {
+		runs++
+		injected := slices.Contains(env, "OPENPANDA_INJECTED_MODEL=1")
+		if runs == 1 {
+			if injected {
+				t.Error("native provider error fixture was injected before the first request")
+			}
+			return commander.AgentResult{
+				Result: "api_retry error 429: rate_limited", ExitCode: 1,
+				SessionID: "partial", WorkObserved: true,
+			}
+		}
+		if judgments.Load() != 1 || !injected || commander.ResumeID(ctx) != "partial" || !strings.Contains(prompt, followup) {
+			t.Error("provider error recovery skipped Panda, lost the checkpoint or used the wrong model")
+		}
+		return commander.AgentResult{OK: true, Result: "artifact verified", SessionID: "partial"}
+	})
+	task, res, err := c.SubmitLocal(context.Background(), TaskInput{
+		Title: "Verify artifact", Intent: "Verify artifact", ContextType: "command", Requires: []string{"code:modify"},
+	})
+	if err != nil || task.State != StateDone || !res.Injected || runs != 2 || judgments.Load() != 2 {
+		t.Fatalf("want two rounds ending with injected verification: state=%s runs=%d judgments=%d err=%v", task.State, runs, judgments.Load(), err)
 	}
 }
 

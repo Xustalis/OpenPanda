@@ -125,6 +125,7 @@ def main():
         if note:
             harness.progress(note)
         _emit_item_events(line, state["started"])
+        _emit_context(line)
 
         # Fast provider failure detection: if the turn failed with 402/quota/server error,
         # raise ProviderFailure so PANDA's dynamic model injection can rescue immediately.
@@ -176,6 +177,29 @@ def main():
                  usage=usage, session_id=state["session_id"])
 
 
+def _emit_context(line):
+    """Report the request footprint of a finished codex turn.
+
+    codex counts the whole prompt in `usage.input_tokens`; cached tokens are
+    a subset of that number, not an addition (unlike Claude's three-bucket
+    usage), so the sum is already the request-scoped figure the console's
+    context gauge wants. The envelope names no model, so the window stays
+    unknown unless the caller's own catalogue can resolve one.
+    """
+    obj = harness.parse_json_line(line)
+    if not isinstance(obj, dict) or obj.get("type") != "turn.completed":
+        return
+    usage = obj.get("usage")
+    if not isinstance(usage, dict):
+        return
+    try:
+        tokens = int(usage.get("input_tokens", 0))
+    except (TypeError, ValueError):
+        return
+    if tokens > 0:
+        harness.emit_event("context", context_tokens=tokens, model="")
+
+
 def _emit_item_events(line, started):
     """Map a codex JSONL item envelope to typed activity events.
 
@@ -205,12 +229,12 @@ def _emit_item_events(line, started):
             started.add(iid)
             harness.emit_event("tool_use", id=iid, name=name, input=inp)
         return
-    if et != "item.completed":
-        return
-    if it == "agent_message":
+    if it == "agent_message" and et in ("item.updated", "item.completed"):
         text = str(item.get("text") or "")
-        if text.strip():
+        if text.strip() and (iid or et == "item.completed"):
             harness.emit_event("text", text=text, id=iid)
+        return
+    if et != "item.completed":
         return
     if it == "reasoning":
         text = str(item.get("text") or "")

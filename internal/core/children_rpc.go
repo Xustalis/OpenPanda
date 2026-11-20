@@ -211,7 +211,7 @@ func (s *childRPCServer) spawn(ctx context.Context, req ChildRPCRequest) (any, e
 	limits := s.c.delegateLimits()
 	active := 0
 	for _, child := range children {
-		if !Terminal(child.State) {
+		if child.State != StateDone && child.State != StateFailed && child.State != StateCancelled && child.State != StateExpired {
 			active++
 		}
 	}

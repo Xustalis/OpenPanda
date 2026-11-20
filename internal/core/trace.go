@@ -33,8 +33,17 @@ const (
 	EvPlanStageChanged = "plan_stage_changed" // plan stage unlock/start/complete → plan_id/stage_id/transition
 	EvArtifactTransfer = "artifact_transfer"  // artifact fetch → from/to/hash/size/ok/elapsed
 	EvAgentUsage       = "agent_usage"        // adapter's structured token breakdown → agent/input/output/cache_*
-	EvContextOverflow  = "context_overflow"   // agent failed on its context window → action=compact_retry re-runs on a shrunken prompt + fresh session; action=parked means even that could not fit → review
-	EvSubagentEvent    = "subagent_event"     // agent spawned a sub-agent (Claude Task tool) → note
+	// EvAgentContext records one request-scoped context sample the adapter
+	// reported while running → adapter/model/context_tokens. agent_usage is
+	// per round and cumulative, which answers "what did the run cost"; this
+	// answers "how full is the agent's window right now", which is what the
+	// console's context gauge shows. Deliberately not a visible trace: one
+	// row per model request would bury the timeline, and the panel excludes
+	// it from every "newest event" read so it can never become a task's
+	// last_event.
+	EvAgentContext    = "agent_context"
+	EvContextOverflow = "context_overflow" // agent failed on its context window → action=compact_retry re-runs on a shrunken prompt + fresh session; action=parked means even that could not fit → review
+	EvSubagentEvent   = "subagent_event"   // agent spawned a sub-agent (Claude Task tool) → note
 	// EvAgentEvent records one structured activity block the adapter
 	// streamed back ({"type":"event"} NDJSON): assistant text, thinking,
 	// tool_use/tool_result pairs, and sub-agent blocks carrying the parent

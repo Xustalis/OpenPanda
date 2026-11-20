@@ -375,6 +375,16 @@ type AgentEvent struct {
 	Content  string          `json:"content,omitempty"`
 	Input    json.RawMessage `json:"input,omitempty"`
 	IsError  bool            `json:"is_error,omitempty"`
+	// ContextTokens is the request-scoped context footprint an adapter
+	// reports on its "context" event: the prompt tokens of the newest model
+	// call (uncached input plus cache reads and writes). The result
+	// envelope's own usage is cumulative for the run, so it cannot answer
+	// "how full is the agent's window" — this is the only per-request
+	// number the CLIs report. Model is the id that served the request, when
+	// the adapter knows it. Both are display metadata for the console's
+	// context gauge; 0/"" when the run never reported them.
+	ContextTokens int    `json:"context_tokens,omitempty"`
+	Model         string `json:"model,omitempty"`
 	// Adapter names the adapter file that produced the event — stamped by
 	// the process wrapper, never parsed off the wire, so control-plane
 	// consumers (session-checkpoint persistence) can attribute a minted
@@ -611,6 +621,10 @@ func (w *progressWriter) event(b []byte) {
 		Content   string          `json:"content"`
 		Input     json.RawMessage `json:"input"`
 		IsError   bool            `json:"is_error"`
+		// ContextTokens/Model ride the adapter's "context" event (one usage
+		// sample per model request) and are display metadata only.
+		ContextTokens int    `json:"context_tokens"`
+		Model         string `json:"model"`
 	}
 	if err := json.Unmarshal(b, &ev); err != nil || ev.Ev == "" {
 		return
@@ -666,15 +680,18 @@ func (w *progressWriter) event(b []byte) {
 		return s
 	}
 	out := AgentEvent{
-		Ev:        ev.Ev,
-		ID:        ev.ID,
-		Parent:    ev.Parent,
-		Name:      ev.Name,
-		ToolUseID: ev.ToolUseID,
-		Text:      security.Redact(clamp(ev.Text)),
-		Thinking:  security.Redact(clamp(ev.Thinking)),
-		Content:   security.Redact(clamp(ev.Content)),
-		IsError:   ev.IsError,
+		Ev:            ev.Ev,
+		ID:            ev.ID,
+		Parent:        ev.Parent,
+		Name:          ev.Name,
+		ToolUseID:     ev.ToolUseID,
+		Text:          security.Redact(clamp(ev.Text)),
+		Thinking:      security.Redact(clamp(ev.Thinking)),
+		Content:       security.Redact(clamp(ev.Content)),
+		IsError:       ev.IsError,
+		ContextTokens: ev.ContextTokens,
+		Model:         security.Redact(clamp(ev.Model)),
+		Adapter:       w.adapterName,
 	}
 	if len(ev.Input) > 0 {
 		if len(ev.Input) > maxAgentEventInput {
@@ -1892,6 +1909,7 @@ func (p *AgentSessions) turn(ctx context.Context, key, adapter string, req Adapt
 	turnCtx, cancel := context.WithTimeout(ctx, hard)
 	defer cancel()
 	res := s.await(turnCtx)
+	res.Injected = s.profile.ModelInjection
 	res.WorkObserved = s.stderr.toolCalls.Load() > 0
 	if ctx.Err() != nil && !s.isDead() {
 		// The caller aborted this turn while the CLI was mid-generation (a
@@ -1915,7 +1933,6 @@ func (p *AgentSessions) turn(ctx context.Context, key, adapter string, req Adapt
 		// cmd.Wait() settles the exit marker when the adapter kills the
 		// CLI on its way out, so the adapter also reports the verdict
 		// in-band via session_dead.
-		sessionFallbackNote(ctx, res.Result)
 		s.kill()
 		p.mu.Lock()
 		delete(p.live, key)
@@ -1924,9 +1941,11 @@ func (p *AgentSessions) turn(ctx context.Context, key, adapter string, req Adapt
 		// is an interrupted execution, not a session compatibility probe.
 		// Return all evidence to core's bounded recovery loop; discarding it
 		// here silently replays side effects and doubles the time budget.
-		if res.ExitCode == 124 || res.SessionID != "" || s.stderr.toolCalls.Load() > 0 || !replayableFailure(res) {
+		if res.ExitCode == 124 || res.SessionID != "" || s.stderr.toolCalls.Load() > 0 || !replayableFailure(res) ||
+			(adapter == "claude_code.py" && claudeProviderFailure(res)) {
 			return res, true
 		}
+		sessionFallbackNote(ctx, res.Result)
 		return AgentResult{}, false
 	}
 	return res, true

@@ -25,12 +25,13 @@ type ReviewFailure struct {
 }
 
 // ReviewFailureFromEvents is shared by the store and both panel read paths.
-// The latest outcome marker must be a matching failed execution, with no submit
-// or retry in between. A policy park, question, or an old attempt cannot become
-// retryable merely because its text happens to mention an API error.
+// The execution-failure marker can be written atomically with the review or
+// reconstructed from the preceding legacy result for the same failure.
+// A policy park cannot become retryable because its text mentions an API error.
 func ReviewFailureFromEvents(disposition ApprovalDisposition, reviewRaw, outcomeType, outcomeRaw string) ReviewFailure {
 	var review struct {
-		Reason string `json:"reason"`
+		Reason          string `json:"reason"`
+		ExecutionFailed bool   `json:"execution_failed"`
 	}
 	var outcome struct {
 		Failed string `json:"failed"`
@@ -42,7 +43,7 @@ func ReviewFailureFromEvents(disposition ApprovalDisposition, reviewRaw, outcome
 		Reason: security.Redact(reason),
 		Cause:  ReviewFailureCause(reason),
 		RetryAvailable: disposition == ApprovalNeedsChangedInput && reason != "" &&
-			outcomeType == EvResult && strings.TrimSpace(outcome.Failed) == reason,
+			(review.ExecutionFailed || (outcomeType == EvResult && strings.TrimSpace(outcome.Failed) == reason)),
 	}
 }
 
