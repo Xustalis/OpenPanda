@@ -42,9 +42,12 @@ func (h *handler) getDoctor(w http.ResponseWriter, r *http.Request) {
 // means every fixable one) and, for a legacy-exposure finding, the mode to
 // declare.
 //
-// The handler deliberately does not re-run the suite: the caller already has
-// the report it just rendered, and re-running it here would pay the model
-// endpoint and peer probes twice in one click. The console refreshes
+// The handler re-runs the suite rather than trusting the report the caller
+// rendered. A finding can disappear between the two requests (another surface
+// fixed it, a peer connected), and a repair must only run for a problem that
+// still exists — repairing from a stale list could mint a secret or narrow a
+// bind for something that is already gone. The cost is one extra probe pass
+// per click, the model endpoint being the slow one. The console refreshes
 // /api/doctor itself once the results are in.
 func (h *handler) fixDoctor(w http.ResponseWriter, r *http.Request) {
 	var req struct {
