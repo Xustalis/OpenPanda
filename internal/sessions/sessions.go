@@ -205,6 +205,7 @@ type Session struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	Branch    string    `json:"branch,omitempty"`
 	Worktree  string    `json:"worktree,omitempty"`
+	WorkDir   string    `json:"work_dir,omitempty"`
 	Project   string    `json:"project,omitempty"`
 	// ParentID/ForkIndex describe a session forked from another: the child
 	// starts with a copy of the parent's first ForkIndex turns. Empty
@@ -323,6 +324,23 @@ type Operation struct {
 	TaskID         string            `json:"task_id,omitempty"`
 	Error          string            `json:"error,omitempty"`
 	UpdatedAt      time.Time         `json:"updated_at"`
+	// Plan carries the live phase of a confirmed proposal being implemented
+	// in the background, nil for every ordinary ask. That round has no HTTP
+	// response to stream into — the console's only liveness signal is its
+	// poll of the conversation state — so "what is it doing right now" has to
+	// live on the operation rather than in an event stream nothing reads.
+	Plan *PlanProgress `json:"plan,omitempty"`
+}
+
+// PlanProgress is the one-line phase report of a plan implementation round.
+// Phase is a stable token (dispatch, plan, route, exec, tool, judge, answer)
+// that the console localizes; Detail is the model- or tool-supplied
+// qualifier, already human-readable but not translated.
+type PlanProgress struct {
+	Round  string `json:"round"`
+	Phase  string `json:"phase"`
+	Detail string `json:"detail,omitempty"`
+	TaskID string `json:"task_id,omitempty"`
 }
 
 // Store persists sessions as JSON files under root (created on demand).
@@ -355,6 +373,15 @@ func ValidID(id string) bool {
 // derived lazily by the caller; Create accepts it directly). An optional
 // project associates the session with that project.
 func (s *Store) Create(title string, project ...string) (*Session, error) {
+	var proj string
+	if len(project) > 0 {
+		proj = strings.TrimSpace(project[0])
+	}
+	return s.CreateInDir(title, proj, "")
+}
+
+// CreateInDir preserves a board task's explicit directory for later turns.
+func (s *Store) CreateInDir(title, project, workDir string) (*Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := os.MkdirAll(s.root, 0o700); err != nil {
@@ -368,14 +395,11 @@ func (s *Store) Create(title string, project ...string) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	var proj string
-	if len(project) > 0 {
-		proj = strings.TrimSpace(project[0])
-	}
 	sess := &Session{
 		ID:        id,
 		Title:     title,
-		Project:   proj,
+		Project:   strings.TrimSpace(project),
+		WorkDir:   workDir,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -420,6 +444,7 @@ func (s *Store) Fork(id string, atTurn int) (*Session, error) {
 		ID:                uid,
 		Title:             parent.Title,
 		Project:           parent.Project,
+		WorkDir:           parent.WorkDir,
 		ParentID:          parent.ID,
 		ForkIndex:         atTurn,
 		Summary:           parent.Summary,
@@ -784,16 +809,22 @@ func (s *Store) CompactHistory(ctx context.Context, id string, budget int, summa
 // Callers must pass the exact operation id when updating an existing snapshot;
 // a stale completion can therefore never overwrite a newer generation.
 func (s *Store) SetOperation(id string, op Operation) (bool, error) {
-	return s.setOperation(id, op, false)
+	return s.setOperation(id, op, false, false)
+}
+
+// UpdateRunningPlan changes only progress on the running generation. Cancellation
+// or completion in another process wins over a late progress callback.
+func (s *Store) UpdateRunningPlan(id, round string, plan *PlanProgress) (bool, error) {
+	return s.setOperation(id, Operation{ID: round, Plan: plan}, true, true)
 }
 
 // FinishRunningOperation settles an operation only while its exact generation
 // is still running. A reconciler must preserve a result already saved by its runner.
 func (s *Store) FinishRunningOperation(id string, op Operation) (bool, error) {
-	return s.setOperation(id, op, true)
+	return s.setOperation(id, op, true, false)
 }
 
-func (s *Store) setOperation(id string, op Operation, runningOnly bool) (bool, error) {
+func (s *Store) setOperation(id string, op Operation, runningOnly, progressOnly bool) (bool, error) {
 	unlock, err := lockStore(s.root)
 	if err != nil {
 		return false, fmt.Errorf("sessions: lock: %w", err)
@@ -810,6 +841,11 @@ func (s *Store) setOperation(id string, op Operation, runningOnly bool) (bool, e
 	}
 	if runningOnly && (sess.Operation == nil || sess.Operation.Status != "running") {
 		return false, nil
+	}
+	if progressOnly {
+		plan := op.Plan
+		op = *sess.Operation
+		op.Plan = plan
 	}
 	if op.StartedAt.IsZero() && sess.Operation != nil && sess.Operation.ID == op.ID {
 		op.StartedAt = sess.Operation.StartedAt

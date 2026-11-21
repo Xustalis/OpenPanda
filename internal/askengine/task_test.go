@@ -30,7 +30,7 @@ func TestToTaskInput(t *testing.T) {
 		Resources:  entry.ResourceProfile{CPU: 2, RAMGB: 4, DurationHint: "short"},
 	}
 
-	in := toTaskInput(spec)
+	in := toTaskInput(spec, "")
 
 	if in.Title != "重构导航栏" || in.Project != "demo-portal" || in.ContextType != "file" {
 		t.Fatalf("identity fields wrong: %+v", in)
@@ -71,7 +71,7 @@ func TestToTaskInput_MultiLanguage(t *testing.T) {
 		Resources:  entry.ResourceProfile{CPU: 2, RAMGB: 4, DurationHint: "short"},
 	}
 
-	inEn := toTaskInput(spec, i18n.English)
+	inEn := toTaskInput(spec, "", i18n.English)
 	if inEn.UserLocale != i18n.English {
 		t.Errorf("UserLocale = %v, want %v", inEn.UserLocale, i18n.English)
 	}
@@ -88,7 +88,7 @@ func TestToTaskInput_MultiLanguage(t *testing.T) {
 		}
 	}
 
-	inZh := toTaskInput(spec, i18n.ChineseSimp)
+	inZh := toTaskInput(spec, "", i18n.ChineseSimp)
 	if inZh.UserLocale != i18n.ChineseSimp {
 		t.Errorf("UserLocale = %v, want %v", inZh.UserLocale, i18n.ChineseSimp)
 	}
@@ -120,7 +120,7 @@ func TestToTaskInputCarriesExecutionOverrides(t *testing.T) {
 		Requires:    entry.Requires{Abilities: []string{"code:modify"}},
 		Spec:        entry.TaskSpecDetail{Scope: "internal", Target: "refactor internals"},
 	}
-	in := toTaskInput(spec)
+	in := toTaskInput(spec, "")
 	if !strings.Contains(in.SpecJSON, `"tools_policy":"extended"`) {
 		t.Fatalf("spec_json lost tools_policy: %s", in.SpecJSON)
 	}
@@ -132,7 +132,7 @@ func TestToTaskInputCarriesExecutionOverrides(t *testing.T) {
 	// durable contract, so it cannot be silently overwritten.
 	spec.Spec.ToolsPolicy = "minimal"
 	spec.Spec.MaxTurns = 10
-	in = toTaskInput(spec)
+	in = toTaskInput(spec, "")
 	if !strings.Contains(in.SpecJSON, `"tools_policy":"minimal"`) ||
 		!strings.Contains(in.SpecJSON, `"max_turns":10`) {
 		t.Fatalf("detail overrides lost: %s", in.SpecJSON)
@@ -160,7 +160,7 @@ func TestToTaskInputCarriesActionSpec(t *testing.T) {
 			},
 		},
 	}
-	in := toTaskInput(spec)
+	in := toTaskInput(spec, "")
 	if !strings.Contains(in.SpecJSON, `"action_spec"`) ||
 		!strings.Contains(in.SpecJSON, `"target_actuator":"hardware:servo_rotate"`) ||
 		!strings.Contains(in.SpecJSON, `"angle":90`) {
@@ -179,6 +179,20 @@ func TestSchedulerTier(t *testing.T) {
 	for in, want := range cases {
 		if got := schedulerTier(in); got != want {
 			t.Errorf("schedulerTier(%q) = %d, want %d", in, got, want)
+		}
+	}
+}
+
+func TestTaskIntentRetainsVerbatimRequest(t *testing.T) {
+	const request = "检查配置\n预算 120 元，保留 config/a.yaml 的所有验收条件。"
+	for _, target := range []string{request, strings.Replace(request, "120", "12", 1), "检查配置", ""} {
+		spec := entry.TaskSpec{Title: "配置审查", Spec: entry.TaskSpecDetail{Target: target, SuccessDefinition: "核对报告"}}
+		in := toTaskInput(&spec, request, i18n.ChineseSimp)
+		if strings.Count(in.Intent, request) != 1 || !strings.Contains(in.Intent, target) || !strings.Contains(in.Intent, "核对报告") {
+			t.Fatalf("incorrect instructions for target %q: %q", target, in.Intent)
+		}
+		if found := strings.Contains(in.Intent, i18n.T(i18n.ChineseSimp, "prompt.task.user_raw_request")); found != (target != request) {
+			t.Fatalf("wrong original-request attribution for target %q: %q", target, in.Intent)
 		}
 	}
 }

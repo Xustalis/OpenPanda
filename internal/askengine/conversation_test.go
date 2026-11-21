@@ -468,6 +468,17 @@ func TestPlanningBlocksMutationAndDispatchAndPersistsProposal(t *testing.T) {
 	var calls atomic.Int32
 	var writes atomic.Int32
 	e, _ := newBoundaryTestEngine(t, func(w http.ResponseWriter, r *http.Request) {
+		var req struct{ Tools []entry.ToolSpec }
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+		}
+		seen := map[string]bool{}
+		for _, tool := range req.Tools {
+			seen[tool.Name] = true
+		}
+		if !seen["propose_plan"] || !seen["tool_search"] || seen[entry.ToolNameTaskSubmit] || seen[entry.ToolNameTaskBudget] || seen["create_goal"] {
+			t.Errorf("incorrect tools offered while planning: %v", seen)
+		}
 		n := calls.Add(1)
 		var content any
 		if n == 1 {

@@ -385,7 +385,55 @@ func (s *ConversationService) runPlan(sid, round, proposal string, version int64
 			scope.reviewedPlan = &spec
 		}
 	}
-	out, err := s.engine.AskTurnsScoped(ctx, history, prompt, scope, false, StreamCallbacks{})
+	// This round has no SSE response to type into. Confirming used to start it
+	// with an empty callback set, so the console saw a spinner and nothing else
+	// for as long as the work ran — indistinguishable from a hang, and the
+	// first thing it ever heard was the error at the end. Report the phase on
+	// the session operation instead: the console already polls conversation
+	// state once a second, so one written field is a live progress line.
+	progress := &planPhaseWriter{st: st, sid: sid, op: op, minGap: planPhaseInterval}
+	progress.report("dispatch", "")
+	phaseDone := make(chan struct{})
+	defer close(phaseDone)
+	go func() {
+		tick := time.NewTicker(planPhaseInterval)
+		defer tick.Stop()
+		for {
+			select {
+			case <-phaseDone:
+				return
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				progress.flushPending()
+			}
+		}
+	}()
+	out, err := s.engine.AskTurnsScoped(ctx, history, prompt, scope, false, StreamCallbacks{
+		// Only the display half of the callback set is filled, and OnDelta is
+		// deliberately left nil: setting it switches the engine to a streaming
+		// request, which this round has no consumer for — and a provider that
+		// answers non-streamed then yields "empty model output", turning a
+		// working implementation into a failure just because someone asked to
+		// watch it. OnApproval and OnQuestion stay nil for the same class of
+		// reason: a non-nil handler changes engine semantics (it would block
+		// this goroutine waiting for an answer that has no UI), and this
+		// round's contract is to hand those cases back as
+		// NeedsApproval/NeedsClarification results, which the transcript and
+		// the approval endpoint already handle.
+		OnProgress: func(p Progress) {
+			if p.Kind == ProgressUsage {
+				return
+			}
+			detail := p.Detail
+			if detail == "" && p.Kind == ProgressTool {
+				detail = p.Name
+			}
+			progress.report(planPhaseOf(p), detail)
+		},
+		OnTaskRow: func(taskID string) { progress.task(taskID) },
+	})
+	progress.stop()
 	finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer finishCancel()
 	if s.finishCancelledRound(ctx, finishCtx, st, sid, op) {
@@ -438,6 +486,125 @@ func (s *ConversationService) runPlan(sid, round, proposal string, version int64
 		_, _ = st.FinishRunningOperation(sid, op)
 	}
 	_ = s.engine.TaskStore().CloseAskRound(finishCtx, round, status)
+}
+
+// planPhaseInterval bounds how often a plan round rewrites its session file.
+// The store rewrites the whole session JSON under a lock, and a busy tool loop
+// can emit several progress events a second; two seconds is more than the
+// console's one-second poll can distinguish and cheap enough to hold for a
+// twenty-minute run.
+const planPhaseInterval = 2 * time.Second
+
+// planPhaseOf names the phase a progress event belongs to, in tokens the
+// console localizes. It deliberately collapses the engine's richer kinds into
+// the handful a reader waiting on a plan can act on: waiting on the model,
+// dispatching, running, verifying, and answering.
+func planPhaseOf(p Progress) string {
+	switch p.Kind {
+	case ProgressTask:
+		return "dispatch"
+	case ProgressPlan:
+		return "plan"
+	case ProgressRoute:
+		return "route"
+	case ProgressExec, ProgressSpawn:
+		return "exec"
+	case ProgressTool:
+		return "tool"
+	case ProgressJudge:
+		return "judge"
+	case ProgressWait:
+		return "wait"
+	case ProgressRetry:
+		return "retry"
+	case ProgressOffline:
+		return "offline"
+	case ProgressClarify:
+		return "clarify"
+	case ProgressAgentText:
+		return "answer"
+	default:
+		return "model"
+	}
+}
+
+// planPhaseWriter keeps one session operation's Plan field current while a
+// confirmed proposal executes.
+//
+// Every write goes through the same mutex that stop() takes, so a finished
+// operation can never be dragged back to "running" by a progress event that
+// arrived after the round settled. Writes are throttled: the phase token alone
+// would change a handful of times in a run, but tool progress repeats, and
+// each repeat would otherwise rewrite the session file.
+type planPhaseWriter struct {
+	mu      sync.Mutex
+	st      *sessions.Store
+	sid     string
+	op      sessions.Operation
+	cur     sessions.PlanProgress
+	last    time.Time
+	minGap  time.Duration
+	dirty   bool
+	stopped bool
+}
+
+func (w *planPhaseWriter) report(phase, detail string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.stopped || (w.cur.Phase == phase && w.cur.Detail == detail) {
+		return
+	}
+	w.cur.Round, w.cur.Phase, w.cur.Detail = w.op.ID, phase, detail
+	w.dirty = true
+	if !w.last.IsZero() && time.Since(w.last) < w.minGap {
+		return
+	}
+	w.flushLocked()
+}
+
+// flushPending writes a change the throttle held back. Without it the last
+// event of a busy phase could be dropped and the console would keep reading a
+// stale line for as long as the next quiet phase lasts. It deliberately does
+// not re-check the gap: its only caller is a ticker that *is* the gap.
+func (w *planPhaseWriter) flushPending() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.stopped || !w.dirty {
+		return
+	}
+	w.flushLocked()
+}
+
+// task records the row the round dispatched, so the console can open the work
+// and not only describe it. It writes immediately: the dispatch is the one
+// milestone worth a file rewrite out of band.
+func (w *planPhaseWriter) task(taskID string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.stopped || taskID == "" {
+		return
+	}
+	w.cur.Round, w.cur.TaskID = w.op.ID, taskID
+	w.dirty = true
+	w.flushLocked()
+}
+
+// stop freezes the writer and drops the progress field, so a settled round
+// leaves no "implementing…" line behind.
+func (w *planPhaseWriter) stop() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.stopped {
+		return
+	}
+	w.stopped = true
+	_, _ = w.st.UpdateRunningPlan(w.sid, w.op.ID, nil)
+}
+
+func (w *planPhaseWriter) flushLocked() {
+	w.last = time.Now()
+	w.dirty = false
+	_, _ = w.st.UpdateRunningPlan(w.sid, w.op.ID, &w.cur)
 }
 
 // The plan:user turn is the durable boundary between planning discussion and
