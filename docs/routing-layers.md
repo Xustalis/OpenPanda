@@ -12,6 +12,26 @@
 
 `requires` 只表达「目标设备需要具备什么」，不表达设备。 `agent:opencode` 在每台装了 opencode 的机器上都成立，`Node.Matches` 只检查该节点有没有这个名字的 agent。设备意图只能通过 `node` / `preferred` 表达，这是 `internal/entry/prompt.go` 对模型输出的硬要求。
 
+### 执行器层内部：难度也是一条输入
+
+同一台机器上往往装了多个 harness，`commander.Router` 在它们之间排序，而不是随便挑一个。排序用的词表来自能力卡自己声明的 `best_at` / `not_for`，而喂进去的特征有三类：任务是什么（`task_kind` / `scope` / `target`）、任务怎么说（标题与意图）、以及**分类器判定的复杂度**。
+
+复杂度（0–1）不是新字段，入口分类一直在输出它，此前只用于上下文预算。现在它按 `core` 里同一个阈值换算成词条：
+
+| 复杂度 | 附加词条 | 效果 |
+| --- | --- | --- |
+| < 0.35 | `quick_edits`、`fast_scripts`、`code_search`、`code_explanation` | 便宜的快速执行器（opencode、dsh）胜出 |
+| 0.35 – 0.75 | 无 | 成本与能力照旧权衡 |
+| ≥ 0.75 | `complex_reasoning`、`multi_file_edits`、`refactoring` | 声明了这些专长的执行器（claude_code、codex、antigravity）胜出，`cost_tier` 的便宜折扣不再主导 |
+
+阈值与 `agentContextBudget` 共用同一对常量，因此「被判为难任务」的那个执行器，也恰好是拿到大上下文档位的那个。用户不需要任何额外操作：难度是分类结果，不是选择题。
+
+### 执行失败时的顺序：先换 harness，最后才注入
+
+用户选了团队时，候选只来自该团队。一般任务可以用 preferred_agent 指定首选执行器，首选不可用时仍可使用其他已选成员。需要验证特定 CLI 本身时，使用 agent:<name> 固定执行器。原生供应商无法启动任务时，调度器按顺序尝试其他候选，再按兼容性选择能使用 Panda 模型的执行器。即使兼容的执行器排在第一位，它也能在原生候选耗尽后接回任务。若本机在任何工作开始前耗尽候选，未绑定设备且可转移的任务可移交给在线的合适节点；已有执行检查点或工作痕迹的任务保留原有恢复路径。
+
+注入本身也要过方言关：codex 只收 OpenAI 协议、agy 只收 Gemini `generateContent`。模型说的方言不对时不会硬塞环境变量（那只会让 CLI 忽略它们并以同样的错误失败，还留下「已注入」的假记录），而是在错误里点名不匹配之处，方便直接用 `injection.agents.<name>` 修正。
+
 ## 2. 两个都叫 opencode 的东西
 
 - **协调器的模型供应商**：`config.model.provider: opencode-go`、`base_url: https://opencode.ai/zen/go/v1`。入口 LLM 由 `internal/entry/stream.go` 直接发 HTTP 请求，负责分类、生成 TaskSpec、观察子任务结果并收敛回复。它不启动 opencode CLI，也不参与设备选择。

@@ -320,7 +320,7 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 
 	switch decision.Action {
 	case scheduler.ActionLocal:
-		return c.runLocal(ctx, t, in)
+		return c.runLocal(context.WithValue(ctx, peerFallbackKey{}, true), t, in)
 	case scheduler.ActionForward:
 		linkState := c.EvaluateLinkState(ctx, decision.Target)
 		if in.Transport == "dtn" || linkState != LinkLive {

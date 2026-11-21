@@ -43,9 +43,8 @@ func (r *Registry) bindDiscoveryTool() {
 				offset = int(min(n, float64(len(r.tools))))
 			}
 			type item struct {
-				Name        string `json:"name"`
-				Description string `json:"description"`
-				score       int
+				Name  string `json:"name"`
+				score int
 			}
 			items := make([]item, 0)
 			tokens := util.Tokenize(query)
@@ -71,7 +70,7 @@ func (r *Registry) bindDiscoveryTool() {
 					}
 				}
 				if score > 0 {
-					items = append(items, item{Name: name, Description: t.Description, score: score})
+					items = append(items, item{Name: name, score: score})
 				}
 			}
 			sort.Slice(items, func(i, j int) bool {
@@ -83,6 +82,7 @@ func (r *Registry) bindDiscoveryTool() {
 			total := len(items)
 			offset = min(offset, total)
 			end := min(offset+8, total)
+			// Full descriptions are already sent with the next request's tool schemas.
 			page := items[offset:end]
 			for _, i := range page {
 				r.exposed[i.Name] = true

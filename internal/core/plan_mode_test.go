@@ -17,8 +17,8 @@ func restrictedTestRouter() *commander.Router {
 	card := ledger.Card{
 		Device: "plan-mode-test",
 		Agents: map[string]ledger.Agent{
-			"deepseek_harness": {Adapter: "deepseek_harness.py", Tier: 1},
-			"claude_code":      {Adapter: "claude_code.py", Tier: 1},
+			"hermes":      {Adapter: "hermes.py", Tier: 1},
+			"claude_code": {Adapter: "claude_code.py", Tier: 1},
 		},
 	}
 	return commander.NewRouter(card, commander.NewExecutor(), config.ModelConfig{},
@@ -29,9 +29,9 @@ func TestPlanModeAgentPromotesARestrictedAlternate(t *testing.T) {
 	router := restrictedTestRouter()
 	plan := commander.Plan{
 		Kind:       "agent",
-		Agent:      "deepseek_harness",
-		Ability:    "deepseek_harness",
-		Adapter:    "deepseek_harness.py",
+		Agent:      "hermes",
+		Ability:    "hermes",
+		Adapter:    "hermes.py",
 		Tier:       1,
 		Alternates: []string{"claude_code"},
 	}
@@ -44,7 +44,7 @@ func TestPlanModeAgentPromotesARestrictedAlternate(t *testing.T) {
 	}
 	// The old primary stays on the chain: it is still a valid agent for a
 	// later attempt if the promoted one is unavailable for some other reason.
-	if len(got.Alternates) != 1 || got.Alternates[0] != "deepseek_harness" {
+	if len(got.Alternates) != 1 || got.Alternates[0] != "hermes" {
 		t.Fatalf("alternates = %v, want the old primary kept", got.Alternates)
 	}
 }
@@ -65,8 +65,8 @@ func TestPlanModeAgentRefusesWhenNothingCanRunReadOnly(t *testing.T) {
 	router := restrictedTestRouter()
 	plan := commander.Plan{
 		Kind:    "agent",
-		Agent:   "deepseek_harness",
-		Adapter: "deepseek_harness.py",
+		Agent:   "hermes",
+		Adapter: "hermes.py",
 		Tier:    1,
 	}
 	_, err := planModeAgent(router, plan)

@@ -61,6 +61,16 @@ func (c *Core) setupIsolatedWorkDir(ctx context.Context, task Task, source strin
 	if err != nil {
 		return "", err
 	}
+	// Clearing the destination must never remove the requested source.
+	source, err = filepath.Abs(source)
+	if err != nil {
+		return "", err
+	}
+	source = resolveDir(source)
+	target := resolveDir(dir)
+	if _, inside := relUnderDir(target, source); inside || source == target {
+		return "", fmt.Errorf("isolated workspace overlaps its source directory")
+	}
 	if _, err := os.Stat(filepath.Join(dir, isolatedBaselineFile)); err == nil {
 		return dir, nil
 	}
@@ -70,7 +80,7 @@ func (c *Core) setupIsolatedWorkDir(ctx context.Context, task Task, source strin
 	populated := false
 	if repoRoot := gitRepoRootOf(ctx, source); repoRoot != "" && !scopedDispatch(task) {
 		if err := gitWorktreeAdd(ctx, repoRoot, dir); err == nil {
-			if oerr := overlayDirtyFiles(ctx, source, dir); oerr != nil {
+			if oerr := overlayDirtyFiles(ctx, source, dir, c.taskScratchRelativeTo(source)); oerr != nil {
 				return "", fmt.Errorf("populate isolated dirty tree: %w", oerr)
 			}
 			populated = true
@@ -151,7 +161,7 @@ func gitWorktreeAdd(ctx context.Context, repoRoot, dir string) error {
 // deleted and untracked files) into a fresh worktree, so the child works on
 // the tree as it is now rather than the last commit. Derived/scratch paths
 // are never overlaid — the same skip set the baseline walk uses.
-func overlayDirtyFiles(ctx context.Context, source, dir string) error {
+func overlayDirtyFiles(ctx context.Context, source, dir, taskScratch string) error {
 	// -uall keeps untracked directories expanded: the default collapses a new
 	// directory into a single "?? dir/" entry the file-level overlay below
 	// would skip, silently dropping every file inside it from the worktree.
@@ -159,8 +169,11 @@ func overlayDirtyFiles(ctx context.Context, source, dir string) error {
 	// what the copy fallback sees — .env and friends are part of the working
 	// tree even though git ignores them (the skip set still shields the big
 	// derived dirs like node_modules).
-	out, err := exec.CommandContext(ctx, "git", "-C", source, "status", "--porcelain", "-z",
-		"--untracked-files=all", "--ignored=matching").Output()
+	args := []string{"-C", source, "status", "--porcelain", "-z", "--untracked-files=all", "--ignored=matching"}
+	if taskScratch != "" {
+		args = append(args, "--", ".", ":(top,exclude,literal)"+taskScratch)
+	}
+	out, err := exec.CommandContext(ctx, "git", args...).Output()
 	if err != nil {
 		return fmt.Errorf("git status: %w", err)
 	}
@@ -227,7 +240,30 @@ func (c *Core) copyWorkTree(source, dst string) error {
 	return c.copyWorkTreeWithPolicy(source, dst, false)
 }
 
+// A project can be rooted at the node's work directory. Only the managed
+// scratch subtree is excluded; project directories named tasks elsewhere stay.
+func (c *Core) taskScratchRelativeTo(source string) string {
+	root := c.scratchRoot()
+	if root == "" {
+		root = os.TempDir()
+	}
+	tasks, err := filepath.Abs(filepath.Join(root, "tasks"))
+	if err != nil {
+		return ""
+	}
+	rel, _ := relUnderDir(source, tasks)
+	return rel
+}
+
 func (c *Core) copyWorkTreeWithPolicy(source, dst string, scoped bool) error {
+	sourceAbs, err := filepath.Abs(source)
+	if err != nil {
+		return err
+	}
+	// Walk the actual source even when the project path itself is a symlink.
+	source = resolveDir(sourceAbs)
+	taskScratch := c.taskScratchRelativeTo(source)
+	nestedDestination, _ := relUnderDir(source, dst)
 	return filepath.WalkDir(source, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -241,7 +277,7 @@ func (c *Core) copyWorkTreeWithPolicy(source, dst string, scoped bool) error {
 		}
 		relSlash := filepath.ToSlash(rel)
 		if d.IsDir() {
-			if worktreeSkipDirs[d.Name()] || c.isHostStatePath(p) {
+			if relSlash == nestedDestination || relSlash == taskScratch || worktreeSkipDirs[d.Name()] || c.isHostStatePath(p) {
 				return filepath.SkipDir
 			}
 			return os.MkdirAll(filepath.Join(dst, filepath.FromSlash(relSlash)), 0o755)

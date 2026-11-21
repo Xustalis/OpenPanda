@@ -53,6 +53,9 @@ func ReviewFailureCause(reason string) string {
 	if isStagnationReason(reason) {
 		return "stagnation"
 	}
+	if commander.IsAuthenticationSetupRequired(reason) {
+		return "authentication_required"
+	}
 	if commander.IsModelConfigFailure(reason) {
 		return "model_config"
 	}
