@@ -3,9 +3,8 @@
 import type { ComponentChildren } from 'preact'
 import { useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { t } from '../../i18n'
-import { Markdown } from '../../md/render'
 
-function ConversationDialog({ title, wide, onClose, children }: {
+export function ConversationDialog({ title, wide, onClose, children }: {
   title: string
   wide?: boolean
   onClose(): void
@@ -29,32 +28,6 @@ function ConversationDialog({ title, wide, onClose, children }: {
       <h2 class="modal-title">{title}</h2>
       {children}
     </dialog>
-  )
-}
-
-export function PlanProposalDialog({ version, text, resumesGoal, busy, onClose, onConfirm }: {
-  version: number
-  text: string
-  resumesGoal: boolean
-  busy: boolean
-  onClose(): void
-  onConfirm(): Promise<void>
-}) {
-  const [submitting, setSubmitting] = useState(false)
-  const title = t('sessions.plan.proposal') + ' · ' + version
-  return (
-    <ConversationDialog title={title} wide onClose={onClose}>
-      <div class="plan-dialog-body" tabindex={0} autofocus>
-        <Markdown text={text} />
-      </div>
-      <div class="modal-actions">
-        <button type="button" class="btn ghost" onClick={onClose}>{t('common.close')}</button>
-        <button type="button" class="btn primary" disabled={busy || submitting} onClick={async () => {
-          setSubmitting(true)
-          try { await onConfirm() } finally { setSubmitting(false) }
-        }}>{t(resumesGoal ? 'sessions.plan.implementGoal' : 'sessions.plan.implement')}</button>
-      </div>
-    </ConversationDialog>
   )
 }
 
