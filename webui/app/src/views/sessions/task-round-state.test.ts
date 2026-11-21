@@ -36,6 +36,14 @@ test('late result returns to original round and retries retain previous attempts
   assert.equal(result.rounds[0]?.anchor, 'op-a')
 })
 
+test('a receiptless board delivery keeps its place before a follow-up', () => {
+  const delivery: ChatMsg = { k: 'first-delivery', role: 'assistant', kind: 'answer', ref: 'board', text: '[done] @codex · Board' }
+  const messages = [delivery, prompt('second'), { ...delivery, k: 'later-attempt' }]
+  const result = projectTaskRounds(messages, [row('board', { operation_id: undefined })])
+  assert.equal(result.rounds[0]?.anchor, 'first-delivery')
+  assert.equal(result.hidden.has(delivery.k), true)
+})
+
 test('unknown state, open dispatch, or pending review cannot close a round', () => {
   const msgs = [prompt('op-a'), receipt('a', 'op-a')]
   for (const rows of [null, [], [row('a', { state: 'future-state' })], [row('a', { dispatch_open: true })],

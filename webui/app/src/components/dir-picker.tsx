@@ -157,12 +157,18 @@ export function DirButton({
   value = '',
   onChange,
   label,
+  allowClear = true,
+  clearLabel,
+  hint,
   disabled = false,
 }: {
   value?: string
   onChange: (path: string) => void
   /** The picker's own name, shown while nothing is chosen. */
   label: string
+  hint?: string
+  clearLabel?: string
+  allowClear?: boolean
   disabled?: boolean
 }) {
   const pick = useDirPick(onChange, disabled)
@@ -172,7 +178,7 @@ export function DirButton({
    *  not look alike, or "no workspaces yet" flashes on every open. */
   const [spaces, setSpaces] = useState<WorkdirRow[] | null>(null)
   const box = useRef<HTMLDivElement>(null)
-  const clearable = !!value && !disabled
+  const clearable = allowClear && !!value && !disabled
 
   // Read on every open rather than cached at mount: filing work under a
   // project touches its row, which is what orders this list, and the endpoint
@@ -266,7 +272,7 @@ export function DirButton({
   return (
     <div class="workdir-pick" ref={box}>
       <div
-        class={`workdir-btn${value ? ' has-value' : ''}${disabled ? ' is-disabled' : ''}`}
+        class={`workdir-btn${value ? ' has-value' : ''}${clearable ? ' can-clear' : ''}${disabled ? ' is-disabled' : ''}`}
         /* The bubble is where the whole path lives: the label shows the folder
            on its own, so hovering is how you check *which* folder. Nothing to
            reveal while the pick is still empty — the label already says it,
@@ -275,7 +281,7 @@ export function DirButton({
         /* The bubble is also the only place the cross can be announced: it is
            invisible until the pointer is on the chip, so hovering is the one
            moment the affordance needs a name. */
-        data-tip-hint={clearable ? t('sessions.clearDirHint') : undefined}
+        data-tip-hint={clearable ? clearLabel || t('sessions.clearDirHint') : undefined}
       >
         <button
           type="button"
@@ -299,7 +305,7 @@ export function DirButton({
           <button
             type="button"
             class="workdir-clear"
-            aria-label={t('sessions.clearDir')}
+            aria-label={clearLabel || t('sessions.clearDir')}
             onClick={() => onChange('')}
           >
             <Icon name="x" size={13} />
@@ -367,6 +373,7 @@ export function DirButton({
               })
             )}
           </div>
+          {hint && <p class="wd-hint">{hint}</p>}
           <div class="wd-actions">
             <button type="button" class="wd-action" onClick={browse}>
               <Icon name="folder-plus" size={15} />
@@ -382,7 +389,7 @@ export function DirButton({
                 }}
               >
                 <Icon name="x" size={15} />
-                {t('sessions.workdirNone')}
+                {clearLabel || t('sessions.workdirNone')}
               </button>
             )}
           </div>

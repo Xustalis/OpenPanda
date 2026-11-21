@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/taskproviders"
 	"github.com/Xustalis/OpenPanda/internal/taskproviders/tsync"
@@ -28,6 +29,21 @@ type RequestedExecution struct {
 // are human TaskSync operations; device requests cannot create a new generation
 // or bypass local policy. The owning runtime later claims the cloud slot.
 func (s *Service) RequestExecution(ctx context.Context, connection string, key taskproviders.Key, requestID string) (RequestedExecution, error) {
+	return s.requestExecution(ctx, connection, key, requestID, nil)
+}
+
+// DraftConsent binds a new draft-only policy to the task and account on screen.
+type DraftConsent struct {
+	AccountID    string `json:"accountId"`
+	AuthEpoch    string `json:"authEpoch"`
+	TaskRevision string `json:"taskRevision"`
+}
+
+func (s *Service) RequestFirstDraft(ctx context.Context, connection string, key taskproviders.Key, requestID string, consent DraftConsent) (RequestedExecution, error) {
+	return s.requestExecution(ctx, connection, key, requestID, &consent)
+}
+
+func (s *Service) requestExecution(ctx context.Context, connection string, key taskproviders.Key, requestID string, consent *DraftConsent) (RequestedExecution, error) {
 	if _, err := uuid.Parse(requestID); err != nil {
 		return RequestedExecution{}, taskproviders.ErrPrecondition
 	}
@@ -39,9 +55,25 @@ func (s *Service) RequestExecution(ctx context.Context, connection string, key t
 	if err != nil {
 		return RequestedExecution{}, err
 	}
-	p, err := s.Policy(ctx, connection, key.SpaceID)
-	if err != nil {
-		return RequestedExecution{}, err
+	var p Policy
+	if consent == nil {
+		p, err = s.Policy(ctx, connection, key.SpaceID)
+		if err != nil {
+			return RequestedExecution{}, err
+		}
+	} else {
+		if c.AccountID != consent.AccountID || c.AuthEpoch != consent.AuthEpoch || live.Key != key || live.TaskRevision != consent.TaskRevision {
+			return RequestedExecution{}, taskproviders.ErrAuthorizationChanged
+		}
+		var wire tsync.Task
+		if err = json.Unmarshal(live.ProviderData, &wire); err != nil {
+			return RequestedExecution{}, err
+		}
+		p = Policy{
+			Execute: true, Mode: wire.ApprovalMode, ExpiresAt: s.now().Add(24 * time.Hour).UnixMilli(),
+			MaxConcurrent: 1, DailyTokens: 20000, PreparationTokens: 512,
+			TaskIDs: []string{key.TaskID}, Capabilities: []string{"draft"},
+		}
 	}
 	if err = eligible(c, p, live, s.now()); err != nil {
 		return RequestedExecution{}, err
@@ -69,6 +101,36 @@ func (s *Service) RequestExecution(ctx context.Context, connection string, key t
 	}
 	if err = eligible(current, p, live, s.now()); err != nil {
 		return RequestedExecution{}, err
+	}
+	if consent != nil {
+		raw, err := json.Marshal(p)
+		if err != nil {
+			return RequestedExecution{}, err
+		}
+		result, err := tx.ExecContext(ctx, "INSERT INTO task_policies(connection_id,account_id,space_id,policy_json,updated_at) VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING", c.ID, c.AccountID, key.SpaceID, string(raw), s.now().UnixMilli())
+		if err != nil {
+			return RequestedExecution{}, err
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return RequestedExecution{}, err
+		}
+		if n == 0 {
+			// A lost response can be replayed without changing the policy or starting work.
+			var state string
+			err = tx.QueryRowContext(ctx, `SELECT f.state FROM task_flow_runs f
+ JOIN task_policies p ON p.connection_id=f.connection_id AND p.account_id=f.account_id AND p.space_id=? AND p.policy_json=f.policy_json
+ WHERE f.request_id=? AND f.connection_id=? AND f.account_id=? AND f.task_key=? AND f.auth_epoch=?
+ AND f.connection_generation=? AND f.input_revision=? AND f.assignment_revision=? AND f.automation_generation=?`,
+				key.SpaceID, requestID, c.ID, c.AccountID, key.String(), c.AuthEpoch, c.Generation, live.InputRevision, live.AssignmentRevision, live.AutomationGeneration).Scan(&state)
+			if errors.Is(err, sql.ErrNoRows) {
+				return RequestedExecution{}, taskproviders.ErrConflict
+			}
+			if err != nil {
+				return RequestedExecution{}, err
+			}
+			return RequestedExecution{RequestID: requestID, AlreadyStarted: true, State: state}, nil
+		}
 	}
 	if err = s.automationSnapshotTx(ctx, tx, c, p, live); err != nil {
 		return RequestedExecution{}, err

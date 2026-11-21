@@ -39,6 +39,11 @@ func writeWorkError(w http.ResponseWriter, err error) {
 		code = 401
 	case errors.Is(err, taskproviders.ErrAuthorizationChanged):
 		code = 403
+	case errors.Is(err, taskproviders.ErrAutomationNotAuthorized):
+		// A local policy switch, not a revoked grant. The console needs the
+		// code to point at the policy editor instead of a generic failure.
+		code = 403
+		w.Header().Set("X-OpenPanda-Error", "automation_not_authorized")
 	case errors.Is(err, taskproviders.ErrUnsupported):
 		code = 501
 	case errors.Is(err, taskproviders.ErrPrecondition):
@@ -120,6 +125,24 @@ func (h *handler) workHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, x)
+}
+func (h *handler) firstWorkDraft(w http.ResponseWriter, r *http.Request) {
+	key, err := taskproviders.ParseKey(r.PathValue("key"))
+	if err != nil {
+		writeWorkError(w, err)
+		return
+	}
+	var consent taskflow.DraftConsent
+	if err := decodeWorkJSON(w, r, &consent, false); err != nil {
+		writeWorkError(w, err)
+		return
+	}
+	run, err := h.taskFlow.RequestFirstDraft(r.Context(), r.URL.Query().Get("connection"), key, r.Header.Get("Idempotency-Key"), consent)
+	if err != nil {
+		writeWorkError(w, err)
+		return
+	}
+	writeJSON(w, run)
 }
 func (h *handler) runWork(w http.ResponseWriter, r *http.Request) {
 	key, err := taskproviders.ParseKey(r.PathValue("key"))

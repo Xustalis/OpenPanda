@@ -63,7 +63,6 @@ function sortTasks(tasks: Task[]): Task[] {
 
 export function QueueView({
   mode = 'board',
-  onModeChange,
   focusReview,
   project,
   onOpen,
@@ -72,7 +71,6 @@ export function QueueView({
 }: {
   /** Plans are a lens on this same scoped task list, not another page. */
   mode?: 'board' | 'plans'
-  onModeChange?(mode: 'board' | 'plans'): void
   /** Deep-link filter (#/control?project=x) — seeds the board's project
    *  filter so a link from a project card lands on that project's work. */
   project?: string | null
@@ -84,6 +82,7 @@ export function QueueView({
   useLocaleRerender()
   const change = useChangeSignal()
   const [refresh, setRefresh] = useState(0)
+  const [creating, setCreating] = useState(false)
   const [projectFilter, setProjectFilter] = useState(project ?? '')
   // Device filter: '' = every origin, 'local' = this machine, 'unknown' =
   // rows with no recorded origin, otherwise an origin node id (chain[0]).
@@ -297,6 +296,14 @@ export function QueueView({
     ? new Set(tasks.flatMap((task) => (task.plan_meta?.plan_id ? [task.plan_meta.plan_id] : [])))
     : undefined
 
+  const emptyBoard = mode === 'board' && allTasks !== null && (focusReview ? reviewCount === 0 : tasks.length === 0)
+  const firstTask = emptyBoard && !focusReview && !plansFiltered
+  const createButton = (
+    <button type="button" class="btn primary queue-new" onClick={() => setCreating(true)}>
+      <Icon name="plus" size={16} />{t('queue.new')}
+    </button>
+  )
+
   return (
     <section class="queue-section">
       {/* One quiet line over the board: the two scopes, the live counts, then
@@ -367,20 +374,13 @@ export function QueueView({
               <Icon name="trash" size={16} />
             </button>
           )}
-          <NewTaskForm
-            projects={projects}
-            defaultProject={projectFilter}
-            onCreated={() => {
-              bump()
-              if (mode === 'plans') onModeChange?.('board')
-            }}
-          />
+          {!firstTask && createButton}
         </div>
       </div>
 
       {running.length > 0 && (
         <div class={`parallel-strip${running.length > 1 ? ' active' : ''}`}>
-          <span class="parallel-count">
+          <span class="parallel-count"><Icon name="activity" size={16} />
             {running.length > 1
               ? t('queue.parallelStrip.n', { n: String(running.length) })
               : t('queue.parallelStrip.one')}
@@ -394,7 +394,7 @@ export function QueueView({
               title={task.title}
             >
               <span class="parallel-lane-mark">
-                {task.isolate ? '⧉' : task.scope_paths && task.scope_paths.length > 0 ? '◫' : '▣'}
+                <Icon name={task.isolate ? 'git-fork' : task.scope_paths?.length ? 'folder' : 'terminal'} size={14} />
               </span>
               <span class="parallel-lane-title">{task.title || task.id}</span>
               {task.isolate ? (
@@ -411,20 +411,25 @@ export function QueueView({
         <PlansView head={false} planIds={visiblePlanIds} filtered={plansFiltered} />
       ) : (
         <>
-          {/* A device bucket can be empty by definition (this machine submitted
-              nothing; everything on the board arrived from a peer). Say so
-              instead of leaving four blank columns to be misread as "loading". */}
-          {deviceFilter && allTasks !== null && tasks.length === 0 && (
-            <p class="dim queue-device-empty">{t('queue.device.none')}</p>
-          )}
-
           {allTasks === null ? (
             <p class="dim">{t('common.loading')}</p>
+          ) : emptyBoard ? (
+            <section class="queue-empty-state" aria-labelledby="queue-empty-title">
+              <div class="queue-empty-art" aria-hidden="true">
+                <span class="queue-sheet rear"><Icon name="route" /></span>
+                <span class="queue-sheet middle"><Icon name="clock" /></span>
+                <span class="queue-sheet front"><Icon name="list-checks" /></span>
+              </div>
+              <h2 id="queue-empty-title">{t(focusReview ? 'queue.emptyReview' : plansFiltered ? 'queue.emptyFilter' : 'queue.emptyTitle')}</h2>
+              {firstTask && <><p>{t('queue.emptyGuide')}</p>{createButton}</>}
+              {focusReview ? <a class="btn" href="#/control">{t('queue.showBoard')}</a> : plansFiltered && (
+                <button type="button" class="btn" onClick={() => { setProjectFilter(''); setDeviceFilter('') }}>{t('queue.resetFilters')}</button>
+              )}
+              {firstTask && <ol class="queue-stages">{COLUMNS.map(col => (
+                <li key={col.key} class={'col-' + col.key}>{t('queue.col.' + col.key)}</li>
+              ))}</ol>}
+            </section>
           ) : (
-            // The board always renders its four columns — an empty board should
-            // still show the shape (todo → doing → review → done), not a blank
-            // page with a hint. In focus-review mode (#/control?review=1, reached
-            // via the nav badge) it collapses to the approval column alone.
             <div class={`kanban${focusReview ? ' focus-review' : ''}`}>
               {(focusReview ? COLUMNS.filter((c) => c.key === 'review') : COLUMNS).map((col) => (
                 <KanbanColumn
@@ -441,13 +446,15 @@ export function QueueView({
               ))}
             </div>
           )}
-          {focusReview && (
+          {focusReview && !emptyBoard && (
             <p class="dim queue-focus-note">
               <a href="#/control">{t('queue.showBoard')}</a>
             </p>
           )}
         </>
       )}
+      <NewTaskForm open={creating} onClose={() => setCreating(false)} projects={projects}
+        defaultProject={projectFilter} onCreated={id => { bump(); onOpen(id) }} />
       {menu && (
         <ContextMenu
           x={menu.x}
@@ -474,15 +481,16 @@ export function QueueView({
  *  field, Tab stays inside, Esc / backdrop / ✕ dismiss without losing the
  *  draft. */
 function NewTaskForm({
-  projects,
+  open, onClose, projects,
   defaultProject,
   onCreated,
 }: {
+  open: boolean
+  onClose(): void
   projects: string[]
   defaultProject: string
-  onCreated(): void
+  onCreated(id: string): void
 }) {
-  const [open, setOpen] = useState(false)
   const [title, setTitle] = useState('')
   const [prompt, setPrompt] = useState('')
   const [priority, setPriority] = useState<Task['priority']>('normal')
@@ -507,28 +515,10 @@ function NewTaskForm({
     [open],
   )
   const box = useRef<HTMLFormElement>(null)
-  const titleInput = useRef<HTMLInputElement>(null)
-  const trigger = useRef<HTMLButtonElement>(null)
-  const wasOpen = useRef(false)
-  // Tab stays inside the dialog while it is open.
-  useModalFocus(box, open)
-  // …but the trap lands on the ✕ first. A create form starts at the title:
-  // the one field the submit button is gated on.
+  useModalFocus(box, open, 'input')
   useEffect(() => {
-    if (open) titleInput.current?.focus()
-  }, [open])
-  // The trap also promises to hand focus back to the opener, and cannot here:
-  // the trigger is swapped out for the dialog, so the element it captured is
-  // detached by the time the dialog closes. Remember the round trip and focus
-  // the re-mounted trigger ourselves.
-  useEffect(() => {
-    if (open) {
-      wasOpen.current = true
-      return
-    }
-    if (!wasOpen.current) return
-    wasOpen.current = false
-    trigger.current?.focus()
+    if (!open) return
+    if (!title.trim() && !prompt.trim()) setProject(defaultProject)
   }, [open])
 
   /** Dismiss without submitting. A draft survives — an accidental Esc must not
@@ -538,7 +528,7 @@ function NewTaskForm({
   function close() {
     if (busy) return
     setError('')
-    setOpen(false)
+    onClose()
   }
 
   async function submit(e: Event) {
@@ -578,8 +568,8 @@ function NewTaskForm({
       setParallel('default')
       setPathsText('')
       setWorkdirText('')
-      setOpen(false)
-      onCreated()
+      onClose()
+      onCreated(res.task_id)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -587,23 +577,7 @@ function NewTaskForm({
     }
   }
 
-  if (!open) {
-    return (
-      <button
-        ref={trigger}
-        class="btn primary queue-new"
-        onClick={() => {
-          // A fresh draft inherits the board scope; an existing draft keeps
-          // the project the user explicitly picked before dismissing it.
-          if (!title.trim() && !prompt.trim()) setProject(defaultProject)
-          setOpen(true)
-        }}
-      >
-        <Icon name="plus" size={14} />
-        {t('queue.new')}
-      </button>
-    )
-  }
+  if (!open) return null
   // The two lane modes describe a project's own tree, so they only exist once
   // one is chosen — the same condition the `<option>`s carried.
   const parallelOptions: SelectOption[] = [
@@ -657,7 +631,6 @@ function NewTaskForm({
         <div class="field-group">
           <label for="nt-title">{t('queue.newTitle')}</label>
           <input
-            ref={titleInput}
             id="nt-title"
             class="input"
             type="text"
@@ -666,59 +639,6 @@ function NewTaskForm({
             onInput={(e) => setTitle((e.target as HTMLInputElement).value)}
           />
         </div>
-        <div class="field-row">
-          <div class="field-group">
-            <label for="nt-priority">{t('queue.newPriority')}</label>
-            <Select
-              id="nt-priority"
-              ariaLabel={t('queue.newPriority')}
-              value={priority ?? 'normal'}
-              options={PRIO_CYCLE.map((p) => ({ value: p, label: t(`queue.priority.${p}`) }))}
-              onChange={(v) => setPriority(v as Task['priority'])}
-            />
-          </div>
-          <div class="field-group">
-            <label for="nt-project">{t('queue.newProject')}</label>
-            <Select
-              id="nt-project"
-              ariaLabel={t('queue.newProject')}
-              value={project}
-              options={[
-                { value: '', label: t('queue.allProjects') },
-                ...projects.map((p) => ({ value: p, label: p })),
-              ]}
-              onChange={(next) => {
-                setProject(next)
-                // The lane modes describe the project's own tree, so clearing
-                // the project must not leave one selected: the server rejects
-                // it and the option is no longer on screen to explain why.
-                if (!next && (parallel === 'paths' || parallel === 'isolate')) setParallel('default')
-              }}
-            />
-          </div>
-          <div class="field-group">
-            <label for="nt-node">{t('queue.newNode')}</label>
-            <Select
-              id="nt-node"
-              ariaLabel={t('queue.newNode')}
-              value={node}
-              options={[
-                { value: '', label: t('queue.nodeAuto') },
-                ...(nodes ?? [])
-                  .filter((n) => isNodeConnected(n.status))
-                  .map((n) => ({
-                    value: n.id,
-                    label: n.name || n.id,
-                    ...(n.is_local ? { hint: t('nodes.self') } : {}),
-                  })),
-              ]}
-              onChange={setNode}
-            />
-          </div>
-        </div>
-        {!project && parallel !== 'workdir' && (
-          <p class="hint">{t('queue.scratchWorkdirHint')}</p>
-        )}
         <div class="field-group">
           <label for="nt-prompt">{t('queue.newPrompt')}</label>
           <textarea
@@ -729,48 +649,104 @@ function NewTaskForm({
             onInput={(e) => setPrompt((e.target as HTMLTextAreaElement).value)}
           />
         </div>
-        {/* A pinned directory needs no project, so the row shows even without
-            one — the project-scoped modes are the only options that require it. */}
-        <div class="field-row">
-          <div class="field-group">
-            <label for="nt-parallel">{t('queue.parallelMode')}</label>
-            <Select
-              id="nt-parallel"
-              ariaLabel={t('queue.parallelMode')}
-              value={parallel}
-              options={parallelOptions}
-              onChange={(v) => setParallel(v as typeof parallel)}
-            />
+        <details class="task-execution-options">
+          <summary>{t('queue.executionOptions')}{project && ' · ' + project}</summary>
+          <div class="field-row">
+            <div class="field-group">
+              <label for="nt-priority">{t('queue.newPriority')}</label>
+              <Select
+                id="nt-priority"
+                ariaLabel={t('queue.newPriority')}
+                value={priority ?? 'normal'}
+                options={PRIO_CYCLE.map((p) => ({ value: p, label: t(`queue.priority.${p}`) }))}
+                onChange={(v) => setPriority(v as Task['priority'])}
+              />
+            </div>
+            <div class="field-group">
+              <label for="nt-project">{t('queue.newProject')}</label>
+              <Select
+                id="nt-project"
+                ariaLabel={t('queue.newProject')}
+                value={project}
+                options={[
+                  { value: '', label: t('queue.allProjects') },
+                  ...projects.map((p) => ({ value: p, label: p })),
+                ]}
+                onChange={(next) => {
+                  setProject(next)
+                  // The lane modes describe the project's own tree, so clearing
+                  // the project must not leave one selected: the server rejects
+                  // it and the option is no longer on screen to explain why.
+                  if (!next && (parallel === 'paths' || parallel === 'isolate')) setParallel('default')
+                }}
+              />
+            </div>
+            <div class="field-group">
+              <label for="nt-node">{t('queue.newNode')}</label>
+              <Select
+                id="nt-node"
+                ariaLabel={t('queue.newNode')}
+                value={node}
+                options={[
+                  { value: '', label: t('queue.nodeAuto') },
+                  ...(nodes ?? [])
+                    .filter((n) => isNodeConnected(n.status))
+                    .map((n) => ({
+                      value: n.id,
+                      label: n.name || n.id,
+                      ...(n.is_local ? { hint: t('nodes.self') } : {}),
+                    })),
+                ]}
+                onChange={setNode}
+              />
+            </div>
           </div>
-          {parallel === 'paths' && project && (
+          {!project && parallel !== 'workdir' && (
+            <p class="hint">{t('queue.scratchWorkdirHint')}</p>
+          )}
+          {/* A pinned directory needs no project, so the row shows even without
+              one — the project-scoped modes are the only options that require it. */}
+          <div class="field-row">
             <div class="field-group">
-              <label for="nt-paths">{t('queue.parallel.pathsLabel')}</label>
-              <input
-                id="nt-paths"
-                class="input"
-                type="text"
-                placeholder={t('queue.parallel.pathsPlaceholder')}
-                value={pathsText}
-                onInput={(e) => setPathsText((e.target as HTMLInputElement).value)}
+              <label for="nt-parallel">{t('queue.parallelMode')}</label>
+              <Select
+                id="nt-parallel"
+                ariaLabel={t('queue.parallelMode')}
+                value={parallel}
+                options={parallelOptions}
+                onChange={(v) => setParallel(v as typeof parallel)}
               />
             </div>
-          )}
-          {parallel === 'workdir' && (
-            <div class="field-group">
-              <label for="nt-workdir">{t('queue.parallel.workdirLabel')}</label>
-              <input
-                id="nt-workdir"
-                class="input"
-                type="text"
-                placeholder={t('queue.parallel.workdirPlaceholder')}
-                value={workdirText}
-                onInput={(e) => setWorkdirText((e.target as HTMLInputElement).value)}
-              />
-            </div>
-          )}
-        </div>
-        {parallel === 'workdir' && <p class="hint">{t('queue.parallel.workdirHint')}</p>}
-        {error && <p class="gate-error">{error}</p>}
+            {parallel === 'paths' && project && (
+              <div class="field-group">
+                <label for="nt-paths">{t('queue.parallel.pathsLabel')}</label>
+                <input
+                  id="nt-paths"
+                  class="input"
+                  type="text"
+                  placeholder={t('queue.parallel.pathsPlaceholder')}
+                  value={pathsText}
+                  onInput={(e) => setPathsText((e.target as HTMLInputElement).value)}
+                />
+              </div>
+            )}
+            {parallel === 'workdir' && (
+              <div class="field-group">
+                <label for="nt-workdir">{t('queue.parallel.workdirLabel')}</label>
+                <input
+                  id="nt-workdir"
+                  class="input"
+                  type="text"
+                  placeholder={t('queue.parallel.workdirPlaceholder')}
+                  value={workdirText}
+                  onInput={(e) => setWorkdirText((e.target as HTMLInputElement).value)}
+                />
+              </div>
+            )}
+          </div>
+          {parallel === 'workdir' && <p class="hint">{t('queue.parallel.workdirHint')}</p>}
+        </details>
+        {error && <p class="gate-error" role="alert">{error}</p>}
         {/* Cancel then create, the order every other dialog in the console
             uses: the destructive/committing button sits at the far edge. */}
         <div class="settings-actions">

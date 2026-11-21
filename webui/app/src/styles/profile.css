@@ -503,3 +503,6 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+.profile-identity { background: var(--section-surface); border-color: var(--section-edge); box-shadow: var(--section-shadow); }
+.profile-avatar { border-radius: 16px; color: var(--section-ink); background: var(--bg-raised); box-shadow: var(--shadow-xs); }

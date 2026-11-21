@@ -190,6 +190,8 @@ type Requires struct {
 
 // TaskSpecDetail captures what to do, where, and how to verify success.
 type TaskSpecDetail struct {
+	PreferredAgent string `json:"preferred_agent,omitempty"`
+
 	// Coordination is an explicit model requirement, not inferred from text.
 	Coordination string             `json:"coordination,omitempty"`
 	Objectives   *objectives.Policy `json:"objectives,omitempty"`
@@ -272,6 +274,9 @@ type PlanSpec struct {
 // only run on that node — the requires match alone is a coincidence across a
 // fleet where every machine advertises the same agent.
 type PlanStageSpec struct {
+	PreferredAgent string `json:"preferred_agent,omitempty"`
+
+	Complexity        float64            `json:"complexity,omitempty"`
 	Independent       bool               `json:"independent,omitempty"`
 	Coordination      string             `json:"coordination,omitempty"`
 	Objectives        *objectives.Policy `json:"objectives,omitempty"`

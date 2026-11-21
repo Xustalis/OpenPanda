@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { type AgentInfo } from '../api/client'
 import { agentLogo } from '../format/agent-logo'
 import { agentInitial, agentRoles, agentTint } from '../format/agent-role'
@@ -38,6 +38,39 @@ export function AgentFace(props: {
   )
 }
 
+/** New conversations have room for a named trigger and a viewport-sized picker. */
+export function RosterPicker(props: {
+  value: string[]
+  onChange(names: string[]): void
+  onManage(): void
+}) {
+  const dialog = useRef<HTMLDialogElement>(null)
+  const [opened, setOpened] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+
+  function open() {
+    setOpened(true)
+    dialog.current?.showModal()
+    setExpanded(true)
+  }
+
+  return (
+    <div class="roster-picker">
+      <button type="button" class="roster-trigger" aria-haspopup="dialog" aria-expanded={expanded} onClick={open}>
+        <Icon name="users" size={15} />
+        <span>{t('sessions.pickTeam')}</span>
+        {props.value.length > 0 && <span class="roster-count">{props.value.length}</span>}
+        <Icon name="chevron-down" size={12} />
+      </button>
+      <dialog ref={dialog} class="roster-dialog" aria-label={t('sessions.pickTeam')}
+        onClose={() => setExpanded(false)}
+        onClick={e => { if (e.target === e.currentTarget) dialog.current?.close() }}>
+        {opened && <TeamRoster {...props} standalone onClose={() => dialog.current?.close()} />}
+      </dialog>
+    </div>
+  )
+}
+
 /** Who works on this conversation — the roster card itself.
  *
  *  It used to be a chip in the composer's footer with its own trigger. The
@@ -52,6 +85,7 @@ export function AgentFace(props: {
  *  click, not a hunt for a "clear" affordance. */
 export function TeamRoster(props: {
   /** Selected agent names. Empty = no restriction. */
+  standalone?: boolean
   value: string[]
   onChange(names: string[]): void
   onManage?(): void
@@ -83,9 +117,16 @@ export function TeamRoster(props: {
     props.onChange(picked.includes(name) ? picked.filter((n) => n !== name) : [...picked, name])
   }
 
+  const listed = props.standalone && agents
+    ? [...agents.filter(a => a.installed || picked.includes(a.name)), ...agents.filter(a => !a.installed && !picked.includes(a.name))]
+    : agents
+
   return (
-    <div class="team-panel" role="dialog" aria-label={t('sessions.teamTitle')}>
-      <p class="team-panel-label">{t('sessions.teamLabel')}</p>
+    <div class="team-panel" role={props.standalone ? undefined : 'dialog'} aria-label={props.standalone ? undefined : t('sessions.teamTitle')}>
+      <div class="team-panel-head">
+        <p class="team-panel-label">{t('sessions.teamLabel')}</p>
+        {props.standalone && <button type="button" class="icon-btn" aria-label={t('common.close')} onClick={props.onClose}><Icon name="x" size={16} /></button>}
+      </div>
       <div
         class="team-list"
         role="listbox"
@@ -109,7 +150,7 @@ export function TeamRoster(props: {
           </span>
           {picked.length === 0 && <Icon name="check" size={14} class="team-check" />}
         </button>
-        {(agents ?? []).map((a) => {
+        {(listed ?? []).map((a) => {
           const on = picked.includes(a.name)
           const roles = agentRoles(a.best_at)
             .slice(0, 2)
@@ -148,15 +189,11 @@ export function TeamRoster(props: {
               <AgentFace name={a.name} label={a.display_name || a.name} onDuty={a.installed} />
               <span class="team-text">
                 <span class="team-name">{a.display_name || a.name}</span>
-                {/* An agent the registry knows but has no role tags for still
-                    earns a second line — its binary is what the operator would
-                    type to check on it. An uninstalled one gets the reason
-                    instead, where the roles would have been. */}
-                <span class="team-role">
-                  {a.installed
-                    ? roles.join(' · ') || a.binary
-                    : t('sessions.teamNotInstalledHint')}
-                </span>
+                {a.installed && roles.length > 0 ? (
+                  <span class="team-role">{roles.join(' · ')}</span>
+                ) : !props.standalone || (a.installed && a.binary !== (a.display_name || a.name)) ? (
+                  <span class="team-role">{a.installed ? a.binary : t('sessions.teamNotInstalledHint')}</span>
+                ) : null}
               </span>
               {!a.installed && <span class="team-tag">{t('sessions.teamNotInstalled')}</span>}
               {on && <Icon name="check" size={14} class="team-check" />}

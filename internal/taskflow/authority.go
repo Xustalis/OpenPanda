@@ -51,8 +51,13 @@ func (s *Service) automationSnapshotTx(ctx context.Context, tx *sql.Tx, c Connec
 }
 
 func researchEligible(c Connection, p Policy, t taskproviders.Snapshot) error {
+	// Research is off until the local policy says so. That is a local switch,
+	// not a changed grant, and conflating the two hides the remedy.
+	if !p.Research {
+		return taskproviders.ErrAutomationNotAuthorized
+	}
 	space, ok := authorizedSpace(c, t.Key.SpaceID)
-	if !ok || c.State != "connected" || c.InstanceID != t.Key.InstanceID || space.WorkspaceID != t.Key.WorkspaceID || c.AuthEpoch != t.Permissions.AuthEpoch || !t.Permissions.Read || !p.Research || !hasScope(c.Scopes, "tasks:read") || !hasScope(space.Scopes, "tasks:read") {
+	if !ok || c.State != "connected" || c.InstanceID != t.Key.InstanceID || space.WorkspaceID != t.Key.WorkspaceID || c.AuthEpoch != t.Permissions.AuthEpoch || !t.Permissions.Read || !hasScope(c.Scopes, "tasks:read") || !hasScope(space.Scopes, "tasks:read") {
 		return taskproviders.ErrAuthorizationChanged
 	}
 	if len(t.AssigneeAccountIDs) != 0 || t.Status == "done" || t.Status == "cancelled" || t.Status == "archived" {

@@ -435,17 +435,17 @@ function NotificationsWindow(props: {
   return (
     <div class="notif-shell">
       <header class="notif-head">
-        <span class="notif-head-title">{t('notifications.title')}</span>
+        <Icon name="bell" class="notif-header-icon" size={18} /><span class="notif-head-title">{t('notifications.title')}</span>
         {props.unread > 0 && (
           <span class="notif-head-count">{t('notifications.unread', { n: props.unread })}</span>
         )}
         <button
           type="button"
-          class="link-btn notif-mark"
+          class="notif-action notif-mark"
           onClick={props.onMarkAll}
           disabled={props.unread === 0}
         >
-          {t('notifications.markAll')}
+          <Icon name="list-checks" size={15} />{t('notifications.markAll')}
         </button>
         <button
           type="button"
@@ -479,7 +479,7 @@ function NotificationsWindow(props: {
         {filter === 'reminder' ? (
           <ReminderPane reminders={props.reminders} now={props.now} onChanged={props.onChanged} />
         ) : (
-          <div class="notif-list">
+          <div class="notif-list" key={filter}>
             {sections.length === 0 ? (
               <div class="notif-empty">
                 <span class="notif-empty-glyph" aria-hidden="true">
@@ -524,7 +524,7 @@ function NotificationsWindow(props: {
       </div>
 
       <footer class="notif-foot">
-        <span class="dim">
+        <span class="dim" role="status">
           {props.checking
             ? t('notifications.checking')
             : props.checkedAt
@@ -533,8 +533,8 @@ function NotificationsWindow(props: {
                 })
               : ''}
         </span>
-        <button type="button" class="link-btn notif-recheck" onClick={props.onRecheck} disabled={props.checking}>
-          {t('notifications.recheck')}
+        <button type="button" class="notif-action notif-recheck" aria-busy={props.checking} onClick={props.onRecheck} disabled={props.checking}>
+          <Icon name="refresh" size={14} />{t(props.checking ? 'notifications.checking' : 'notifications.recheck')}
         </button>
       </footer>
     </div>
@@ -572,13 +572,12 @@ function Row(props: {
   return (
     <article
       class={`notif-row${props.unread ? ' unread' : ''}${props.onClick ? '' : ' static'}`}
-      onClick={props.onClick}
     >
       <span class={`notif-glyph${props.tone ? ' ' + props.tone : ''}`} aria-hidden="true">
         <Icon name={props.icon} size={15} />
       </span>
       <div class="notif-body">
-        <p class="notif-title">{props.title}</p>
+        <p class="notif-title">{props.onClick ? <button type="button" class="notif-row-open" onClick={props.onClick}>{props.title}</button> : props.title}</p>
         {props.detail && <p class="notif-detail">{props.detail}</p>}
         {props.children}
       </div>

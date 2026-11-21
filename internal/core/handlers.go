@@ -912,7 +912,7 @@ func (c *Core) localMatchReason(required []string, specJSON string) (bool, strin
 	if err != nil {
 		return false, err.Error()
 	}
-	plan, err := router.DispatchRoute(required, agentTaskTraits(spec)...)
+	plan, err := router.DispatchTaskRoute(required, routingTraits(Task{}, spec))
 	if err != nil {
 		return false, err.Error()
 	}

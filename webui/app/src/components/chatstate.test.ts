@@ -10,7 +10,7 @@
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { composerIntent, reconcileTranscript, runningOperation, threadBusy, mergeTailTurn, patchStreaming, slashArgStarted, slashQuery, slashWords, planArgument } from './chatstate.ts'
+import { composerIntent, reconcileTranscript, runningOperation, threadBusy, mergeTailTurn, patchStreaming, slashAtCaret, slashWords, planArgument } from './chatstate.ts'
 import { rankWords } from './fuzzy.ts'
 
 interface Msg {
@@ -62,15 +62,15 @@ test('patchStreaming on an empty transcript is a no-op', () => {
   assert.deepEqual(patchStreaming([], (m) => m), [])
 })
 
-test('slashQuery opens only on a slash-prefixed first token', () => {
-  assert.equal(slashQuery('/'), '')
-  assert.equal(slashQuery('/he'), 'he')
-  assert.equal(slashQuery('hello'), null)
-  assert.equal(slashQuery(''), null)
-  // Text after the command token is ignored: completion is for the command
-  // name, not free text after it.
-  assert.equal(slashQuery('/go x'), 'go')
-  assert.equal(slashQuery(' /x'), null)
+test('slash completion follows the caret in Chinese, prose and multiline drafts', () => {
+  for (const prefix of ['', 'before ', '先写一段', 'first\n', '（']) {
+    const input = prefix + '/pl' + ' 后面的文字'
+    assert.deepEqual(slashAtCaret(input, prefix.length + 3), { start: prefix.length, end: prefix.length + 3, query: 'pl' })
+  }
+  for (const input of ['src/main', 'https://host/path', 'a/b', '@src/', '/plan build', './file', 'C:\\repo/file']) {
+    assert.equal(slashAtCaret(input, input.length), null, input)
+  }
+  assert.deepEqual(slashAtCaret('/', 1), {start: 0, end: 1, query: ''})
 })
 
 // --- mergeTailTurn: the empty-bubble-after-a-task-dispatch bug --------------
@@ -85,19 +85,6 @@ test('planArgument recognizes plan drafts without consuming navigation or ordina
 })
 
 // --- the `/` menu: a bare command keeps its list ---------------------------
-
-test('the slash menu closes on the argument, never on the command itself', () => {
-  // The regression: `/plan` and `/goal` matched their own argument parsers
-  // with an empty string, so the list vanished on the last keystroke and the
-  // command could not be picked. Only whitespace after the name is prose.
-  for (const bare of ['/', '/p', '/plan', '/goal']) {
-    assert.equal(slashArgStarted(bare), false, bare)
-  }
-  for (const typed of ['/plan ', '/plan build the page', '/goal ship it', '/read a.go', '/plan\nbuild']) {
-    assert.equal(slashArgStarted(typed), true, typed)
-  }
-  assert.equal(slashArgStarted('plain text'), false)
-})
 
 test('slashWords offers the label, the id verb, and the English keywords', () => {
   const words = slashWords({ id: 'go:workspace', label: '工作空间', alias: 'workspace map topology' })
@@ -304,4 +291,14 @@ test('failed persistence keeps the current streamed reply, not unrelated rows', 
   ]
   assert.deepEqual(reconcileTranscript(local, [], 'op').map(m => m.text), ['only wire copy'])
   assert.deepEqual(reconcileTranscript(local, []).map(m => m.text), [])
+})
+
+test('an inserted delivery cannot take an existing follow-up render key', () => {
+  const first = { role: 'user' as const, text: 'first', k: 'srv-0' }
+  const second = { role: 'user' as const, text: 'second', k: 'srv-1' }
+  const delivery = { role: 'assistant' as const, text: 'delivered', k: 'srv-1' }
+  const rows = reconcileTranscript([first, second], [first, delivery, { ...second, k: 'srv-2' }])
+  assert.deepEqual(rows.map(m => m.text), ['first', 'delivered', 'second'])
+  assert.equal(new Set(rows.map(m => m.k)).size, 3)
+  assert.equal(rows[2]!.k, second.k)
 })

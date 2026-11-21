@@ -2910,6 +2910,13 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 		// fan-out the user described in prose instead of in the team picker.
 		reg.Register(e.taskBudgetTool(budget, effectiveLocale))
 		registerWorkspaceTools(reg, workDir)
+		if scope.Mode == "plan" {
+			// Bind discovery to the same tools that a planning turn may execute.
+			reg = reg.Filter(func(name string) bool {
+				tool, _ := reg.Lookup(name)
+				return planningToolAllowed(tool)
+			})
+		}
 		reg.EnableDiscovery(func(name string) bool {
 			return name == entry.ToolNameTaskSubmit || name == "tsync_task_search" || name == "task_budget" || name == "skill_search" || name == "skill_show" || strings.HasPrefix(name, "workspace_") || strings.HasSuffix(name, "_goal") || name == "propose_plan"
 		})
@@ -3526,6 +3533,20 @@ func (e *Engine) SessionWorkDir(sess *sessions.Session) string {
 	if sess.Worktree != "" {
 		return sess.Worktree
 	}
+	if sess.WorkDir != "" {
+		return sess.WorkDir
+	}
+	// Earlier board sessions stored the directory only on the linked task.
+	if e.db != nil && len(sess.Turns) >= 2 && sess.Turns[0].Role == "user" && sess.Turns[0].OperationID == "" {
+		report := sess.Turns[1]
+		if report.Role == "assistant" && report.Ref != "" && strings.HasPrefix(report.IdempotencyKey, "session_summary:"+report.Ref+":") {
+			var dir string
+			err := e.db.QueryRow("SELECT work_dir FROM tasks WHERE task_id=? AND session_id=? AND intent=? AND isolate=0 AND remote=0", report.Ref, sess.ID, sess.Turns[0].Text).Scan(&dir)
+			if err == nil && dir != "" {
+				return dir
+			}
+		}
+	}
 	if sess.Project != "" && e.projStore != nil {
 		if p, err := e.projStore.Get(sess.Project); err == nil {
 			if dir := p.UsableWorkDir(); dir != "" {
@@ -3889,7 +3910,7 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 	if perm := defense.NormalizeMode(scope.PermissionMode); perm != defense.ModeAuto {
 		spec.Spec.PermissionMode = perm
 	}
-	in := toTaskInput(spec, targetLoc)
+	in := toTaskInput(spec, prompt, targetLoc)
 	workDir := scope.WorkDir
 	// Explicit per-request scope wins. Existing CLI callers that omit a project
 	// retain the entered ambient project as a compatibility default.
@@ -3989,15 +4010,6 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 	// classify_result is traced inside core's createTask — before routing,
 	// before the queue claims the task — so no emission happens here.
 	in.ClassifyKind = "task"
-	if prompt != "" {
-		// Carry the user's original words into the agent prompt as a fidelity
-		// backstop: the intent above is the entry model's distillation, which
-		// can drop detail. The raw query lets the agent recover it, and it
-		// travels with the intent (persisted + delegated), so retries and
-		// peers that pick up the task also see it.
-		rawLabel := i18n.T(targetLoc, "prompt.task.user_raw_request")
-		in.Intent += "\n\n" + rawLabel + "\n" + prompt
-	}
 	// Snapshot the scheduler once: the pointer is only ever stored non-nil in
 	// production (lazy init or reload), but a consistent handle keeps the
 	// atomic load honest across this whole submission.

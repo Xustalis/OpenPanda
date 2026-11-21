@@ -5,6 +5,7 @@ import { locale, localeNames, locales, setLocale, t, type Locale } from '../i18n
 import { navigateView, visibleNavViews } from '../nav'
 import { useTeamFeature } from '../hooks'
 import { setTheme, theme, type Theme } from '../theme'
+import { shortcutFor, useBindings } from '../shortcuts'
 import { rank } from './fuzzy'
 import { Icon, type IconName } from './icons'
 import { useModalFocus } from './modal-focus'
@@ -50,6 +51,7 @@ export function openPalette(): void {
 
 /** Mount once in the app shell, below the sidebar so it can cover it. */
 export function PaletteHost({ onLogout }: { onLogout(): void }) {
+  const bindings = useBindings()
   const teamEnabled = useTeamFeature()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -75,15 +77,15 @@ export function PaletteHost({ onLogout }: { onLogout(): void }) {
   // raised behind it would be invisible while stealing the keyboard.
   useEffect(() => {
     const on = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
-        if (document.querySelector('dialog[open]')) return
+      if (shortcutFor(e, bindings) === 'search') {
+        if (document.querySelector('dialog[open], [aria-modal=true]:not(.palette)')) return
         e.preventDefault()
         setOpen((v) => !v)
       }
     }
     addEventListener('keydown', on)
     return () => removeEventListener('keydown', on)
-  }, [])
+  }, [bindings])
 
   // A fresh open is a fresh search (the trap puts the caret in the box).
   useEffect(() => {

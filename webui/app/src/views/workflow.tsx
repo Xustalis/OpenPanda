@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useRef, useState } from 'preact/hooks'
-import { api, type WorkConnection, type WorkPolicy, type WorkRun, type WorkProjectBinding, type WorkTask } from '../api/client'
+import { api, type WorkConnection, type WorkPolicy, type WorkRun, type WorkRunSummary, type WorkProjectBinding, type WorkTask } from '../api/client'
+import { workRequestId } from '../api/request-id'
 import { useWorkRead } from './work-read'
 import { t } from '../i18n'
 
@@ -13,8 +14,12 @@ export function WorkResults({ connection = '', taskKey = '', tick, reload }: { c
     <h2>{t('work.results')}</h2>
     {runs.error && <p class="work-error" role="alert">{runs.error}</p>}
     {runs.data?.length === 0 && <p class="hint">{t('work.noResults')}</p>}
-    {runs.data?.map(run => <RunCard key={run.requestId} id={run.requestId} title={run.title} state={run.state} updatedAt={run.updatedAt} tick={tick} reload={reload} />)}
+    {runs.data && <WorkRunList runs={runs.data} tick={tick} reload={reload} />}
   </div>
+}
+
+export function WorkRunList({ runs, tick, reload }: { runs: WorkRunSummary[]; tick: number; reload(): void }) {
+  return <>{runs.map(run => <RunCard key={run.requestId} id={run.requestId} title={run.title} state={run.state} updatedAt={run.updatedAt} tick={tick} reload={reload} />)}</>
 }
 
 function RunCard({ id, title, state, updatedAt, tick, reload }: { id: string; title: string; state: string; updatedAt: number; tick: number; reload(): void }) {
@@ -114,7 +119,7 @@ export function PrivateResearch({ connection, taskKey, tick }: { connection: str
   const brief = useWorkRead(() => open ? api.workResearch(connection, taskKey) : Promise.resolve([]), [connection, taskKey, open], tick)
   return <details class="card" onToggle={e => setOpen(e.currentTarget.open)}><summary>{t('work.privateBrief')}</summary>
     <p class="hint">{t('work.privateBriefHint')}</p>
-    {brief.error && <p class="work-error" role="status">{brief.error}</p>}
+    {brief.error && <p class="work-error" role="status">{brief.code === 'automation_not_authorized' ? t('work.policyBlocksResearch') : brief.error}</p>}
     {brief.data?.length === 0 && <p class="hint">{t('work.noBrief')}</p>}
     {brief.data?.map(b => <div><pre class="work-payload">{b.brief}</pre><small>{b.modelVersion} · {b.reservedTokens} · {new Date(b.expiresAt).toLocaleString()}</small></div>)}
   </details>
@@ -125,7 +130,7 @@ export function SpacePolicy({ connection, space, tick, reload }: { connection: W
   const policy = useWorkRead(() => open ? api.workPolicy(connection.connectionId, space) : Promise.resolve(null), [connection.connectionId, connection.authEpoch, space, open], tick)
   return <details class="work-space-policy" onToggle={e => setOpen(e.currentTarget.open)}><summary>{t('work.automationPolicy')}</summary>
     {policy.error && <p class="work-error" role="alert">{policy.error}</p>}
-    {policy.data && <PolicyForm key={JSON.stringify([connection.connectionId, space, open, policy.data])} connection={connection.connectionId} space={space} initial={policy.data} reload={reload} />}
+    {policy.data && <PolicyForm key={JSON.stringify([connection.connectionId, space, open, policy.data])} connection={connection.connectionId} space={space} initial={policyFields(policy.data)} reload={reload} />}
     {open && <ProjectBindings key={`${connection.connectionId}/${connection.authEpoch}/${space}`} connection={connection.connectionId} space={space} tick={tick} reload={reload} />}
   </details>
 }
@@ -142,7 +147,7 @@ export function RemoteTaskForm({ connection, space, task, onSaved }: { connectio
     if (busy) return
     const body = { title, description, projectId, priority }
     const signature = JSON.stringify([connection, space, task?.snapshot.taskRevision, body])
-    if (pending.current?.signature !== signature) pending.current = { signature, key: crypto.randomUUID() }
+    if (pending.current?.signature !== signature) pending.current = { signature, key: workRequestId() }
     setBusy(true); setError('')
     try {
       if (task) await api.patchRemoteWork(connection, task, body, pending.current.key)
@@ -190,8 +195,14 @@ function ProjectBindings({ connection, space, tick, reload }: { connection: stri
   </section>
 }
 
+// The presence flag is read metadata. The policy writer accepts only policy fields.
+function policyFields({ configured: _configured, ...policy }: WorkPolicy & { configured?: boolean }): WorkPolicy {
+  return policy
+}
+
 function PolicyForm({ connection, space, initial, reload }: { connection: string; space: string; initial: WorkPolicy; reload(): void }) {
   const [p, setP] = useState<WorkPolicy>({ ...initial, mode: initial.mode || 'before_submit', maxConcurrent: initial.maxConcurrent || 1, dailyTokens: initial.dailyTokens || 20000, preparationTokens: initial.preparationTokens || 512 })
+  const [scopeIds, setScopeIds] = useState((initial.taskIds || []).join(', '))
   const [expires, setExpires] = useState(localTime(initial.expiresAt || Date.now() + 7 * 86400000))
   const [directory, setDirectory] = useState(initial.publication?.directory || '')
   const [filename, setFilename] = useState(initial.publication?.filename || 'result-{request}.txt')
@@ -203,7 +214,7 @@ function PolicyForm({ connection, space, initial, reload }: { connection: string
     if (busy) return
     setBusy(true); setMessage('')
     try {
-      const policy: WorkPolicy = { ...p, expiresAt: expires ? new Date(expires).getTime() : 0, capabilities: p.execute ? (p.finalAction ? ['draft', 'file_publish'] : ['draft']) : [], publication: p.finalAction ? { directory, filename, fullGoal } : undefined }
+      const policy: WorkPolicy = { ...p, taskIds: scopeIds.split(',').map(id => id.trim()).filter(Boolean), expiresAt: expires ? new Date(expires).getTime() : 0, capabilities: p.execute ? (p.finalAction ? ['draft', 'file_publish'] : ['draft']) : [], publication: p.finalAction ? { directory, filename, fullGoal } : undefined }
       await api.setWorkPolicy(connection, space, policy); setMessage(t('work.policySaved')); reload()
     } catch (e) { setMessage(e instanceof Error ? e.message : String(e)) } finally { setBusy(false) }
   }
@@ -220,7 +231,7 @@ function PolicyForm({ connection, space, initial, reload }: { connection: string
       <label>{t('work.preparationTokens')}<input type="number" min={256} max={8192} value={p.preparationTokens} onInput={e => update({ preparationTokens: e.currentTarget.valueAsNumber })} /></label>
       <label>{t('work.concurrency')}<input type="number" min={1} max={8} value={p.maxConcurrent} onInput={e => update({ maxConcurrent: e.currentTarget.valueAsNumber })} /></label>
     </div>
-    <label>{t('work.scopeTaskIds')}<input value={(p.taskIds || []).join(', ')} onInput={e => update({ taskIds: e.currentTarget.value.split(',').map(v => v.trim()).filter(Boolean) })} /></label>
+    <label>{t('work.scopeTaskIds')}<input value={scopeIds} onInput={e => setScopeIds(e.currentTarget.value)} /></label>
     <label>{t('work.scopeProject')}<input value={p.projectId} onInput={e => update({ projectId: e.currentTarget.value })} /></label>
     </details>
     {p.finalAction && <fieldset><legend>{t('work.filePublication')}</legend>

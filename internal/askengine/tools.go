@@ -309,6 +309,10 @@ type readOnlyEntryToolsKey struct{}
 type planningToolsKey struct{}
 type conversationGuardKey struct{}
 
+func planningToolAllowed(t entry.Tool) bool {
+	return t.ReadOnly || t.Name == "propose_plan"
+}
+
 func withPlanningTools(ctx context.Context) context.Context {
 	return context.WithValue(ctx, planningToolsKey{}, true)
 }
@@ -400,7 +404,7 @@ func executeToolChecked(ctx context.Context, reg *entry.Registry, call *entry.To
 		}
 		return "工具执行失败：未知工具 " + call.Tool, toolActivityOutcome(ctx, "failed")
 	}
-	if ctx.Value(planningToolsKey{}) == true && !t.ReadOnly && call.Tool != "propose_plan" {
+	if ctx.Value(planningToolsKey{}) == true && !planningToolAllowed(t) {
 		return "Planning is read-only; this tool is unavailable until the user confirms a proposal.", toolActivityOutcome(ctx, "refused")
 	}
 	// A tier is a reversibility classification, not a read-only promise.
@@ -466,11 +470,11 @@ func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool,
 	if len(loc) > 0 && loc[0] != "" {
 		targetLoc = loc[0]
 	}
-	desc := "把任务派发给 agent 执行。当用户要求调度某个 agent 干活时必须调用它（或输出 task JSON），而不是只口头答应。title 填任务标题，target 填要完成的目标，abilities 按 Connected Devices 摘要填能力 ID（如 agent:codex）。"
+	desc := "把任务派发给 agent 执行。当用户要求调度某个 agent 干活时必须调用它（或输出 task JSON），而不是只口头答应。title 填任务标题，target 填要完成的目标，abilities 按 Connected Devices 摘要填能力 ID（如 coding；用户要求特定执行器时才用 agent:<name>）。"
 	props := map[string]any{
 		"title":              map[string]any{"type": "string", "description": "任务标题（必填）"},
 		"target":             map[string]any{"type": "string", "description": "要达成的目标（必填）"},
-		"abilities":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "能力 ID 列表，如 agent:codex（必填）"},
+		"abilities":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "能力 ID 列表，如 coding（必填）"},
 		"node":               map[string]any{"type": "string", "description": "目标节点（可选，硬约束：用户指定设备时必填；任务只在该节点执行，节点离线则排队等其上线，绝不留到别的机器。留空才由调度器选）"},
 		"scope":              map[string]any{"type": "string", "description": "允许修改的相对路径，逗号分隔（可选）"},
 		"constraints":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "约束/禁令（可选）"},
@@ -484,11 +488,11 @@ func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool,
 			"required": []string{"target_actuator", "action"}},
 	}
 	if targetLoc == i18n.English {
-		desc = "Dispatch a task to an agent for execution. Must be called when the user asks to schedule an agent to do work (or output a task JSON directive). title: task title, target: goal to achieve, abilities: capability IDs from Connected Devices (e.g. agent:codex)."
+		desc = "Dispatch a task to an agent for execution. Must be called when the user asks to schedule an agent to do work (or output a task JSON directive). title: task title, target: goal to achieve, abilities: capability IDs from Connected Devices (e.g. coding)."
 		props = map[string]any{
 			"title":              map[string]any{"type": "string", "description": "Task title (required)"},
 			"target":             map[string]any{"type": "string", "description": "Goal to achieve (required)"},
-			"abilities":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Capability IDs, e.g. agent:codex (required)"},
+			"abilities":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Capability IDs, e.g. coding (required)"},
 			"node":               map[string]any{"type": "string", "description": "Target node (optional, HARD pin: required when the user names a device — the task runs only there, waits for the link if offline, never silently runs elsewhere. Leave empty only when the scheduler should choose)"},
 			"scope":              map[string]any{"type": "string", "description": "Allowed relative paths to modify, comma-separated (optional)"},
 			"constraints":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Constraints or prohibited actions (optional)"},
@@ -505,6 +509,8 @@ func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool,
 	props["paths"] = map[string]any{"type": "array", "maxItems": 8, "items": map[string]any{"type": "string"},
 		"description": "Exact workspace-relative writable files or directories, only when the complete write scope is known. No globs, parent traversal or absolute paths. Submit disjoint independent work separately; use a plan with dependencies when a task needs another task's outputs. Omit paths for unknown or whole-workspace scope."}
 	props["coordination"] = map[string]any{"type": "string", "enum": []string{"IMMEDIATE", "ROUND_END"}, "description": "Required child coordination timing; IMMEDIATE requires compatible agent tools"}
+	props["preferred_agent"] = map[string]any{"type": "string", "description": "First choice when the user names a preferred harness. Use capability IDs in abilities so other allowed agents can take over. Use agent:<name> in abilities only for a strict identity requirement."}
+	props["complexity"] = map[string]any{"type": "number", "minimum": 0, "maximum": 1, "description": "Estimate the effort for this task: below 0.35 for simple exploration, at least 0.75 for complex design or a large refactor."}
 	props["task_kind"] = map[string]any{
 		"type": "string", "enum": []string{"code_question", "investigation", "edit", "operations"},
 		"description": "Delivery type: investigation/code_question require source evidence; edit requires relevant verification; operations requires an observed postcondition. Does not grant permissions.",
@@ -531,9 +537,9 @@ func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool,
 			abilities := toStringSlice(args["abilities"])
 			if len(abilities) == 0 {
 				if targetLoc == i18n.English {
-					return "", fmt.Errorf("abilities must not be empty: specify capability IDs like agent:codex from Connected Devices")
+					return "", fmt.Errorf("abilities must not be empty: specify capability IDs like coding from Connected Devices")
 				}
-				return "", fmt.Errorf("abilities 不能为空：按 Connected Devices 能力摘要填写，如 agent:codex")
+				return "", fmt.Errorf("abilities 不能为空：按 Connected Devices 能力摘要填写，如 coding")
 			}
 			node, _ := args["node"].(string)
 			taskScope, _ := args["scope"].(string)
@@ -582,12 +588,27 @@ func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool,
 				// decisions, and a servo has no checkout to carry.
 				contextType = "hardware"
 			}
+			complexity := 0.5
+			if value, exists := args["complexity"]; exists {
+				var ok bool
+				if complexity, ok = value.(float64); !ok {
+					return "", fmt.Errorf("complexity must be a number between 0 and 1")
+				}
+			}
+			switch entry.TaskKind(kind) {
+			case entry.TaskEdit, entry.TaskInvestigation, entry.TaskCodeQuestion:
+				if actionSpec == nil {
+					contextType = "file"
+				}
+			}
+			preferredAgent, _ := args["preferred_agent"].(string)
 			coordination, _ := args["coordination"].(string)
 			spec := &entry.TaskSpec{
 				Title:       strings.TrimSpace(title),
 				ContextType: contextType,
 				Requires:    entry.Requires{Abilities: abilities},
 				Spec: entry.TaskSpecDetail{
+					PreferredAgent:    strings.TrimSpace(preferredAgent),
 					Coordination:      coordination,
 					Objectives:        policy,
 					Kind:              entry.TaskKind(kind),
@@ -599,7 +620,7 @@ func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool,
 					SuccessDefinition: strings.TrimSpace(successDef),
 					ActionSpec:        actionSpec,
 				},
-				Complexity: 0.5,
+				Complexity: complexity,
 				Risk:       "low",
 			}
 			if err := entry.ValidateTaskSpec(spec); err != nil {

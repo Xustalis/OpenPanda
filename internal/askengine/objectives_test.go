@@ -13,7 +13,7 @@ import (
 
 func TestTaskInputPreservesModelObjectives(t *testing.T) {
 	p := &objectives.Policy{Version: 1, Revision: 3, Dimensions: []objectives.Dimension{{Dimension: "quality", Weight: 1, Priority: objectives.Max, Requirement: "User correction requires full validation", Reason: "Latest explicit requirement", Criteria: []string{"Regression evidence"}}}}
-	in := toTaskInput(&entry.TaskSpec{Title: "deliver", Spec: entry.TaskSpecDetail{Objectives: p}})
+	in := toTaskInput(&entry.TaskSpec{Title: "deliver", Spec: entry.TaskSpecDetail{Objectives: p}}, "")
 	got, err := objectives.FromSpecJSON(in.SpecJSON)
 	if err != nil || got == nil || got.Revision != 3 || !objectives.HasMax(got) {
 		t.Fatalf("lost objectives: %s %v", in.SpecJSON, err)
