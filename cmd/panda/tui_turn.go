@@ -21,6 +21,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/cliui"
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
@@ -378,13 +379,14 @@ func buildResultBlock(out *askengine.Result, liveAnswer string, loc i18n.Locale)
 		if !out.OK && len(out.PlanStages) == 0 {
 			return block{kind: blockError, body: i18n.Tf(loc, "cli.plan.failed", "err", out.Stderr)}
 		}
+		board := planChecklist(out, loc)
 		if !out.OK {
-			return block{kind: blockError, body: i18n.Tf(loc, "cli.plan.stageFailed", "err", out.Stderr)}
+			return block{kind: blockError, body: i18n.Tf(loc, "cli.plan.stageFailed", "err", out.Stderr) + "\n" + board}
 		}
 		if out.Answer != "" {
-			return block{kind: blockAnswer, body: planSummaryLine(out) + "\n\n" + out.Answer, meta: resultCostMeta(out)}
+			return block{kind: blockAnswer, body: board + "\n\n" + out.Answer, meta: resultCostMeta(out)}
 		}
-		return block{kind: blockInfo, body: planSummaryLine(out)}
+		return block{kind: blockInfo, body: board}
 	default: // answer
 		// Whatever the live stream withheld still lands: the parsed Answer
 		// is the model's full reply, so the committed block reconciles the
@@ -457,6 +459,37 @@ func resultCostMeta(out *askengine.Result) string {
 		return ""
 	}
 	return strings.Join(parts, " · ")
+}
+
+// planChecklist preserves the last reported state of each stage in the transcript.
+func planChecklist(out *askengine.Result, loc i18n.Locale) string {
+	var b strings.Builder
+	b.WriteString(planSummaryLine(out))
+	for _, stage := range out.PlanStages {
+		mark := "◌"
+		plain := "o"
+		switch stage.State {
+		case core.StateDone:
+			mark, plain = "✓", "x"
+		case core.StateRunning, core.StateDispatched:
+			mark, plain = "◔", "*"
+		case core.StateFailed:
+			mark, plain = "✗", "!"
+		case core.StateExpired, core.StateCancelled:
+			mark, plain = "⊘", "-"
+		case core.StateReview, core.StateWaitingCtx:
+			mark, plain = "◐", "?"
+		}
+		if isLinuxConsole() {
+			mark = plain
+		}
+		title := stage.Title
+		if title == "" {
+			title = stage.StageID
+		}
+		fmt.Fprintf(&b, "\n%s %s · %s", mark, title, stateWord(loc, stage.State))
+	}
+	return b.String()
 }
 
 // planSummaryLine is the one-line commit for a plan result: what it is, and

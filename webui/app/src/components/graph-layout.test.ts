@@ -109,7 +109,7 @@ test('recencyAlpha fades old surfaces to a floor', () => {
 
 test('labelLines wraps long labels into at most two lines', () => {
   assert.deepEqual(labelLines('dog'), ['dog'])
-  const lines = labelLines('导航模拟测试代码对照巡护链路全景')
+  const lines = labelLines('导航模拟测试代码对照巡护链路全景以及各文件的详细说明')
   assert.equal(lines.length, 2)
   assert.ok(lines[1]!.endsWith('…'))
 })

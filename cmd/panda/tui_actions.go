@@ -1170,6 +1170,7 @@ func (m tuiModel) finalizeWizard() (tuiModel, tea.Cmd) {
 		loc := m.r.locale()
 		m.r.readConfig(func(c *config.Config) {
 			built, err := askengine.New(context.Background(), c, askengine.Options{
+				Logger:     m.r.engineLogger,
 				CardPath:   m.r.cardPathNow(),
 				ReplyASCII: isLinuxConsole(),
 				Locale:     loc,

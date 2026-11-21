@@ -2006,8 +2006,8 @@ export const api = {
   },
 
   /** Retained long-term facts, their source files and valid promotion receipts. */
-  memoryGraph(): Promise<MemoryGraph> {
-    return request('GET', '/api/memory/graph?co=1')
+  memoryGraph(entities = 20): Promise<MemoryGraph> {
+    return request('GET', '/api/memory/graph?co=1&entities=' + entities)
   },
 
   // ---- MCP settings ----
@@ -2883,6 +2883,7 @@ export interface MemoryGraphEdge {
 }
 
 export interface MemoryGraph {
+  meta?: { entities_total: number; entities_shown: number; entity_limit: number; entity_max: number }
   nodes: MemoryGraphNode[]
   edges: MemoryGraphEdge[]
 }

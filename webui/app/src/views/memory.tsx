@@ -304,19 +304,8 @@ function MemoryFileView({
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
+  const baseVersion = useRef('')
   const [saving, setSaving] = useState(false)
-
-  // A reload that lands while an edit is open brings the agent's new entries
-  // into `content` but not into `draft`; saving the draft would then write
-  // the file back without them. Close the edit on a content change instead —
-  // the card the reader returns to shows what is actually on disk.
-  const lastContent = useRef(content)
-  useEffect(() => {
-    if (lastContent.current === content) return
-    lastContent.current = content
-    setEditing(false)
-    setDraft('')
-  }, [content])
 
   const entries = parseEntries(content)
 
@@ -337,7 +326,7 @@ function MemoryFileView({
     if (saving) return
     setSaving(true)
     try {
-      await api.saveMemory(file, draft, version)
+      await api.saveMemory(file, draft, baseVersion.current)
       toast(t('memory.saved'), 'success')
       setEditing(false)
       reload()
@@ -372,6 +361,7 @@ function MemoryFileView({
       chars={countChars(content)}
       limit={limit}
       onEdit={() => {
+        baseVersion.current = version
         setDraft(content)
         setEditing(true)
       }}
@@ -459,6 +449,7 @@ function MemoryFileCard({
 }) {
   const [query, setQuery] = useState('')
   const [fixIdx, setFixIdx] = useState<number | null>(null)
+  const originalEntry = useRef('')
   const [fixDraft, setFixDraft] = useState('')
   const [newEntry, setNewEntry] = useState('')
   const [busy, setBusy] = useState(false)
@@ -476,6 +467,10 @@ function MemoryFileCard({
   }
 
   async function saveFix(i: number) {
+    if (entries[i] !== originalEntry.current) {
+      toast(t('memory.conflict'), 'error')
+      return
+    }
     const text = fixDraft.trim()
     const next = entries.slice()
     if (text === '') next.splice(i, 1)
@@ -584,6 +579,7 @@ function MemoryFileCard({
                       title={t('memory.edit')}
                       aria-label={t('memory.edit')}
                       onClick={() => {
+                        originalEntry.current = e
                         setFixIdx(i)
                         setFixDraft(e)
                       }}
@@ -631,6 +627,7 @@ function MemoryFileCard({
 function DreamsView({ content, version, truncated, reload }: { content: string; version: string; truncated: boolean; reload(): void }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
+  const baseVersion = useRef('')
   const [saving, setSaving] = useState(false)
 
   async function startEdit() {
@@ -642,6 +639,7 @@ function DreamsView({ content, version, truncated, reload }: { content: string; 
       confirmLabel: t('memory.edit'),
     })
     if (!ok) return
+    baseVersion.current = version
     setDraft(content)
     setEditing(true)
   }
@@ -650,7 +648,7 @@ function DreamsView({ content, version, truncated, reload }: { content: string; 
     if (saving) return
     setSaving(true)
     try {
-      await api.saveMemory('dreams', draft, version)
+      await api.saveMemory('dreams', draft, baseVersion.current)
       toast(t('memory.saved'), 'success')
       setEditing(false)
       reload()
@@ -752,6 +750,7 @@ function TopicsView({ topics, selectedName, limit, reload }: { topics: TopicFile
   const [newName, setNewName] = useState('')
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
+  const baseVersion = useRef('')
   const [saving, setSaving] = useState(false)
 
   const current = topics.find((tp) => tp.name === selected) ?? topics[0] ?? null
@@ -798,7 +797,7 @@ function TopicsView({ topics, selectedName, limit, reload }: { topics: TopicFile
     if (saving || !current) return
     setSaving(true)
     try {
-      await api.saveMemoryTopic(current.name, draft, current.version)
+      await api.saveMemoryTopic(current.name, draft, baseVersion.current)
       toast(t('memory.saved'), 'success')
       setEditing(false)
       reload()
@@ -891,7 +890,7 @@ function TopicsView({ topics, selectedName, limit, reload }: { topics: TopicFile
       <div class="memory-pane">
         {!current ? (
           <MemoryPlaceholder icon="folder" text={t('memory.topicPick')} />
-        ) : editing ? (
+        ) : editing && current.name === selected ? (
           <MemoryEditor
             name={`topics/${current.name}.md`}
             value={draft}
@@ -912,6 +911,8 @@ function TopicsView({ topics, selectedName, limit, reload }: { topics: TopicFile
             chars={countChars(current.content)}
             limit={limit}
             onEdit={() => {
+              setSelected(current.name)
+              baseVersion.current = current.version ?? ''
               setDraft(current.content)
               setEditing(true)
             }}
@@ -1049,6 +1050,7 @@ function ProjectsView({ selectedName, defaultLimit, refreshKey, reload }: { sele
   const [loadErr, setLoadErr] = useState('')
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
+  const baseVersion = useRef('')
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -1071,9 +1073,7 @@ function ProjectsView({ selectedName, defaultLimit, refreshKey, reload }: { sele
       setMem(null)
       return
     }
-    setMem(null)
     setLoadErr('')
-    setEditing(false)
     let alive = true
     api
       .projectMemory(name)
@@ -1086,7 +1086,7 @@ function ProjectsView({ selectedName, defaultLimit, refreshKey, reload }: { sele
     if (saving || !current) return
     setSaving(true)
     try {
-      await api.saveProjectMemory(current.name, draft, mem?.version)
+      await api.saveProjectMemory(current.name, draft, baseVersion.current)
       toast(t('memory.saved'), 'success')
       setEditing(false)
       reload()
@@ -1127,7 +1127,7 @@ function ProjectsView({ selectedName, defaultLimit, refreshKey, reload }: { sele
             <li key={p.name}>
               <button
                 class={`memory-file-item${current?.name === p.name ? ' active' : ''}`}
-                onClick={() => setSelected(p.name)}
+                onClick={() => { setEditing(false); setSelected(p.name) }}
               >
                 <span class="memory-file-label">{p.name}</span>
                 {p.memory_entries != null && <span class="memory-file-meta mono">{p.memory_entries}</span>}
@@ -1141,9 +1141,9 @@ function ProjectsView({ selectedName, defaultLimit, refreshKey, reload }: { sele
         {loadErr && <p class="gate-error">{loadErr}</p>}
         {!current ? (
           <MemoryPlaceholder icon="layout" text={t('memory.projectPick')} />
-        ) : !mem ? (
+        ) : !mem || mem.project !== current.name ? (
           <MemoryPlaceholder icon="layout" text={t('common.loading')} />
-        ) : editing ? (
+        ) : editing && current.name === selected ? (
           <MemoryEditor
             name={current.name}
             value={draft}
@@ -1164,6 +1164,8 @@ function ProjectsView({ selectedName, defaultLimit, refreshKey, reload }: { sele
             chars={countChars(mem.content)}
             limit={limit}
             onEdit={() => {
+              setSelected(current.name)
+              baseVersion.current = mem.version
               setDraft(mem.content)
               setEditing(true)
             }}
@@ -1179,7 +1181,8 @@ function GraphTab({ onOpen, refreshKey }: { onOpen(tab: Tab, name: string): void
   useLocaleRerender()
   const change = useChangeSignal()
   const [tick, setTick] = useState(0)
-  const { data: graph, error } = useAsync(() => api.memoryGraph(), [tick, refreshKey], change)
+  const [entities, setEntities] = useState(20)
+  const { data: graph, error } = useAsync(() => api.memoryGraph(entities), [entities, tick, refreshKey], change)
 
   function openNode(n: MemoryGraphNode) {
     // Topics / projects / daily are tabs of this very page, so they switch
@@ -1205,7 +1208,14 @@ function GraphTab({ onOpen, refreshKey }: { onOpen(tab: Tab, name: string): void
     )
   if (!graph) return <LoadingState head={false} title={t('memory.graphTitle')} sub="" />
   if (graph.nodes.length === 0) return <MemoryPlaceholder icon="orbit" text={t('memory.graphEmpty')} />
-  return <MemoryGraphView graph={graph} onOpen={openNode} />
+  const meta = graph.meta
+  return <>
+    {meta && <div class="mg-coverage">
+      <span role="status">{t('memory.graph.factCount', { shown: meta.entities_shown, total: meta.entities_total })}</span>
+      {meta.entities_shown < meta.entities_total && meta.entity_limit < meta.entity_max && <button type="button" class="btn small" disabled={entities > meta.entity_limit} onClick={() => setEntities(Math.min(meta.entity_max, meta.entities_total, meta.entity_limit * 2))}>{t('memory.graph.moreFacts')}</button>}
+    </div>}
+    <MemoryGraphView graph={graph} onOpen={openNode} />
+  </>
 }
 
 /** Entries promoted from the daily logs carry a `[from:…]` marker (e.g.

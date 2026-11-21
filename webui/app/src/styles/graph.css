@@ -211,12 +211,15 @@
 /* The rim is the only place a kind gets a hue. Terms stay neutral: they are
    the leaves of this graph, not another category of hub. */
 .mg-core .mg-dot {
+  fill: var(--accent);
   stroke: var(--accent);
 }
 .mg-topic .mg-dot {
+  fill: var(--accent-2);
   stroke: var(--accent-2);
 }
 .mg-project .mg-dot {
+  fill: var(--semantic-info);
   stroke: var(--semantic-info);
 }
 .mg-daily .mg-dot {
@@ -251,7 +254,7 @@
   opacity: 0.75;
 }
 .mg-label {
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 500;
   fill: var(--mg-label);
   pointer-events: none;
@@ -261,7 +264,7 @@
   stroke-linejoin: round;
 }
 .mg-entity .mg-label {
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 400;
 }
 .mg-node:hover .mg-label,
@@ -575,3 +578,5 @@ button.mg-legend-item:hover {
     animation: none;
   }
 }
+
+.mg-coverage { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-3); margin-bottom: var(--sp-2); color: var(--text-secondary); font-size: var(--text-sm); }

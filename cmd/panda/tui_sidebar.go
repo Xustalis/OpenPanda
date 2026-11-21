@@ -183,13 +183,15 @@ func (m tuiModel) sidebarTaskRows(t core.Task, selected bool, inner int) []strin
 	marker, style := m.th.glyph("✓", "+"), m.th.muted
 	switch t.State {
 	case core.StateRunning:
-		marker, style = m.th.glyph("●", "*"), m.th.success
+		marker, style = m.th.glyph("◔", "*"), m.th.accent
 	case core.StateDispatched:
 		marker, style = m.th.glyph("◐", "o"), m.th.accent
 	case core.StateReview, core.StateWaitingCtx:
 		marker, style = m.th.glyph("!", "?"), m.th.warn
 	case core.StateQueued, core.StateSubmitted:
-		marker, style = m.th.glyph("·", "."), m.th.muted
+		marker, style = m.th.glyph("◌", "."), m.th.muted
+	case core.StateCancelled, core.StateExpired:
+		marker, style = m.th.glyph("⊘", "-"), m.th.muted
 	case core.StateFailed:
 		marker, style = m.th.glyph("✗", "x"), m.th.danger
 	}

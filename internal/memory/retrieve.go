@@ -42,7 +42,8 @@ func (Retriever) Rank(query string, entries []string, k int) []string {
 	if k <= 0 || len(entries) == 0 {
 		return nil
 	}
-	if query == "" {
+	// A blank query carries no relevance signal, exactly like an empty one.
+	if strings.TrimSpace(query) == "" {
 		if len(entries) <= k {
 			return append([]string(nil), entries...)
 		}
@@ -58,7 +59,7 @@ func (Retriever) Rank(query string, entries []string, k int) []string {
 	df := make(map[string]int)
 	totalLen := 0
 	for i, e := range entries {
-		toks[i] = retrievalTokens(e, singleHan)
+		toks[i] = retrievalTokens(retrievalText(e), singleHan)
 		totalLen += len(toks[i])
 		for tok := range toks[i] {
 			if util.IsStopword(tok) {
@@ -107,6 +108,34 @@ func (Retriever) Rank(query string, entries []string, k int) []string {
 		}
 	}
 	return out
+}
+
+// retrievalText is the part of an entry that carries searchable meaning. A
+// classified fact is stored as "[fact:category:key] text": the literal "fact"
+// marker and the category name are storage metadata, so a query for "fact" or
+// "environment" must not pull in every entry that merely has that header. The
+// key stays searchable because its segments name the attribute (user.name ->
+// "user", "name"); a segment that only repeats the category (environment.os ->
+// "environment") is dropped for the same reason as the category itself. The
+// provenance tag a promoted entry carries is likewise bookkeeping, not
+// content. Entries without a fact header are returned with only that tag
+// removed, so legacy prose is scored exactly as before.
+func retrievalText(entry string) string {
+	entry = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(entry), PromotionSourceTag))
+	m := factHeader.FindStringSubmatch(entry)
+	if m == nil {
+		return entry
+	}
+	category, key, body := m[1], m[2], m[3]
+	var b strings.Builder
+	for _, seg := range strings.FieldsFunc(key, func(r rune) bool { return r == '.' || r == '_' || r == '-' }) {
+		if !strings.EqualFold(seg, category) {
+			b.WriteString(seg)
+			b.WriteByte(' ')
+		}
+	}
+	b.WriteString(body)
+	return b.String()
 }
 
 // retrievalTokens keeps Han pairs scoped to a contiguous run: it never makes

@@ -223,6 +223,7 @@ def main():
          "ping turn" in persisted),
         ("failed turn persisted the marked error side",
          "\\u26a0" in persisted or "⚠" in persisted),
+        ("engine diagnostics stay off the terminal", "level=ERROR" not in text and "level=WARN" not in text),
         ("model error rendered in the configured locale (en)", "cannot reach the model service" in text),
         ("exit note names the saved session on the normal screen",
          " saved" in after_exit and "/resume" in after_exit),

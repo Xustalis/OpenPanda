@@ -499,7 +499,7 @@ export function MemoryGraphView({
               const dimmed = focus !== null && focus !== n.id && !neighbors.has(n.id)
               const r = nodeRadius(n)
               const alpha = recencyAlpha(n.last_seen, now)
-              const labelVisible = showLabels || hover === n.id || selected === n.id
+              const labelVisible = !isEntity(n) || showLabels || hover === n.id || selected === n.id
               const lines = labelLines(n.label)
               return (
                 <g
@@ -526,6 +526,7 @@ export function MemoryGraphView({
                     }
                   }}
                 >
+                  <title>{n.label}</title>
                   {/* Inner g carries the pop-in — animating transform on the
                       outer one would fight its translate() attribute. */}
                   <g class="mg-pop" style={{ animationDelay: `${Math.min(i * 30, 520)}ms` }}>

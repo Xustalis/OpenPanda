@@ -242,6 +242,12 @@ func todoList(ctx context.Context, store *todos.Store, env todoEnv, args []strin
 	if err != nil {
 		return err
 	}
+	total, completed := len(list), 0
+	for _, item := range list {
+		if item.Status == todos.StatusDone {
+			completed++
+		}
+	}
 	list = filterTodoVisibility(list, *status != "" || *all)
 	if env.jsonOut {
 		if list == nil {
@@ -253,7 +259,7 @@ func todoList(ctx context.Context, store *todos.Store, env todoEnv, args []strin
 		env.outln(i18n.T(env.loc, "cli.todo.none"))
 		return nil
 	}
-	env.outln(i18n.T(env.loc, "cli.todo.head"))
+	env.outln(i18n.Tf(env.loc, "cli.todo.progress", "done", strconv.Itoa(completed), "total", strconv.Itoa(total)))
 	for _, t := range list {
 		env.outln("  " + todoLine(env.loc, t))
 	}
@@ -279,16 +285,16 @@ func filterTodoVisibility(list []todos.Todo, all bool) []todos.Todo {
 // todoLine is one board row: marker, id, lane, priority, due, project, title.
 // A bare Linux console has no CJK/box glyphs, so it gets ASCII markers.
 func todoLine(loc i18n.Locale, t todos.Todo) string {
-	marker, arrow := "○", "→"
+	marker, arrow := "◌", "→"
 	switch t.Status {
 	case todos.StatusRunning:
-		marker = "●"
+		marker = "◔"
 	case todos.StatusPaused:
 		marker = "◐"
 	case todos.StatusDone:
 		marker = "✓"
 	case todos.StatusCancelled:
-		marker = "✗"
+		marker = "⊘"
 	}
 	if isLinuxConsole() {
 		marker, arrow = "o", "->"

@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io"
 	stdlog "log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -65,16 +66,17 @@ import (
 // engine, the tier-2 authorization switch, the active locale, the terminal
 // layer, and the /web server once booted.
 type repl struct {
-	loc        i18n.Locale
-	cfg        *config.Config
-	configPath string
-	db         *sql.DB
-	store      *core.TaskStore
-	projects   *memory.Projects
-	projStore  *projectstore.Store
-	hermes     *memory.Hermes
-	sessionsSt *sessions.Store
-	worktrees  *sessions.Worktrees
+	engineLogger *slog.Logger
+	loc          i18n.Locale
+	cfg          *config.Config
+	configPath   string
+	db           *sql.DB
+	store        *core.TaskStore
+	projects     *memory.Projects
+	projStore    *projectstore.Store
+	hermes       *memory.Hermes
+	sessionsSt   *sessions.Store
+	worktrees    *sessions.Worktrees
 	// engine is an atomic pointer: the TUI hot-builds the engine on its
 	// Update goroutine while exec-goroutine slash handlers (e.g. /approve,
 	// /model) read it concurrently.
@@ -443,10 +445,23 @@ func runRepl(args []string) {
 		}
 	}
 
+	if shouldUseTUI(r) {
+		// Diagnostics from the engine and its workers must not write over the alternate screen.
+		r.engineLogger = slog.New(slog.DiscardHandler)
+		dir := filepath.Join(cliStateDir(), "logs")
+		if err := os.MkdirAll(dir, 0o700); err == nil {
+			if file, err := os.OpenFile(filepath.Join(dir, "tui.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+				defer file.Close()
+				r.engineLogger = slog.New(slog.NewTextHandler(file, &slog.HandlerOptions{Level: slog.LevelWarn}))
+			}
+		}
+	}
+
 	// The ask engine is optional: without a configured model the REPL still
 	// serves every panel command, and asks explain themselves.
 	if modelConfigured(cfg) {
 		engine, err := askengine.New(context.Background(), cfg, askengine.Options{
+			Logger:     r.engineLogger,
 			CardPath:   effectiveCardPath,
 			MCPCommand: *mcpCmd,
 			ReplyASCII: isLinuxConsole(),

@@ -158,3 +158,22 @@
   .space-options { grid-template-columns: minmax(0, 1fr); }
 }
 
+
+.work-checklist { background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--sp-4); }
+.work-checklist header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--sp-2); align-items: baseline; margin-bottom: var(--sp-2); }
+.work-checklist header span, .work-item small { color: var(--text-secondary); font-size: var(--text-xs); }
+.work-checklist ul { list-style: none; margin: 0; padding: 0; }
+.work-checklist li { display: flex; align-items: center; border-radius: var(--radius-sm); }
+.work-checklist li:focus-within, .work-checklist li:hover { background: var(--bg-inset); }
+.work-toggle, .work-item { background: transparent; border: 0; color: inherit; font: inherit; }
+.work-toggle { flex: 0 0 44px; height: 44px; display: grid; place-items: center; }
+button.work-toggle, .work-item { cursor: pointer; }
+.work-item { flex: 1; min-width: 0; min-height: 44px; display: grid; gap: 2px; align-content: center; text-align: start; padding: 6px; overflow-wrap: anywhere; }
+.work-item strong { font-weight: 550; }
+.work-mark { box-sizing: border-box; width: 18px; height: 18px; border: 2px dashed currentColor; border-radius: 50%; display: grid; place-items: center; color: var(--text-secondary); font: bold 12px/1 sans-serif; }
+.work-mark.done { background: var(--text-secondary); border-color: var(--text-secondary); border-style: solid; color: var(--bg-raised); }
+.work-mark.running { border-style: solid; border-color: var(--border) var(--accent) var(--accent) var(--border); animation: work-spin 1.2s linear infinite; }
+.work-mark.paused, .work-mark.cancelled { border-style: solid; }
+.work-checklist .is-done { color: var(--text-secondary); }
+@keyframes work-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .work-mark.running { animation: none; } }

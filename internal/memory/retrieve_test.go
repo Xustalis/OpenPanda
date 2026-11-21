@@ -180,3 +180,72 @@ func TestRankShortChineseQueryAndMixedScripts(t *testing.T) {
 		t.Fatalf("mixed-script query misses memory: %v", got)
 	}
 }
+
+// A fact header is storage metadata. Its literal "fact" marker and category
+// name must not act as content: a query for "fact" or "environment" would
+// otherwise pull every classified entry in, ranked by header alone.
+func TestRankIgnoresFactHeaderMetadata(t *testing.T) {
+	entries := []string{
+		"[fact:environment:environment.os] 服务器运行 Ubuntu 22.04",
+		"[fact:preference:preference.theme] 用户偏好深色模式",
+		"[fact:convention:convention.commit] 全局约定：提交信息用英文祈使句",
+		"[fact:project:project.build] 项目构建：make build",
+	}
+	for _, q := range []string{"fact", "environment", "preference", "convention", "project", "identity"} {
+		if got := (Retriever{}).Rank(q, entries, 5); len(got) != 0 {
+			t.Errorf("query %q matched header metadata: %v", q, got)
+		}
+	}
+}
+
+// The attribute key is still a meaningful retrieval signal, and body text is
+// untouched by the header handling.
+func TestRankKeepsFactKeySegmentsAndBody(t *testing.T) {
+	entries := []string{
+		"[fact:identity:user.name] 用户姓名：徐浩博",
+		"[fact:project:project.build] 项目构建：make build",
+		"[fact:environment:environment.os] 服务器运行 Ubuntu 22.04",
+	}
+	cases := map[string]string{
+		"name":   entries[0],
+		"build":  entries[1],
+		"ubuntu": entries[2],
+		"徐浩博":    entries[0],
+	}
+	for q, want := range cases {
+		got := (Retriever{}).Rank(q, entries, 5)
+		if len(got) == 0 || got[0] != want {
+			t.Errorf("query %q = %v, want %q first", q, got, want)
+		}
+	}
+}
+
+// A legacy entry whose own body mentions the word still matches on the body.
+func TestRankFactHeaderDoesNotHideBodyWords(t *testing.T) {
+	entries := []string{"[fact:convention:convention.review] 每个 fact 都要有出处"}
+	if got := (Retriever{}).Rank("fact", entries, 5); len(got) != 1 {
+		t.Fatalf("body word 'fact' lost: %v", got)
+	}
+}
+
+func TestRankEdgeCases(t *testing.T) {
+	entries := []string{"服务器 openwrt 固件", "部署 debian"}
+	if got := (Retriever{}).Rank("openwrt", nil, 5); got != nil {
+		t.Errorf("empty entries = %v", got)
+	}
+	if got := (Retriever{}).Rank("openwrt", entries, 0); got != nil {
+		t.Errorf("k=0 = %v", got)
+	}
+	// Single Han character falls back to per-character matching.
+	if got := (Retriever{}).Rank("署", entries, 5); len(got) != 1 || got[0] != entries[1] {
+		t.Errorf("single-han query = %v", got)
+	}
+	// Whitespace-only query behaves like an empty query: first k, no scoring.
+	if got := (Retriever{}).Rank("   ", entries, 1); len(got) != 1 || got[0] != entries[0] {
+		t.Errorf("blank query = %v", got)
+	}
+	// Punctuation-only query has no content tokens and matches nothing.
+	if got := (Retriever{}).Rank("？！…", entries, 5); len(got) != 0 {
+		t.Errorf("punctuation query = %v", got)
+	}
+}

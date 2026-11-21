@@ -67,10 +67,23 @@ type graphEdgeJSON struct {
 	Weight int `json:"weight,omitempty"`
 }
 
+// graphMetaJSON tells the client how much of the knowledge layer it is looking
+// at. EntitiesTotal counts every distinct fact the surfaces retain, EntitiesShown
+// the fact nodes actually in the response, and EntityLimit the cap this request
+// was served under (after defaulting and clamping). Shown < Total means the
+// view is truncated and a larger ?entities= would reveal more. Older clients
+// that only read nodes/edges ignore it.
+type graphMetaJSON struct {
+	EntityMax     int `json:"entity_max"`
+	EntitiesTotal int `json:"entities_total"`
+	EntitiesShown int `json:"entities_shown"`
+	EntityLimit   int `json:"entity_limit"`
+}
+
 // Knowledge-layer caps keep the initial fact view readable and bound payloads.
 const (
-	entityCapDefault = 20 // default entity nodes — a readable first view
-	entityCap        = 60 // hard ceiling, reachable with ?entities=60
+	entityCapDefault = 20  // default entity nodes — a readable first view
+	entityCap        = 120 // hard ceiling, reachable with ?entities=120
 )
 
 // getMemoryGraph serves GET /api/memory/graph. Every source is optional — a
@@ -100,7 +113,6 @@ func (h *handler) getMemoryGraph(w http.ResponseWriter, r *http.Request) {
 	}
 	nodes := []graphNodeJSON{}
 	edges := []graphEdgeJSON{}
-	entities := 0
 	var retained []string
 	var personalIDs []string
 	retainedBySurface := map[string][]string{}
@@ -126,6 +138,16 @@ func (h *handler) getMemoryGraph(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// A surface's facts are collected first and given fact nodes afterwards, so
+	// the entity cap can be shared out. Emitting them as they are read let the
+	// first surface with many facts (MEMORY.md) use up the whole allowance and
+	// leave every later topic and project as a bare dot with no children.
+	type surfaceFacts struct {
+		id    string
+		day   string
+		facts []memory.Fact
+	}
+	var surfaces []surfaceFacts
 	addSurface := func(id, kind, label, path, target string) {
 		if r.Context().Err() != nil {
 			return
@@ -153,21 +175,13 @@ func (h *handler) getMemoryGraph(w http.ResponseWriter, r *http.Request) {
 		nodes = append(nodes, graphNodeJSON{ID: id, Kind: kind, Layer: "file", Label: label, Chars: chars, Entries: len(facts), Weight: len(facts), LastSeen: day})
 		if kind != "project" {
 			personalIDs = append(personalIDs, id)
-		}
-		for _, fact := range facts {
-			if kind != "project" {
+			for _, fact := range facts {
 				variants := []string{fact.Entry(), fact.Text, fact.Entry() + " " + memory.PromotionSourceTag, fact.Text + " " + memory.PromotionSourceTag}
 				retained = append(retained, variants...)
 				retainedBySurface[id] = append(retainedBySurface[id], variants...)
 			}
-			if entities >= entityLimit {
-				continue
-			}
-			factID := "entity:" + id + ":" + fact.ID()
-			nodes = append(nodes, graphNodeJSON{ID: factID, Kind: "entity", Layer: "entity", Label: fact.Text, Category: fact.Category, Key: fact.Key, Weight: 1, LastSeen: day, Evidence: []string{fact.Text}})
-			edges = append(edges, graphEdgeJSON{From: id, To: factID, Kind: "mention", Weight: 1})
-			entities++
 		}
+		surfaces = append(surfaces, surfaceFacts{id: id, day: day, facts: facts})
 	}
 	addSurface("core:user", "core", "USER.md", memory.UserPath(root), "user")
 	addSurface("core:memory", "core", "MEMORY.md", memory.MemoryPath(root), "memory")
@@ -199,6 +213,40 @@ func (h *handler) getMemoryGraph(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, sourceErr)
 		return
 	}
+	// Share the cap round-robin: every surface gets one fact before any gets a
+	// second, and each surface keeps its own order, so the same files always
+	// yield the same picture. A surface with fewer facts than its turn simply
+	// drops out and the remaining ones absorb the slack.
+	entitiesTotal := 0
+	for _, sf := range surfaces {
+		entitiesTotal += len(sf.facts)
+	}
+	shown := make([]int, len(surfaces))
+	for granted := 0; granted < entityLimit; {
+		progressed := false
+		for i, sf := range surfaces {
+			if granted >= entityLimit {
+				break
+			}
+			if shown[i] < len(sf.facts) {
+				shown[i]++
+				granted++
+				progressed = true
+			}
+		}
+		if !progressed {
+			break
+		}
+	}
+	entitiesShown := 0
+	for i, sf := range surfaces {
+		for _, fact := range sf.facts[:shown[i]] {
+			factID := "entity:" + sf.id + ":" + fact.ID()
+			nodes = append(nodes, graphNodeJSON{ID: factID, Kind: "entity", Layer: "entity", Label: fact.Text, Category: fact.Category, Key: fact.Key, Weight: 1, LastSeen: sf.day, Evidence: []string{fact.Text}})
+			edges = append(edges, graphEdgeJSON{From: sf.id, To: factID, Kind: "mention", Weight: 1})
+			entitiesShown++
+		}
+	}
 	// A diary is a provenance node only when a receipt still points to an
 	// admitted fact. No daily/skill/report content participates in the graph.
 	if diary, err := os.Open(filepath.Join(root, "DREAMS.md")); err == nil {
@@ -227,7 +275,11 @@ func (h *handler) getMemoryGraph(w http.ResponseWriter, r *http.Request) {
 		}
 		return edges[i].To < edges[j].To
 	})
-	writeJSON(w, map[string]any{"nodes": nodes, "edges": edges})
+	writeJSON(w, map[string]any{
+		"nodes": nodes,
+		"edges": edges,
+		"meta":  graphMetaJSON{EntityMax: entityCap, EntitiesTotal: entitiesTotal, EntitiesShown: entitiesShown, EntityLimit: entityLimit},
+	})
 }
 
 // dreamPromotionCount is a convenience wrapper for small, in-memory receipts.

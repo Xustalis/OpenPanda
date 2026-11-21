@@ -97,8 +97,8 @@ export function seenDates(graph: MemoryGraph): string[] {
 export function nodeRadius(n: MemoryGraphNode): number {
   const w = Math.max(1, n.weight ?? 1)
   if (isEntity(n)) return Math.min(13, 5.5 + 1.25 * Math.sqrt(w))
-  if (n.kind === 'core') return Math.min(19, 9.5 + 1.3 * Math.sqrt(w))
-  return Math.min(17, 7.5 + 1.3 * Math.sqrt(w))
+  if (n.kind === 'core') return Math.min(19, 11.5 + 1.3 * Math.sqrt(w))
+  return Math.min(17, 9.5 + 1.3 * Math.sqrt(w))
 }
 
 /** Freshness → node opacity: touched within a week stays fully lit, an old
@@ -123,7 +123,7 @@ function uwidth(s: string): number {
  *  ellipsis when even two lines do not fit. Latin names wrap at separator
  *  boundaries (- _ space /) when one sits inside the window — "node-" /
  *  "workflow-…" reads far better than a mid-token cut. */
-export function labelLines(label: string, maxUnits = 7): string[] {
+export function labelLines(label: string, maxUnits = 9): string[] {
   if (uwidth(label) <= maxUnits) return [label]
   const chars = [...label]
   const take = (cap: number): string => {
@@ -321,17 +321,19 @@ export function layoutGraph(
   const list = graph.nodes.map((n) => pos.get(n.id)!)
   // Spacing follows each node's real footprint (pill width / circle radius)
   // plus a per-pair air gap — long terms get room, small circles pack tighter.
+  const extents = new Map(list.map(n => [n.id, nodeExtent(n) + captionExtent(n)]))
+  const horizontalScale = Math.max(1, (w / 2 - 58) / R)
   const minDist = (a: Placed, b: Placed) => {
     // Captions hang outside file dots, so their half-width joins the pair's
     // spacing requirement; entity pills already carry their text in
     // nodeExtent. The per-pair air gap stays generous on purpose.
     const gap = isEntity(a) && isEntity(b) ? 11 : isEntity(a) || isEntity(b) ? 20 : 26
-    return nodeExtent(a) + captionExtent(a) + nodeExtent(b) + captionExtent(b) + gap
+    return extents.get(a.id)! + extents.get(b.id)! + gap
   }
   const clampRadius = (p: Placed, lo: number, hi: number) => {
     const dx = p.x - cx
     const dy = p.y - cy
-    const d = Math.max(1, Math.hypot(dx, dy))
+    const d = Math.max(1, Math.hypot(dx / horizontalScale, dy))
     const target = d < lo ? lo : d > hi ? hi : d
     if (target !== d) {
       p.x = cx + (dx / d) * target

@@ -36,7 +36,10 @@ export function TeamView({ tab = 'mine', taskKey, connection = 'local' }: {
     if (pending.current?.signature !== signature) pending.current = { signature, key: crypto.randomUUID() }
     setBusy(true); setError('')
     try { await fn(pending.current.key); pending.current = null; setEditing(false); reload() }
-    catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+    catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      if (e instanceof ApiError && [409, 412].includes(e.status)) reload()
+    }
     finally { setBusy(false) }
   }
   const current = detail.data
@@ -47,6 +50,15 @@ export function TeamView({ tab = 'mine', taskKey, connection = 'local' }: {
   const canRequest = !!current && !current.local && current.snapshot.permissions.execute && supported('executions', ['tasks:read', 'execution:read', 'execution:claim', 'execution:report'])
   const tasks = list.data || []
   const mine = tasks.filter(task => task.connectionId === 'local' || (task.snapshot.assigneeAccountIds || []).includes(task.accountId))
+  const needle = query.trim().toLowerCase()
+  const visible = mine.filter(({ snapshot }) => (snapshot.title + ' ' + snapshot.description).toLowerCase().includes(needle))
+  const done = visible.filter(task => task.snapshot.status === 'done').length
+  const toggleDone = (task: WorkTask) => {
+    const key = workTaskKey(task)
+    const revision = task.snapshot.taskRevision
+    const status = task.snapshot.status === 'done' ? 'pending' : 'done'
+    return mutate(JSON.stringify([key, revision, status]), requestId => api.patchWork(key, revision, { status }, requestId))
+  }
   const open = (task: WorkTask) => navigate({ view: 'work', key: workTaskKey(task), connection: task.connectionId })
   const failure = error || list.error || detail.error || history.error || grants.error || reviews.error
   return <section class="tm-page work-page" aria-busy={busy}>
@@ -86,10 +98,20 @@ export function TeamView({ tab = 'mine', taskKey, connection = 'local' }: {
       <div class="work-toolbar"><input aria-label={t('work.search')} placeholder={t('work.search')} value={query} onInput={e => setQuery(e.currentTarget.value)} /><button class="btn primary" onClick={() => setEditing(!editing)} disabled={busy}>{editing ? t('common.cancel') : t('work.add')}</button></div>
       {editing && <WorkForm busy={busy} onSave={body => mutate(JSON.stringify(body), async key => { const task = await api.createWork(body, key); open(task) })} />}
       {!list.data && !list.error && <p>{t('common.loading')}</p>}
-      {mine.length === 0 && list.data && <p class="hint">{t('work.empty')}</p>}
-      <div class="work-grid">{mine.filter(v => `${v.snapshot.title} ${v.snapshot.description}`.toLowerCase().includes(query.toLowerCase())).map(task => <article class="card work-card" key={`${task.connectionId}:${workTaskKey(task)}`}>
-        <button class="work-title" onClick={() => open(task)}>{task.snapshot.title}</button><TaskFacts task={task} />
-      </article>)}</div>
+      {list.data && <section class="work-checklist" aria-label={t('work.mine')}>
+        <header><strong>{t('work.mine')}</strong><span role="status">{t('work.doneCount', { done, total: visible.length })}</span></header>
+        {visible.length === 0 && <p class="hint">{t(needle ? 'work.noMatch' : 'work.empty')}</p>}
+        <ul>{visible.map(task => {
+          const { title, status, projectName, spaceName, dueAt, permissions } = task.snapshot
+          const known = ['done', 'running', 'paused', 'cancelled', 'pending'].includes(status)
+          const label = known ? t('todos.status.' + status) : status
+          const glyph = <span class={'work-mark ' + (known ? status : '')} aria-hidden="true">{status === 'done' ? '✓' : status === 'paused' ? 'Ⅱ' : status === 'cancelled' ? '−' : ''}</span>
+          return <li key={task.connectionId + ':' + workTaskKey(task)} class={status === 'done' ? 'is-done' : ''}>
+            {task.local && permissions.edit ? <button class="work-toggle" disabled={busy} aria-label={t(status === 'done' ? 'work.reopenTask' : 'work.completeTask', { title })} onClick={() => void toggleDone(task)}>{glyph}</button> : <span class="work-toggle">{glyph}</span>}
+            <button class="work-item" onClick={() => open(task)}><strong>{title}</strong><small>{[label, projectName || (!task.local && spaceName), dueAt?.value].filter(Boolean).join(' · ')}</small></button>
+          </li>
+        })}</ul>
+      </section>}
     </> : tab === 'spaces' ? <>
       <ConnectionManager tick={tick + signal} reload={reload} />
       {tasks.some(v => v.connectionId !== 'local') && <div class="work-grid">{tasks.filter(v => v.connectionId !== 'local').map(task => <article class="card" key={`${task.connectionId}:${workTaskKey(task)}`}><button class="work-title" onClick={() => open(task)}>{task.snapshot.title}</button><TaskFacts task={task} /></article>)}</div>}

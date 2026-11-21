@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/charmbracelet/lipgloss"
@@ -395,5 +396,17 @@ func TestErrorBlockHintsFold(t *testing.T) {
 	plain := ansi.Strip(block{kind: blockError, body: "disk full"}.render(th, 80, false, true))
 	if strings.Contains(plain, "troubleshooting") || strings.Contains(plain, "ctrl+e") {
 		t.Fatalf("unclassified error grew a fold: %q", plain)
+	}
+}
+
+func TestPlanResultKeepsStageChecklistOnFailure(t *testing.T) {
+	out := &askengine.Result{Kind: "plan", Stderr: "build failed", PlanStages: []core.Task{
+		{StageID: "prepare", State: core.StateDone}, {Title: "编译", State: core.StateFailed},
+	}}
+	b := resultBlock(out, "", loc)
+	for _, want := range []string{"build failed", "prepare · done", "编译 · failed"} {
+		if !strings.Contains(b.body, want) {
+			t.Errorf("checklist missing %q in %q", want, b.body)
+		}
 	}
 }
