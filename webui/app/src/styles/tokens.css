@@ -188,9 +188,19 @@
      reading column asks for a line of air. Latin prose is happy at either. */
   --leading-read: 1.68;
 
+  /* Three task accents, with separate ink and illumination levels at night. */
+  --task-blue: light-dark(#365d97, #a2c2f2);
+  --task-violet: light-dark(#745192, #ceb0eb);
+  --task-amber: light-dark(#945a29, #e4b687);
+  --glow-blue: light-dark(rgb(140 175 229 / 28%), rgb(104 142 201 / 19%));
+  --glow-violet: light-dark(rgb(198 171 218 / 24%), rgb(162 124 183 / 17%));
+  --composer-edge: light-dark(#d1d4df, #51535e);
+  --composer-highlight: light-dark(rgb(255 255 255 / 85%), rgb(235 230 255 / 7%));
+
   /* — Motion. */
-  --dur-fast: 110ms;
-  --dur-med: 200ms;
+  --dur-press: 70ms;
+  --dur-fast: 140ms;
+  --dur-med: 210ms;
   --ease: cubic-bezier(0.25, 0.6, 0.3, 1);
 
   /* — Shell metrics. Session rail + inspector flank a max-readable column. */

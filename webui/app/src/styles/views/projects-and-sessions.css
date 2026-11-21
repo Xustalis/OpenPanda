@@ -314,3 +314,6 @@ button.project-stat:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
+
+.project-item.project-active { border-color: var(--section-edge); background: var(--section-surface); box-shadow: var(--section-shadow); }
+.project-active .project-name-icon { color: var(--section-ink); background: var(--section-wash); }

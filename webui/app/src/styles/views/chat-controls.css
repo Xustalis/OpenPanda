@@ -701,6 +701,127 @@
   color: var(--text-secondary);
 }
 .plan-dock-review { flex: none; }
+/* The card's body is a button now: reading the plan is one intention, acting
+   on it is the other, and both need their own hit area. A button inside a flex
+   card inherits the browser's chrome, so its frame is stripped and the card's
+   own border stays the only one on screen. */
+.plan-dock-open {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.plan-dock-open:hover .plan-dock-title { color: var(--brand); }
+.plan-dock-open:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 4px;
+  border-radius: var(--radius-md);
+}
+/* A confirmed plan runs with no stream of its own, so this card is the only
+   liveness signal between "开始实施" and the first transcript line. The dot
+   breathes instead of spinning: a spinner at this size reads as "loading
+   data", and the work here is minutes long, not a fetch. */
+.plan-dock-pulse {
+  width: 9px;
+  height: 9px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: var(--brand);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--brand) 55%, transparent);
+  animation: plan-dock-pulse 1.8s var(--ease-standard) infinite;
+}
+@keyframes plan-dock-pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--brand) 50%, transparent); opacity: 1; }
+  70% { box-shadow: 0 0 0 7px transparent; opacity: 0.55; }
+  100% { box-shadow: 0 0 0 0 transparent; opacity: 1; }
+}
+.plan-dock-detail {
+  color: var(--text-tertiary, var(--text-secondary));
+}
+@media (prefers-reduced-motion: reduce) {
+  .plan-dock-pulse { animation: none; }
+}
+
+/* ---- The proposal pane ------------------------------------------------------
+   The plan reads in the side dock, beside the thread it is about. The text
+   scrolls; the decision row does not. "Read it", "say what to change" and
+   "start" are one surface here, so approving a plan never means dismissing a
+   modal to get back to the conversation it belongs to. */
+.plan-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.plan-pane-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: 10px var(--sp-4);
+  border-bottom: 1px solid var(--border);
+}
+.plan-pane-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+.plan-pane-close { flex: none; }
+.plan-pane-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--sp-4);
+  color: var(--text);
+}
+.plan-pane-foot {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
+  border-top: 1px solid var(--border);
+}
+.plan-pane-hint {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+.plan-pane-note {
+  width: 100%;
+  min-height: 64px;
+  max-height: 200px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  resize: vertical;
+}
+.plan-pane-note:focus {
+  outline: none;
+  border-color: var(--brand);
+}
+.plan-pane-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
 @keyframes plan-dock-in {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: none; }

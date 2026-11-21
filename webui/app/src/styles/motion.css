@@ -1,0 +1,70 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* Apply the same press response across the shell, portalled menus and dialogs.
+   Drag handles, map tiles and resize grips keep their own pointer geometry. */
+@media (prefers-reduced-motion: no-preference) {
+  :is(.btn, .btn-icon, .icon-btn, .chip, .seg, .select-trigger, .select-opt,
+      .ctx-menu-item, .palette-item, .settings-nav-item, .settings-close,
+      .nav-item:not(.nav-destination), .nav-destination-link, .thread-group-head, .ws-selbar-act,
+      .model-select-btn, .perm-trigger, .workdir-open, .roster-trigger,
+      .work-tabs button, .work-title, .space-mode, .project-name-btn, .memory-file-item,
+      .team-row, .wd-action, .wd-row, .perm-row, .model-row, .chat-starter) {
+    transition: scale var(--dur-fast) var(--ease-enter),
+      color var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease),
+      border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease),
+      transform var(--dur-fast) var(--ease);
+    &:active:not(:disabled, [aria-disabled='true']) {
+      scale: .98;
+      transition-duration: var(--dur-press);
+    }
+  }
+
+  .settings-dialog[open], .notif-dialog[open], .palette, .modal {
+    animation-timing-function: var(--ease-enter);
+  }
+  :is(.settings-dialog, .notif-dialog, .confirm-dialog)[open]::backdrop {
+    animation: fade-in var(--dur-fast) var(--ease);
+  }
+}
+
+.nav-quick { position: relative; isolation: isolate; }
+.nav-marker {
+  position: absolute; pointer-events: none; inset: 0 0 auto; z-index: -1;
+  border: 1px solid color-mix(in srgb, var(--task-violet) 20%, var(--border-soft));
+  background: linear-gradient(105deg, color-mix(in srgb, var(--task-violet) 10%, var(--bg-raised)), var(--bg-raised));
+  border-radius: 9px; box-shadow: var(--shadow-xs);
+}
+.nav-marker::before { content: ''; position: absolute; inset-inline-start: 0; top: 28%; height: 44%; width: 3px; border-radius: 4px; background: var(--task-violet); }
+.nav-quick .nav-item.active { background: transparent; box-shadow: none; }
+.nav-quick .nav-item.active svg { color: var(--task-violet); }
+.history-disclosure { display: grid; grid-template-rows: 0fr; opacity: 0; }
+.history-disclosure[data-open='true'] { grid-template-rows: 1fr; opacity: 1; }
+.history-disclosure > div { min-height: 0; overflow: hidden; }
+.click-feedback { display: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .click-feedback {
+    display: block; position: fixed; z-index: 2147483647; pointer-events: none;
+    width: 17px; height: 17px; border-radius: 50%; margin: -8.5px 0 0 -8.5px;
+    color: var(--task-violet); border: 1px solid currentColor;
+    background: color-mix(in srgb, currentColor 13%, transparent);
+    animation: click-bloom 260ms var(--ease-enter) both;
+  }
+  .click-feedback.control { width: 26px; height: 26px; margin: -13px 0 0 -13px; }
+  @keyframes click-bloom { from { opacity: .68; transform: scale(.35); } to { opacity: 0; transform: scale(1.22); } }
+  .nav-marker { transition: transform 250ms cubic-bezier(.22,.8,.2,1), height var(--dur-fast) var(--ease); }
+  .nav-quick .nav-label, .nav-quick .ico, .thread-title, .sidebar-gear svg { transition: transform var(--dur-med) var(--ease-enter), color var(--dur-fast); }
+  .history-disclosure { transition: grid-template-rows 200ms var(--ease-enter), opacity 160ms var(--ease); }
+  .thread-group-head svg { transition: rotate var(--dur-med) var(--ease), color var(--dur-fast); }
+  .thread-group-head[aria-expanded='true'] svg { rotate: -7deg; color: var(--task-blue); }
+  .sidebar.mobile-open .sidebar-panel { animation: sidebar-reveal 200ms var(--ease-enter) both; }
+  @keyframes sidebar-reveal { from { opacity: 0; translate: 0 -6px; } }
+  :where(button, a[href], summary, [role='button'], [role='option'], [role='tab']):not(:disabled, [aria-disabled='true'], [draggable='true']):active { scale: .975; }
+  .thread-item, .thread-pin, .thread-del, .thread-group-menu, .thread-group-new { transition: scale var(--dur-fast) var(--ease), background-color var(--dur-fast), opacity var(--dur-fast); }
+  .queue-empty-art { animation: queue-art-in 320ms var(--ease-enter) both; }
+  @keyframes queue-art-in { from { opacity: 0; translate: 0 8px; } }
+}
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .nav-item:not(.nav-new-chat):hover .nav-label, .thread-item:hover .thread-title { transform: translateX(2px); }
+  .nav-item:hover .ico { transform: translateY(-1px); }
+  .sidebar-gear:hover svg { transform: rotate(22deg); }
+}
