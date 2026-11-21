@@ -601,3 +601,69 @@ func TestLoginFailureWithSessionPreventsRedispatch(t *testing.T) {
 		t.Fatalf("login refusal not reported on next dispatch: %v", err)
 	}
 }
+
+// A light task and a deep one must not land on the same agent when the roster
+// holds both a fast one and a heavy one. This is the behaviour the router was
+// missing: cost alone made the cheap agent win every time, including for a
+// refactor, because best_at only ever matched words the user had to type.
+func TestDispatchRouteFollowsEffortVocabulary(t *testing.T) {
+	card := ledger.Card{Agents: map[string]ledger.Agent{
+		"fast": {
+			Adapter: "opencode.py", Capabilities: []string{"coding"}, CostTier: "low",
+			BestAt: []string{"quick_edits", "fast_scripts", "code_search"},
+		},
+		"heavy": {
+			Adapter: "claude_code.py", Capabilities: []string{"coding"}, CostTier: "medium_high",
+			BestAt: []string{"complex_reasoning", "multi_file_edits", "refactoring"},
+		},
+	}}
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
+	r.SetAgentProber(func(string, ledger.Agent) bool { return true })
+	for _, tc := range []struct {
+		name   string
+		traits []string
+		want   string
+	}{
+		// What internal/core's effortTraits emits for a task the classifier
+		// judged simple, and for one it judged hard.
+		{"light", []string{"edit", "quick_edits", "fast_scripts", "code_search", "code_explanation"}, "fast"},
+		{"deep", []string{"edit", "complex_reasoning", "multi_file_edits", "refactoring"}, "heavy"},
+		// No effort signal: cost decides, as before.
+		{"standard", []string{"edit"}, "fast"},
+	} {
+		plan, err := r.DispatchRoute([]string{"coding"}, tc.traits...)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if plan.Agent != tc.want {
+			t.Fatalf("%s task routed to %s, want %s", tc.name, plan.Agent, tc.want)
+		}
+	}
+}
+
+func TestTaskRankingHonoursPreferredHarnessAndRoster(t *testing.T) {
+	card := ledger.Card{Agents: map[string]ledger.Agent{
+		"opencode": {Adapter: "opencode.py", Capabilities: []string{"coding"}, CostTier: "low", BestAt: []string{"code_search"}},
+		"codex":    {Adapter: "codex.py", Capabilities: []string{"coding"}, CostTier: "medium", BestAt: []string{"complex_reasoning"}},
+		"other":    {Adapter: "another.py", Capabilities: []string{"coding"}},
+	}}
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{}).WithAgents([]string{"opencode", "codex"})
+	r.SetAgentProber(func(string, ledger.Agent) bool { return true })
+	task := TaskRouting{Traits: []string{"code_search"}, Effort: []string{"complex_reasoning"}}
+	// Deep reasoning can also involve searching; a search match alone must not
+	// outweigh the effort fit. Both agents are permitted and ready.
+	p, err := r.DispatchTaskRoute([]string{"coding"}, task)
+	if err != nil || p.Agent != "codex" {
+		t.Fatalf("deep search: %+v %v", p, err)
+	}
+	task.PreferredAgent = "opencode"
+	p, err = r.DispatchTaskRoute([]string{"coding"}, task)
+	if err != nil || p.Agent != "opencode" || len(p.Alternates) != 1 || p.Alternates[0] != "codex" {
+		t.Fatalf("preference: %+v %v", p, err)
+	}
+	r.SetAgentProber(func(name string, _ ledger.Agent) bool { return name != "opencode" })
+	p, err = r.DispatchTaskRoute([]string{"coding"}, task)
+	if err != nil || p.Agent != "codex" || len(p.Alternates) != 0 {
+		t.Fatalf("unavailable preference: %+v %v", p, err)
+	}
+}

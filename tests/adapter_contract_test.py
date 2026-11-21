@@ -256,6 +256,8 @@ assert "--verbose" in sys.argv
 assert "--allowedTools" in sys.argv
 assert "--max-turns" in sys.argv and "30" in sys.argv
 assert os.path.basename(os.getcwd()) == "work"
+if os.name == "posix":
+    assert os.path.samefile(os.environ["PWD"], os.getcwd())
 assert os.environ.get("ANTHROPIC_API_KEY") == "native-key"
 print(json.dumps({"type":"assistant", "message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"pwd"}}]}}))
 print(json.dumps({"type":"result", "is_error":False, "result":"claude answer", "session_id":"sess-123", "usage":{"input_tokens":3,"output_tokens":5,"cache_read_input_tokens":2,"cache_creation_input_tokens":1}, "total_cost_usd":0.25}))
@@ -1927,6 +1929,7 @@ if sys.argv[1:2] == ["run"]:
         )
         self.assertFalse(payload["ok"], payload)
         self.assertEqual(payload["session_id"], "ses_p9")
+        self.assertFalse(payload.get("provider_startup_failure"), payload)
 
     def test_opencode_terminal_errors_do_not_wait_for_process_exit(self):
         events = [
@@ -1954,6 +1957,7 @@ time.sleep(30)
                 self.assertNotEqual(payload["exit_code"], 124, payload)
                 self.assertIn("ConnectionRefused", payload["result"])
                 self.assertEqual(payload["session_id"], "ses_terminal")
+                self.assertTrue(payload.get("provider_startup_failure"), payload)
 
     def test_opencode_idle_after_answer_finishes_hanging_cli(self):
         for nested in (False, True):
@@ -2157,6 +2161,14 @@ print("dsh answer")
         )
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["result"], "dsh answer")
+
+    def test_dsh_restricted_request_uses_read_only_preset(self):
+        payload, _, _ = run_adapter("deepseek_harness.py", "dsh", """
+import sys
+assert sys.argv[1:] == ["--profile", "headless", "--permission-mode", "read-only", "--approval-policy", "never", "contract prompt"]
+print("read-only run")
+""", extra_request={"restricted": True, "authorized": True})
+        self.assertTrue(payload["ok"], payload)
 
     def test_deepseek_harness_model_patch_caps_provider_tokens(self):
         payload, _, _ = run_adapter(

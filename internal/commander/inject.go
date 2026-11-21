@@ -274,12 +274,10 @@ func injectionBlocker(name, adapter string, model config.ModelConfig) string {
 	if base == "" {
 		return injectionRefusal(adapter, model)
 	}
-	// The agent CLIs speak Messages or Chat Completions, with one exception:
-	// agy always sends Gemini generateContent, so it is the one adapter that
-	// needs a google-dialect endpoint and must refuse everything else. A model
-	// on a surface only panda's own client drives (Responses) is never
-	// injected: the CLI would send the wrong request shape to a valid
-	// endpoint.
+	// Codex's injected custom provider explicitly selects wire_api="responses".
+	if adapter == "codex.py" && apiType == config.APITypeResponses {
+		return ""
+	}
 	if adapter == "antigravity.py" {
 		if apiType != config.APITypeGoogle {
 			return "antigravity (agy) always sends Gemini generateContent, but the configured model speaks " +
