@@ -70,7 +70,7 @@ type Client struct {
 	stdin       io.WriteCloser
 	stdout      *bufio.Reader
 	stdoutPipe  io.ReadCloser // closed on timeout/cleanup to unblock the reader goroutine
-	stderr      *tailBuffer
+	stderr      stderrTail
 	mu          sync.Mutex
 	writeMu     sync.Mutex
 	closeOnce   sync.Once
@@ -101,6 +101,14 @@ type rpcResponse struct {
 type rpcError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+}
+
+// stderrTail is the sink for whatever the child prints on stderr. The
+// production implementation is tailBuffer; the indirection exists so a test
+// can prove decorate reads the tail only after the copier has drained it.
+type stderrTail interface {
+	io.Writer
+	String() string
 }
 
 // tailBuffer keeps the last maxStderrTail bytes written by the child. os/exec
