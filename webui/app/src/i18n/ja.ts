@@ -2451,6 +2451,13 @@ const ja: Messages = {
   "sessions.plan.proposal": "計画の提案",
   "sessions.plan.implement": "実装を開始",
   "sessions.plan.implementGoal": "実装して目標を続行",
+  "sessions.plan.confirmed": "提案 {version} の実装を確認しました",
+  "sessions.plan.changed": "提案が変更されました。現在の版を確認してください。",
+  "sessions.plan.review": "確認して実施",
+  "sessions.plan.ready": "計画の準備ができました。確認後に実施します。",
+  "sessions.goal.raiseBudget": "予算を増やして続行",
+  "sessions.goal.budgetSummary": "{limit} トークンのうち {used} を使用済みです。使用量を上回る予算を入力してください。",
+  "sessions.goal.newBudget": "新しい予算（トークン）",
   "sessions.goal.restore": "キャッシュ目標を復元",
   "sessions.goal.legacy": "旧目標があります。明示的に復元するとバックグラウンド実行が始まります。",
 

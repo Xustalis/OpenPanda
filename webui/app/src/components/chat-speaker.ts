@@ -39,7 +39,7 @@ export interface Speaker {
 /** The subset of a turn this module reads. */
 export interface CastTurn {
   role: 'user' | 'assistant'
-  kind?: 'answer' | 'task' | 'plan' | 'error'
+  kind?: SessionTurn['kind']
   text?: string
   /** The task or plan this turn dispatched. */
   ref?: string

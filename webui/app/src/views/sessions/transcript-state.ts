@@ -51,6 +51,9 @@ export interface ChatMsg extends SessionTurn {
  *  stored prompt itself is left alone so history still replays to the model. */
 export function hydrateTurns(turns: SessionTurn[], key: (i: number) => string): ChatMsg[] {
   return turns.map((turn, i) => {
+    if (turn.kind === 'plan_confirmation' && turn.ref) {
+      return { ...turn, text: t('sessions.plan.confirmed', { version: turn.ref }), k: key(i) }
+    }
     const shown = turn.role === 'user' ? displayUserTurn(turn.text) : null
     return {
       ...turn,

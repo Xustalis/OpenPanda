@@ -2278,23 +2278,13 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	}
 	ctx, requestUsage := entry.TrackRequestUsage(ctx)
 	if scope.SessionID != "" && !scope.Side && e.db != nil {
-		state, stateErr := e.Conversations(nil).State(ctx, scope.SessionID)
+		conversations := e.Conversations(nil)
+		state, stateErr := conversations.State(ctx, scope.SessionID)
 		if stateErr != nil {
 			return nil, stateErr
 		}
-		if scope.Mode == "plan" && !state.Planning {
-			if err := e.Conversations(nil).SetPlanning(ctx, scope.SessionID, true); err != nil {
-				return nil, err
-			}
-			state.Planning = true
-			state.ModeGeneration++
-		}
-		if state.Planning {
-			scope.Mode = "plan"
-			scope.planRevision = &proposalRevision{version: state.ProposalVersion, generation: state.ModeGeneration}
-		}
 		if scope.PermissionMode == "" {
-			if st := e.Conversations(nil).sessionStore(); st != nil {
+			if st := conversations.sessionStore(); st != nil {
 				if sess, loadErr := st.Get(scope.SessionID); loadErr == nil {
 					scope.PermissionMode = sess.PermissionMode
 				}
@@ -2343,6 +2333,20 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 				}
 				_ = e.TaskStore().CloseAskRound(context.WithoutCancel(ctx), roundID, status)
 			}()
+		}
+		if scope.Mode == "plan" && !state.Planning {
+			if err := conversations.SetPlanning(ctx, scope.SessionID, true); err != nil {
+				return nil, err
+			}
+			state.Planning = true
+		}
+		if state.Planning {
+			version, generation, err := conversations.store.BeginPlanningRequest(ctx, scope.SessionID)
+			if err != nil {
+				return nil, err
+			}
+			scope.Mode = "plan"
+			scope.planRevision = &proposalRevision{version: version, generation: generation}
 		}
 	}
 	if scope.SessionID != "" && scope.RoundID != "" && !scope.Side && e.db != nil {

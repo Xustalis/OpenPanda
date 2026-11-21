@@ -2469,6 +2469,13 @@ const es: Messages = {
   "sessions.plan.proposal": "Propuesta de plan",
   "sessions.plan.implement": "Iniciar implementación",
   "sessions.plan.implementGoal": "Implementar y continuar objetivo",
+  "sessions.plan.confirmed": "Propuesta {version} confirmada para su implementación",
+  "sessions.plan.changed": "La propuesta ha cambiado. Revisa la versión actual.",
+  "sessions.plan.review": "Revisar e implementar",
+  "sessions.plan.ready": "El plan está listo. Confirma para empezar la implementación.",
+  "sessions.goal.raiseBudget": "Aumentar presupuesto y continuar",
+  "sessions.goal.budgetSummary": "Se usaron {used} de {limit} tokens. El nuevo presupuesto debe superar el consumo.",
+  "sessions.goal.newBudget": "Nuevo presupuesto (tokens)",
   "sessions.goal.restore": "Restaurar objetivo guardado",
   "sessions.goal.legacy": "Hay un objetivo anterior. Restáuralo explícitamente para iniciar el trabajo en segundo plano.",
 

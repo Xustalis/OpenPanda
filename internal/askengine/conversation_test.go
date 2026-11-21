@@ -5,6 +5,8 @@ package askengine
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -496,6 +498,17 @@ func TestPlanningBlocksMutationAndDispatchAndPersistsProposal(t *testing.T) {
 	if writes.Load() != 0 || state.ProposalVersion != 2 || !strings.Contains(state.Proposal, "Complete proposal") {
 		t.Fatalf("planning escaped: writes=%d %+v", writes.Load(), state)
 	}
+	staleVersion := state.ProposalVersion
+	if _, err := e.AskTurnsScoped(context.Background(), nil, "Clarify the revised scope", AskScope{SessionID: sess.ID}, false, StreamCallbacks{}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := service.State(context.Background(), sess.ID)
+	if err != nil || !state.Planning || state.Proposal != "" {
+		t.Fatalf("planning without a new proposal retained the previous proposal: %+v %v", state, err)
+	}
+	if _, err = service.ConfirmPlan(context.Background(), sess.ID, staleVersion); !errors.Is(err, conversation.ErrConflict) {
+		t.Fatalf("superseded proposal confirm: %v", err)
+	}
 	persisted, _ := st.Get(sess.ID)
 	if persisted.PermissionMode != "bypass" {
 		t.Fatal("original permission was overwritten")
@@ -839,5 +852,87 @@ func TestConfirmedProposalRunsExactVersionWithoutCreatingGoal(t *testing.T) {
 	persisted, _ := st.Get(sess.ID)
 	if !seen.Load() || state.Goal != nil || state.Planning || persisted.PermissionMode != "manual" {
 		t.Fatalf("implementation mismatch: seen=%v state=%+v session=%+v", seen.Load(), state, persisted)
+	}
+	if len(persisted.Turns) != 2 || persisted.Turns[0].Kind != "plan_confirmation" || persisted.Turns[0].Text != fmt.Sprintf("/plan confirm %d", version) {
+		t.Fatalf("expected a confirmation in the transcript: %+v", persisted.Turns)
+	}
+}
+
+// A goal round waiting on the model is what the thread draws as "thinking".
+// Pausing the goal must end that wait at once: leaving the request running
+// keeps the bubble spinning and the composer busy behind a paused goal bar.
+func TestGoalPauseCancelsRunningRound(t *testing.T) {
+	entered := make(chan struct{}, 1)
+	cancelled := make(chan struct{}, 1)
+	var calls atomic.Int32
+	e, _ := newBoundaryTestEngine(t, func(w http.ResponseWriter, r *http.Request) {
+		// Drain the body first: Go only notices a client disconnect while a
+		// read is outstanding, and an unread body hides the cancellation.
+		_, _ = io.Copy(io.Discard, r.Body)
+		if calls.Add(1) == 1 {
+			entered <- struct{}{}
+			<-r.Context().Done()
+			cancelled <- struct{}{}
+			return
+		}
+		_ = json.NewEncoder(w).Encode(anthropicText("resumed and verified"))
+	})
+	st := sessions.NewStore(t.TempDir())
+	sess, err := st.Create("pause cancels thinking")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := deepManualController(t, e, st)
+	ctx := context.Background()
+	g, err := s.Create(ctx, sess.ID, "verify every requirement", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.sweep()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("goal round never reached the model")
+	}
+	if err = s.Control(ctx, sess.ID, g.ID, "pause", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("pause left the model request running")
+	}
+	s.wg.Wait()
+	s.sweep()
+	state, err := s.State(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Goal.Status != "paused" || state.Goal.RoundID != "" {
+		t.Fatalf("pause did not settle the round: %+v", state.Goal)
+	}
+	persisted, err := st.Get(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Operation != nil && persisted.Operation.Status == "running" {
+		t.Fatalf("operation still running after pause: %+v", persisted.Operation)
+	}
+	// Resuming claims a fresh round instead of leaving the goal parked.
+	if err = s.Control(ctx, sess.ID, g.ID, "resume", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	s.sweep()
+	s.wg.Wait()
+	s.sweep()
+	state, err = s.State(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Goal.Rounds < 2 || state.Goal.RoundID != "" || state.Goal.Status != "active" {
+		t.Fatalf("resume did not run a fresh round: %+v", state.Goal)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("resume did not run a fresh round: calls=%d", calls.Load())
 	}
 }

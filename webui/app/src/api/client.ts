@@ -2918,7 +2918,7 @@ export interface SessionTurn {
    *  plan instead of a single task (sessions.go, `case "plan"`); its `ref` is
    *  the plan id, so the thread can draw the stages the panda cut the job
    *  into. */
-  kind?: 'answer' | 'task' | 'plan' | 'error'
+  kind?: 'answer' | 'task' | 'plan' | 'error' | 'plan_confirmation'
   ref?: string
   /** Machine reason on an error-kind turn (e.g. "model_config") — the panel
    *  stamps it so a replayed transcript keeps the matching fix-it CTA. */

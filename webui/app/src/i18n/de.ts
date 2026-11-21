@@ -2472,6 +2472,13 @@ const de: Messages = {
   "sessions.plan.proposal": "Planvorschlag",
   "sessions.plan.implement": "Umsetzung starten",
   "sessions.plan.implementGoal": "Umsetzen und Ziel fortsetzen",
+  "sessions.plan.confirmed": "Vorschlag {version} zur Umsetzung bestätigt",
+  "sessions.plan.changed": "Der Vorschlag wurde geändert. Prüfe die aktuelle Version.",
+  "sessions.plan.review": "Prüfen und umsetzen",
+  "sessions.plan.ready": "Der Plan ist fertig. Nach der Bestätigung beginnt die Umsetzung.",
+  "sessions.goal.raiseBudget": "Budget erhöhen und fortfahren",
+  "sessions.goal.budgetSummary": "{used} von {limit} Tokens verbraucht. Das neue Budget muss über dem Verbrauch liegen.",
+  "sessions.goal.newBudget": "Neues Budget (Tokens)",
   "sessions.goal.restore": "Gespeichertes Ziel wiederherstellen",
   "sessions.goal.legacy": "Ein früheres Ziel ist verfügbar. Hintergrundarbeit beginnt erst nach ausdrücklicher Wiederherstellung.",
 
