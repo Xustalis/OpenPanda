@@ -270,8 +270,11 @@ packages by subsystem.
 - **Memory & skills**: `memory` (USER.md/MEMORY.md layers, isolation
   wall, daily logs, Dreaming consolidation engine, context injector),
   `skills` (SKILL.md progressive loading + self-evolution).
-- **Data & platform**: `storage` (SQLite WAL + migrations; schema 75 includes
-  attempt-scoped child waits, artifact merge baselines and durable coordination requests), `ctxstore`,
+- **Data & platform**: `storage` (SQLite WAL + migrations; schema 77 adds
+  `conversation_plan_goal` for durable goals, goal rounds and plan runs, and
+  `detach_cleared_goal_rounds` for the detach that survives a cleared goal, on
+  top of attempt-scoped child waits, artifact merge baselines and durable
+  coordination requests), `ctxstore`,
   `sessions`, `projects`, `config` (plus `execution.go` for per-agent
   model and concurrency defaults), `configsync` (polls the shared config
   and database so a model change in one process reaches the others —
