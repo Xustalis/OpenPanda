@@ -7,6 +7,7 @@ import {
   displayVersion,
   type AuditEntry,
   type DelegationMetric,
+  type DoctorFixResult,
   type DoctorReport,
   type UpdateStatus,
 } from '../api/client'
@@ -261,18 +262,39 @@ function UpdateNotes({ notes }: { notes?: string }) {
   )
 }
 
+/** Flatten the wire's k,v pairs into the object t() interpolates. */
+function pairParams(pairs?: string[]): Record<string, string> {
+  const out: Record<string, string> = {}
+  if (!pairs) return out
+  for (let i = 0; i + 1 < pairs.length; i += 2) {
+    const k = pairs[i]
+    const v = pairs[i + 1]
+    if (k !== undefined && v !== undefined) out[k] = v
+  }
+  return out
+}
+
 /** The `/doctor` self-check suite: each check renders its i18n key label with
- *  the k=v evidence pairs inline, failures first. */
+ *  the k=v evidence pairs inline, failures first. A failure whose check
+ *  carries a `fix` id gets a repair button; the one-click button runs every
+ *  such repair in a single request. */
 function DoctorCard() {
   const [report, setReport] = useState<DoctorReport | null>(null)
   const [error, setError] = useState('')
   const [running, setRunning] = useState(false)
+  // Which repair is in flight — 'all' for the one-click button, otherwise the
+  // check key. Repairs all touch shared state, so only one runs at a time.
+  const [fixing, setFixing] = useState('')
+  // Results keyed by check key, kept across the post-fix refresh so a row that
+  // just turned green still explains what happened.
+  const [results, setResults] = useState<Record<string, DoctorFixResult>>({})
 
-  const run = useCallback(async () => {
+  const run = useCallback(async (keepResults = false) => {
     setRunning(true)
     setError('')
     try {
       setReport(await api.doctor())
+      if (!keepResults) setResults({})
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -283,7 +305,37 @@ function DoctorCard() {
     void run()
   }, [run])
 
+  const fix = useCallback(
+    async (keys: string[], exposure: string, tag: string) => {
+      setFixing(tag)
+      setError('')
+      try {
+        const out = await api.doctorFix(keys, exposure)
+        setResults((prev) => {
+          const next = { ...prev }
+          for (const r of out) next[r.key] = r
+          return next
+        })
+        // Re-read the suite so the list reflects the repair. Results survive
+        // the refresh: a row that turned green should still say why.
+        await run(true)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+      } finally {
+        setFixing('')
+      }
+    },
+    [run],
+  )
+
   const checks = report ? [...report.checks].sort((a, b) => Number(a.ok) - Number(b.ok)) : []
+  // Two failing rows can share one repair (path.no + persist.no), so count
+  // repairs rather than rows: the number is what the button will run.
+  const fixable = new Set(checks.filter((c) => !c.ok && c.fix).map((c) => c.fix))
+  const busy = running || fixing !== ''
+  // A repair can make its row disappear (two PATH rows fold into one), and a
+  // confirmation that vanishes with the row it confirms is no confirmation.
+  const orphanResults = Object.values(results).filter((r) => !checks.some((c) => c.key === r.key))
 
   return (
     <div class="detail-block">
@@ -296,27 +348,102 @@ function DoctorCard() {
               : t('system.doctorProblems', { n: report.problems })}
           </span>
         )}
-        <button class="btn small" disabled={running} onClick={() => void run()}>
-          {running ? t('system.doctorRunning') : t('system.doctorRerun')}
-        </button>
+        <div class="doctor-actions">
+          {fixable.size > 0 && (
+            <button
+              class="btn small primary"
+              disabled={busy}
+              onClick={() => void fix([], 'loopback', 'all')}
+            >
+              {fixing === 'all'
+                ? t('system.doctorFixing')
+                : t('system.doctorFixAll', { n: fixable.size })}
+            </button>
+          )}
+          <button class="btn small" disabled={busy} onClick={() => void run()}>
+            {running ? t('system.doctorRunning') : t('system.doctorRerun')}
+          </button>
+        </div>
       </div>
       {error && <p class="gate-error">{error}</p>}
       {!error && !report && <p class="dim">{t('common.loading')}</p>}
-      {report && (
-        <ul class="doctor-list">
-          {checks.map((c, i) => (
-            <li key={i} class={`doctor-check ${c.ok ? 'ok' : 'bad'}`}>
-              <span class={`doctor-mark ${c.ok ? 'ok' : 'bad'}`} aria-hidden="true">
-                {c.ok ? '✓' : '✗'}
-              </span>
-              <span class="doctor-label">{t(c.key, c.key)}</span>
-              {c.pairs && c.pairs.length > 0 && (
-                <span class="doctor-pairs dim mono">
-                  {c.pairs.filter((_, i) => i % 2 === 1).join(' · ')}
-                </span>
-              )}
+      {orphanResults.length > 0 && (
+        // A repair can make its row disappear (two PATH rows fold into one,
+        // the exposure row turns into a different pass). Confirming above the
+        // list keeps that outcome visible instead of burying it under a long
+        // page of green rows.
+        <ul class="doctor-fixes">
+          {orphanResults.map((r) => (
+            <li key={r.key} class={`doctor-fix ${r.ok ? 'ok' : 'bad'}`}>
+              {t(r.msg, pairParams(r.pairs))}
+              {r.restart ? ` · ${t('system.doctorFixRestart')}` : ''}
             </li>
           ))}
+        </ul>
+      )}
+      {report && (
+        <ul class="doctor-list">
+          {checks.map((c, i) => {
+            const res = results[c.key]
+            // The exposure row carries two repairs, so the in-flight tag is
+            // key+mode: the button the user pressed says "Fixing…", its
+            // sibling just goes quiet.
+            const busyLocal = fixing === `${c.key}:loopback`
+            const busyLan = fixing === `${c.key}:lan`
+            const rowBusy = fixing === c.key || busyLocal || busyLan
+            return (
+              <li key={`${c.key}-${i}`} class={`doctor-check ${c.ok ? 'ok' : 'bad'}`}>
+                <span class={`doctor-mark ${c.ok ? 'ok' : 'bad'}`} aria-hidden="true">
+                  {c.ok ? '✓' : '✗'}
+                </span>
+                <span class="doctor-label">{t(c.key, c.key)}</span>
+                {c.pairs && c.pairs.length > 0 && (
+                  <span class="doctor-pairs dim mono">
+                    {c.pairs.filter((_, j) => j % 2 === 1).join(' · ')}
+                  </span>
+                )}
+                {!c.ok && c.fix && (
+                  <span class="doctor-row-actions">
+                    {c.fix === 'exposure' ? (
+                      // Declaring an exposure mode is a decision, not a
+                      // default: keep the mesh on the LAN, or pull every
+                      // socket back to this machine.
+                      <>
+                        <button
+                          class="btn small"
+                          disabled={busy}
+                          onClick={() => void fix([c.key], 'loopback', `${c.key}:loopback`)}
+                        >
+                          {busyLocal ? t('system.doctorFixing') : t('system.doctorFixLocal')}
+                        </button>
+                        <button
+                          class="btn small"
+                          disabled={busy}
+                          onClick={() => void fix([c.key], 'lan', `${c.key}:lan`)}
+                        >
+                          {busyLan ? t('system.doctorFixing') : t('system.doctorFixLan')}
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        class="btn small"
+                        disabled={busy}
+                        onClick={() => void fix([c.key], '', c.key)}
+                      >
+                        {rowBusy ? t('system.doctorFixing') : t('system.doctorFix')}
+                      </button>
+                    )}
+                  </span>
+                )}
+                {res && (
+                  <span class={`doctor-fix ${res.ok ? 'ok' : 'bad'}`}>
+                    {t(res.msg, pairParams(res.pairs))}
+                    {res.restart ? ` · ${t('system.doctorFixRestart')}` : ''}
+                  </span>
+                )}
+              </li>
+            )
+          })}
         </ul>
       )}
     </div>

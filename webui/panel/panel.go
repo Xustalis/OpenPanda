@@ -259,6 +259,7 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("GET /api/onboarding", h.getOnboarding)
 	mux.HandleFunc("POST /api/onboarding", h.postOnboarding)
 	mux.HandleFunc("GET /api/doctor", h.getDoctor)
+	mux.HandleFunc("POST /api/doctor/fix", h.fixDoctor)
 	mux.HandleFunc("GET /api/context", h.getContext)
 	mux.HandleFunc("GET /api/cost", h.getCost)
 	mux.HandleFunc("GET /api/fs/read", h.readFile)

@@ -42,11 +42,23 @@ type Check struct {
 	Key   string   `json:"key"`
 	OK    bool     `json:"ok"`
 	Pairs []string `json:"pairs,omitempty"` // flattened k,v,k,v for i18n.Tf
+	// Fix names the repair that can clear this failure; empty means the fix
+	// is a human decision (a key, a URL, an installed agent CLI) rather than
+	// a write this program may perform. Repair switches on the same id, so
+	// "is it fixable" and "what fixes it" can never disagree.
+	Fix string `json:"fix,omitempty"`
 }
 
 // pass/fail build Check values; pairs are flattened k,v strings.
 func pass(key string, pairs ...string) Check { return Check{Key: key, OK: true, Pairs: pairs} }
 func fail(key string, pairs ...string) Check { return Check{Key: key, OK: false, Pairs: pairs} }
+
+// failFixable is fail with a repair attached. The console paints a repair
+// button for it and POST /api/doctor/fix runs it; `panda doctor --fix` runs
+// the same switch.
+func failFixable(fix, key string, pairs ...string) Check {
+	return Check{Key: key, OK: false, Pairs: pairs, Fix: fix}
+}
 
 // Run executes every check against the resolved config path and returns the
 // ordered results. Problems are the checks with OK=false — count them for
@@ -61,7 +73,9 @@ func Run(configPath string) []Check {
 	dir, err := install.Dir()
 	if err == nil {
 		bin := filepath.Join(dir, install.ExeName())
+		installed := false
 		if _, err := os.Stat(bin); err == nil {
+			installed = true
 			if vout, err := install.Verify(bin); err == nil {
 				add(pass("doctor.installed", "path", bin, "out", vout))
 			} else {
@@ -70,15 +84,29 @@ func Run(configPath string) []Check {
 		} else {
 			add(fail("doctor.notinstalled", "path", bin))
 		}
+		// Persistence is read from the rc file / registry, not from this
+		// process's PATH: a daemon started by launchd or systemd keeps the
+		// environment it booted with, so an entry `panda install` wrote
+		// afterwards is invisible here while a new shell already has it.
+		// Conflating the two told a correctly persisted machine to install
+		// again — and made a successful repair look like a failure.
+		persisted := install.PathPersistedAt(dir)
 		if lp, err := exec.LookPath(install.ExeName()); err == nil {
 			add(pass("doctor.path.ok", "path", lp))
-			if where := install.PathPersistedAt(dir); len(where) > 0 {
-				add(pass("doctor.persist.ok", "where", joinPaths(where)))
+			if len(persisted) > 0 {
+				add(pass("doctor.persist.ok", "where", joinPaths(persisted)))
 			} else if filepath.Clean(filepath.Dir(lp)) == filepath.Clean(dir) || strings.Contains(os.Getenv("PATH"), dir) {
 				add(pass("doctor.persist.ok", "where", "$PATH environment"))
 			} else {
-				add(fail("doctor.persist.no"))
+				add(failFixable(FixPath, "doctor.persist.no"))
 			}
+		} else if len(persisted) > 0 {
+			// Nothing left to write: the entry is on disk, this process just
+			// started before it existed. One green line instead of two reds.
+			add(pass("doctor.path.pending", "where", joinPaths(persisted)))
+		} else if installed {
+			add(failFixable(FixPath, "doctor.path.no"))
+			add(failFixable(FixPath, "doctor.persist.no"))
 		} else {
 			add(fail("doctor.path.no"))
 			add(fail("doctor.persist.no"))
@@ -189,7 +217,7 @@ func Run(configPath string) []Check {
 		exposure := cfg.Network.Exposure()
 		switch {
 		case exposure == config.ExposureLegacy && !narrowBinds(cfg.Network):
-			add(fail("doctor.network.exposure.legacy",
+			add(failFixable(FixExposure, "doctor.network.exposure.legacy",
 				"addr", cfg.Network.ListenAddr, "panel", cfg.Network.PanelAddr))
 		default:
 			add(pass("doctor.network.exposure",
@@ -203,7 +231,14 @@ func Run(configPath string) []Check {
 		// only warns once at startup — and an explicit udp_listen=off, which
 		// is deliberate but worth surfacing since it disables punching.
 		if cfg.Network.SharedSecret == "" {
-			add(fail("doctor.network.nosecret"))
+			// Minting a secret is safe only for a node that never meshed:
+			// with peers configured (or history in employee_cache) a fresh
+			// secret exiles it, and the repair refuses rather than guessing.
+			if len(cfg.Network.Peers) == 0 {
+				add(failFixable(FixSecret, "doctor.network.nosecret"))
+			} else {
+				add(fail("doctor.network.nosecret"))
+			}
 		} else {
 			add(pass("doctor.network.ok", "addr", cfg.Network.ListenAddr))
 		}
@@ -341,9 +376,16 @@ func Run(configPath string) []Check {
 	if dir := commander.AdapterDir(); dir != "" {
 		if n := adapterScriptCount(dir); n > 0 {
 			add(pass("doctor.adapters.ok", "path", dir, "count", strconv.Itoa(n)))
+		} else if AdaptersDir() != "" {
+			// A source tree exists elsewhere (a checkout beside the binary,
+			// the install prefix): copying its scripts in is a repair, not a
+			// guess. Without one the row stays advice-only.
+			add(failFixable(FixAdapters, "doctor.adapters.empty", "path", dir))
 		} else {
 			add(fail("doctor.adapters.empty", "path", dir))
 		}
+	} else if AdaptersDir() != "" {
+		add(failFixable(FixAdapters, "doctor.adapters.no"))
 	} else {
 		add(fail("doctor.adapters.no"))
 	}
@@ -566,7 +608,7 @@ func checkDBGrowth(cfg *config.Config) Check {
 		return Check{}
 	}
 	if settled > doctorSettledWarn && cfg.Storage.EffectiveTaskRetentionDays() == 0 {
-		return fail("doctor.db.growth.no",
+		return failFixable(FixRetention, "doctor.db.growth.no",
 			"settled", fmt.Sprintf("%d", settled), "audit", fmt.Sprintf("%d", audits))
 	}
 	return pass("doctor.db.growth.ok",

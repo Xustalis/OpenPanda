@@ -37,6 +37,39 @@ func (h *handler) getDoctor(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// fixDoctor serves POST /api/doctor/fix — the one-click repair behind the
+// self-check list. The body names the failing check keys to repair (empty
+// means every fixable one) and, for a legacy-exposure finding, the mode to
+// declare.
+//
+// The handler deliberately does not re-run the suite: the caller already has
+// the report it just rendered, and re-running it here would pay the model
+// endpoint and peer probes twice in one click. The console refreshes
+// /api/doctor itself once the results are in.
+func (h *handler) fixDoctor(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Keys     []string `json:"keys"`
+		Exposure string   `json:"exposure"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, errors.New("invalid JSON body"))
+		return
+	}
+	if h.cfg == nil {
+		writeErr(w, http.StatusServiceUnavailable, errors.New("config not loaded"))
+		return
+	}
+	checks := doctor.Run(h.configPath)
+	results := doctor.Repair(checks, h.configPath, req.Keys, doctor.RepairOptions{
+		Exposure: req.Exposure,
+		// mutateCfgErr runs the edit under the lock every other config writer
+		// holds, so the snapshot the daemon keeps serving and the file on
+		// disk cannot disagree.
+		Mutate: h.mutateCfgErr,
+	})
+	writeJSON(w, map[string]any{"results": results})
+}
+
 // allowedReadRoot reports whether abs may be read through /api/fs/read: the
 // workspace root, the memory tree, the per-project memory tree, or any
 // registered project's work dir. The TUI's /read is unbounded because it runs

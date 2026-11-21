@@ -206,3 +206,32 @@ func TestBindClassifiers(t *testing.T) {
 		}
 	}
 }
+
+// Default() is what `panda init` and every section writer materialise on
+// disk. A node with no config file is loopback-only (Load says so), so the
+// marshalled defaults must resolve the same way: writing the legacy bind with
+// an empty exposure_mode made resolveExposureMode read the file back as
+// LEGACY, and doctor flagged a brand-new install for a bind its owner never
+// chose.
+func TestMarshalledDefaultsResolveToLoopback(t *testing.T) {
+	out, err := marshalYAML(Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := resolveExposureMode(out, false); mode != ExposureLoopback {
+		t.Fatalf("defaults resolve to %q, want loopback", mode)
+	}
+}
+
+// A pre-0.1.5 document that only declared a bind must keep reading as legacy
+// even though Default() now names loopback — that is the compatibility rule
+// `init --force` relies on when it merges an old file over the defaults.
+func TestResolveExposureKeepsLegacyDocuments(t *testing.T) {
+	raw := []byte("network:\n  listen_addr: \"0.0.0.0:7836\"\n")
+	if got := ResolveExposure(raw); got != ExposureLegacy {
+		t.Fatalf("ResolveExposure = %q, want legacy", got)
+	}
+	if got := ResolveExposure([]byte("network:\n  exposure_mode: lan\n  listen_addr: \"0.0.0.0:7836\"\n")); got != ExposureLAN {
+		t.Fatalf("ResolveExposure = %q, want lan", got)
+	}
+}

@@ -2211,6 +2211,15 @@ export const api = {
     return request('GET', '/api/doctor')
   },
 
+  /** Apply the repairs behind the given check keys; an empty list means every
+   *  fixable finding. `exposure` only matters for a legacy-exposure repair. */
+  doctorFix(keys: string[] = [], exposure = ''): Promise<DoctorFixResult[]> {
+    return request<{ results?: DoctorFixResult[] }>('POST', '/api/doctor/fix', {
+      keys,
+      exposure,
+    }).then((r) => r.results ?? [])
+  },
+
   contextInfo(): Promise<ContextInfo> {
     return request('GET', '/api/context')
   },
@@ -2586,6 +2595,22 @@ export interface DoctorCheck {
   key: string
   ok: boolean
   pairs?: string[]
+  /** Repair id for a failure the console can fix itself (path, secret,
+   *  exposure, retention, adapters); absent means the fix is a human
+   *  decision. */
+  fix?: string
+}
+
+export interface DoctorFixResult {
+  /** The check this repair ran for. */
+  key: string
+  fix: string
+  ok: boolean
+  /** i18n key for the outcome sentence. */
+  msg: string
+  pairs?: string[]
+  /** The running process keeps its old settings until a restart. */
+  restart?: boolean
 }
 
 export interface DoctorReport {

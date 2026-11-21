@@ -208,6 +208,7 @@ panda repl      # enter the interactive command line
 panda web       # open the embedded Web console (loopback listener, auto login)
 panda service install   # register the console as a user service (survives logout/reboot)
 panda doctor    # self-check: binary / PATH / config / adapters / agents ready
+panda doctor --fix   # also repair what can be repaired: PATH persistence, shared_secret, legacy exposure, task retention, adapters
 ```
 
 > `panda service` manages the **console** service (`com.openpanda.web` on

@@ -157,15 +157,60 @@ func runInstall(args []string) {
 func runDoctor(args []string) {
 	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	fix := fs.Bool("fix", false, "apply the repairs behind fixable findings, then re-check")
+	exposure := fs.String("exposure", "", "exposure_mode to declare when fixing a legacy bind (loopback|lan; default loopback)")
 	fs.Parse(reorderFlags(fs, args))
-	rejectExtraArgs(fs, "usage: panda doctor")
+	rejectExtraArgs(fs, "usage: panda doctor [--fix] [--exposure loopback|lan]")
 
 	loc := i18n.Detect()
+	if *fix {
+		doctorApplyFixes(loc, *configPath, *exposure, os.Stdout)
+	}
 	if problems := doctorReport(loc, *configPath, os.Stdout); problems > 0 {
 		fmt.Println(i18n.Tf(loc, "doctor.fail", "n", fmt.Sprint(problems)))
 		os.Exit(1)
 	}
 	fmt.Println(i18n.T(loc, "doctor.pass"))
+}
+
+// doctorApplyFixes runs every repair the suite can perform on its own and
+// prints one line per attempt, then lets the caller re-render the report. It
+// is the terminal half of the console's one-click repair: same registry, same
+// i18n keys, so the two surfaces cannot drift on what "fix" means.
+func doctorApplyFixes(loc i18n.Locale, configPath, exposure string, out io.Writer) {
+	if out == nil {
+		out = io.Discard
+	}
+	p := pal()
+	checks := doctor.Run(configPath)
+	results := doctor.Repair(checks, configPath, nil, doctor.RepairOptions{
+		Exposure: exposure,
+		// No live config to keep in sync here: fn persists its own edits and
+		// this process is about to exit, so a fresh Load is the whole story.
+		Mutate: func(fn func(*config.Config) error) error {
+			cfg, err := config.Load(configPath)
+			if err != nil {
+				return err
+			}
+			return fn(cfg)
+		},
+	})
+	_, _ = fmt.Fprintln(out, p.Heading(i18n.T(loc, "doctor.fix.heading")))
+	if len(results) == 0 {
+		_, _ = fmt.Fprintln(out, "  "+p.Success(p.MarkOK())+" "+i18n.T(loc, "doctor.fix.none"))
+		return
+	}
+	for _, r := range results {
+		line := i18n.Tf(loc, r.Msg, r.Pairs...)
+		if r.Restart {
+			line += " — " + i18n.T(loc, "doctor.fix.restart")
+		}
+		if r.OK {
+			_, _ = fmt.Fprintln(out, "  "+p.Success(p.MarkOK())+" "+line)
+		} else {
+			_, _ = fmt.Fprintln(out, "  "+p.Danger(p.MarkFail())+" "+line)
+		}
+	}
 }
 
 // doctorReport prints the self-check report and returns the number of failed
