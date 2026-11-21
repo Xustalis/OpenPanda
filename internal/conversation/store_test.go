@@ -540,3 +540,27 @@ func TestConversationEventRetentionKeepsUnsettledBlocker(t *testing.T) {
 	}
 	checkCount(retainedConversationEvents)
 }
+
+func TestLegacyProposalReviewAndExecutionUseSameMarkdown(t *testing.T) {
+	ctx := context.Background()
+	s := &Store{DB: testdb.Open(t)}
+	body := "# Deliver\n\n1. Inspect.\n2. Check the confirmation dialog."
+	legacy := body + "\n\n---\n\n以上只是提案，**在你确认版本之前我不会改动任何文件**。告诉我是否开始。"
+	if err := s.SetPlanning(ctx, "session", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec("UPDATE conversation_controls SET proposal=?,proposal_version=1 WHERE session_id='session'", legacy); err != nil {
+		t.Fatal(err)
+	}
+	state, err := s.Get(ctx, "session")
+	if err != nil || state.Proposal != body {
+		t.Fatalf("preview=%q err=%v", state.Proposal, err)
+	}
+	if _, err := s.Confirm(ctx, "session", 1); err != nil {
+		t.Fatal(err)
+	}
+	var queued string
+	if err := s.DB.QueryRow("SELECT proposal FROM conversation_plan_runs WHERE session_id='session'").Scan(&queued); err != nil || queued != body {
+		t.Fatalf("queued=%q err=%v", queued, err)
+	}
+}

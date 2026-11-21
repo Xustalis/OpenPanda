@@ -120,14 +120,13 @@ export function PrivateResearch({ connection, taskKey, tick }: { connection: str
   </details>
 }
 
-export function SpacePolicy({ connection, space, name, tick, reload }: { connection: WorkConnection; space: string; name: string; tick: number; reload(): void }) {
+export function SpacePolicy({ connection, space, tick, reload }: { connection: WorkConnection; space: string; tick: number; reload(): void }) {
   const [open, setOpen] = useState(false)
   const policy = useWorkRead(() => open ? api.workPolicy(connection.connectionId, space) : Promise.resolve(null), [connection.connectionId, connection.authEpoch, space, open], tick)
-  return <details class="work-space-policy" onToggle={e => setOpen(e.currentTarget.open)}><summary>{name} · {t('work.automationPolicy')}</summary>
+  return <details class="work-space-policy" onToggle={e => setOpen(e.currentTarget.open)}><summary>{t('work.automationPolicy')}</summary>
     {policy.error && <p class="work-error" role="alert">{policy.error}</p>}
     {policy.data && <PolicyForm key={JSON.stringify([connection.connectionId, space, open, policy.data])} connection={connection.connectionId} space={space} initial={policy.data} reload={reload} />}
     {open && <ProjectBindings key={`${connection.connectionId}/${connection.authEpoch}/${space}`} connection={connection.connectionId} space={space} tick={tick} reload={reload} />}
-    {open && connection.capabilities?.capabilities.includes('taskWrite') && connection.scopes.includes('tasks:write') && connection.spaces.find(s => s.spaceId === space)?.scopes.includes('tasks:write') && <details><summary>{t('work.addRemote')}</summary><RemoteTaskForm connection={connection.connectionId} space={space} onSaved={reload} /></details>}
   </details>
 }
 
@@ -193,7 +192,7 @@ function ProjectBindings({ connection, space, tick, reload }: { connection: stri
 
 function PolicyForm({ connection, space, initial, reload }: { connection: string; space: string; initial: WorkPolicy; reload(): void }) {
   const [p, setP] = useState<WorkPolicy>({ ...initial, mode: initial.mode || 'before_submit', maxConcurrent: initial.maxConcurrent || 1, dailyTokens: initial.dailyTokens || 20000, preparationTokens: initial.preparationTokens || 512 })
-  const [expires, setExpires] = useState(initial.expiresAt ? localTime(initial.expiresAt) : '')
+  const [expires, setExpires] = useState(localTime(initial.expiresAt || Date.now() + 7 * 86400000))
   const [directory, setDirectory] = useState(initial.publication?.directory || '')
   const [filename, setFilename] = useState(initial.publication?.filename || 'result-{request}.txt')
   const [fullGoal, setFullGoal] = useState(initial.publication?.fullGoal || false)
@@ -215,6 +214,7 @@ function PolicyForm({ connection, space, initial, reload }: { connection: string
     <label class="work-check"><input type="checkbox" disabled={!p.execute} checked={p.finalAction} onChange={e => update({ finalAction: e.currentTarget.checked })} />{t('work.enableFinalAction')}</label>
     <label>{t('work.approvalMode')}<select value={p.mode} onChange={e => update({ mode: e.currentTarget.value as WorkPolicy['mode'] })}><option value="before_submit">{t('work.beforeSubmit')}</option><option value="after_execution">{t('work.afterExecution')}</option></select></label>
     <label>{t('work.expires')}<input type="datetime-local" required={p.research || p.execute || p.finalAction} value={expires} onInput={e => setExpires(e.currentTarget.value)} /></label>
+    <details class="space-limits"><summary>{t('work.policyLimits')}</summary>
     <div class="work-form-row">
       <label>{t('work.dailyTokens')}<input type="number" min={2300} max={1000000} value={p.dailyTokens} onInput={e => update({ dailyTokens: e.currentTarget.valueAsNumber })} /></label>
       <label>{t('work.preparationTokens')}<input type="number" min={256} max={8192} value={p.preparationTokens} onInput={e => update({ preparationTokens: e.currentTarget.valueAsNumber })} /></label>
@@ -222,6 +222,7 @@ function PolicyForm({ connection, space, initial, reload }: { connection: string
     </div>
     <label>{t('work.scopeTaskIds')}<input value={(p.taskIds || []).join(', ')} onInput={e => update({ taskIds: e.currentTarget.value.split(',').map(v => v.trim()).filter(Boolean) })} /></label>
     <label>{t('work.scopeProject')}<input value={p.projectId} onInput={e => update({ projectId: e.currentTarget.value })} /></label>
+    </details>
     {p.finalAction && <fieldset><legend>{t('work.filePublication')}</legend>
       <p class="hint">{t('work.filePublicationHint')}</p>
       <label>{t('work.directory')}<input required value={directory} onInput={e => setDirectory(e.currentTarget.value)} /></label>

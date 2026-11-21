@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// This is a browser preference for the experimental console surface. Node
-// execution/connection policies remain separate. Only an explicit opt-in
-// enables it; legacy team preferences do not opt readers into the experiment.
+// Sidebar visibility is a browser preference. Access to team data requires a device grant.
 export const TEAM_FEATURE_KEY = 'openpanda.experimental.tasks-collaboration'
 
 const listeners = new Set<() => void>()
@@ -11,9 +9,10 @@ let sessionOverride: boolean | undefined
 export function teamFeatureEnabled(): boolean {
   if (sessionOverride !== undefined) return sessionOverride
   try {
-    return localStorage.getItem(TEAM_FEATURE_KEY) === 'true'
+    const saved = localStorage.getItem(TEAM_FEATURE_KEY)
+    return saved === null || saved === 'true'
   } catch {
-    return false
+    return true
   }
 }
 

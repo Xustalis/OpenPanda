@@ -151,8 +151,8 @@ func (b *CircuitBreaker) Blocked(key string) bool {
 	if st.state == CircuitOpen {
 		return time.Since(st.openedAt) < b.cooldown
 	}
-	// Half-open: a trial is already in flight, so the circuit is not clear.
-	return true
+	// An abandoned trial must reach Allow again so it can reopen the circuit.
+	return time.Since(st.halfOpenAt) < b.cooldown
 }
 
 // BlockedKeys enumerates every key currently unavailable for new work (same
@@ -174,7 +174,9 @@ func (b *CircuitBreaker) BlockedKeys() []string {
 				out = append(out, key)
 			}
 		case CircuitHalfOpen:
-			out = append(out, key)
+			if now.Sub(st.halfOpenAt) < b.cooldown {
+				out = append(out, key)
+			}
 		}
 	}
 	sort.Strings(out)

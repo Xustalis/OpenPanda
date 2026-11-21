@@ -91,7 +91,9 @@ func (c *Core) resourceKeysFor(in TaskInput) []string {
 // deriveResourceKeys computes the queue resource locks a task holds from the
 // shape of its input: a project task serializes on the project (a shared
 // worktree admits one writer), a preferred-node pin serializes on that node,
-// and agent:/node: requires map to their resource ids. Physical actuators
+// and node: requires serialize node-wide operations. A harness pin selects
+// the executable for a private task directory. AgentConcurrency owns its
+// process limit, including when both tasks target the same node. Physical actuators
 // merge on top via mergeActuatorKeys — the spec's stated target serializes
 // even when requires reached the device through a vaguer token.
 func deriveResourceKeys(in TaskInput) []string {
@@ -111,13 +113,15 @@ func deriveResourceKeys(in TaskInput) []string {
 			queue.SessionProjectKey(in.Project, in.SessionID),
 			queue.SessionScopeKey(in.Project, in.SessionID))
 	} else {
-		if in.TargetNode != "" {
-			keys = append(keys, "node:"+in.TargetNode)
-		} else if in.PreferredNode != "" {
-			keys = append(keys, "node:"+in.PreferredNode)
+		if !slices.ContainsFunc(in.Requires, func(req string) bool { return strings.HasPrefix(req, "agent:") }) {
+			if in.TargetNode != "" {
+				keys = append(keys, "node:"+in.TargetNode)
+			} else if in.PreferredNode != "" {
+				keys = append(keys, "node:"+in.PreferredNode)
+			}
 		}
 		for _, req := range in.Requires {
-			if strings.HasPrefix(req, "agent:") || strings.HasPrefix(req, "node:") {
+			if strings.HasPrefix(req, "node:") {
 				keys = append(keys, req)
 			}
 		}
@@ -486,7 +490,7 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 	// delegate for the peer's next hello instead of attempting the socket.
 	var awaitRevival bool
 	if pinned {
-		decision = c.routePinned(ctx, pinRef, seenChain, t.Requires, resourceRequirement(t.ResourceJSON))
+		decision = c.routePinned(ctx, pinRef, seenChain, t.Requires, resourceRequirement(t.ResourceJSON), t.SpecJSON)
 		switch decision.Action {
 		case scheduler.ActionLocal:
 			return false // the pin names this node: run here — a local work dir is fine
@@ -514,7 +518,7 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 		resReq := resourceRequirement(t.ResourceJSON)
 		if len(evicted) > 0 {
 			decision = scheduler.RouteP(c.nodeID, append(slices.Clone(seenChain), evicted...),
-				eligible, c.localMatch(), t.Requires, resReq, preferredNodeOf(t), t.Project)
+				eligible, c.localMatch(t.SpecJSON), t.Requires, resReq, preferredNodeOf(t), t.Project)
 			if decision.Action == scheduler.ActionDecline {
 				// The eviction emptied the route entirely — e.g. the lapsed
 				// executor is the only capable peer. Refusing then turns a
@@ -523,7 +527,7 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 				// Re-route with the exclusion lifted; the deadline remains the
 				// real bound on how long a task may wait for a dead executor.
 				decision = scheduler.RouteP(c.nodeID, seenChain,
-					eligible, c.localMatch(), t.Requires, resReq, preferredNodeOf(t), t.Project)
+					eligible, c.localMatch(t.SpecJSON), t.Requires, resReq, preferredNodeOf(t), t.Project)
 				if decision.Action == scheduler.ActionDecline {
 					// No ONLINE node can serve it either — Route only sees
 					// live links, and the lapsed executor is down by
@@ -538,7 +542,7 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 			}
 		} else {
 			decision = scheduler.RouteP(c.nodeID, seenChain,
-				eligible, c.localMatch(), t.Requires, resReq, preferredNodeOf(t), t.Project)
+				eligible, c.localMatch(t.SpecJSON), t.Requires, resReq, preferredNodeOf(t), t.Project)
 		}
 	}
 	if decision.Action != scheduler.ActionForward {

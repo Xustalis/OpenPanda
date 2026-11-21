@@ -23,15 +23,17 @@ func WithAskRound(ctx context.Context, id string) context.Context {
 }
 
 type AskRound struct {
-	ID        string
-	SessionID string
-	Locale    string
-	Status    string // open | closed | stopped | interrupted
-	CreatedAt int64
-	Tasks     []Task
+	ID            string
+	SessionID     string
+	Locale        string
+	Status        string // open | closed | stopped | interrupted
+	CreatedAt     int64
+	Tasks         []Task
+	ConfirmedPlan bool // a confirmed implementation controller publishes its own final delivery
 	// PendingRecovery contains only failed tasks whose durable recovery decision
 	// is still outstanding. Retryability alone does not mean work is running.
 	PendingRecovery map[string]bool
+	Withdrawn       map[string]bool // branches closed by a recorded plan decision
 }
 
 func (s *TaskStore) BeginAskRound(ctx context.Context, id, sessionID, locale string) error {
@@ -99,17 +101,24 @@ func (s *TaskStore) AskRoundProgress(ctx context.Context, sessionID, roundID str
   UNION
   SELECT t.task_id FROM tasks t JOIN members m ON t.parent_id=m.id
 )
-SELECT task_id,state FROM tasks JOIN members ON task_id=members.id ORDER BY task_id`, roundID)
+SELECT t.task_id,t.state,`+withdrawnPlanStageSQL+` FROM tasks t JOIN members ON t.task_id=members.id ORDER BY t.task_id`, roundID)
 	if err != nil {
 		return r, err
 	}
 	for rows.Next() {
 		var t Task
-		if err := rows.Scan(&t.TaskID, &t.State); err != nil {
+		var withdrawn bool
+		if err := rows.Scan(&t.TaskID, &t.State, &withdrawn); err != nil {
 			rows.Close()
 			return r, err
 		}
 		r.Tasks = append(r.Tasks, t)
+		if withdrawn {
+			if r.Withdrawn == nil {
+				r.Withdrawn = make(map[string]bool)
+			}
+			r.Withdrawn[t.TaskID] = true
+		}
 	}
 	err = rows.Err()
 	rows.Close()
@@ -194,7 +203,7 @@ func (s *TaskStore) SettledAskRounds(ctx context.Context) ([]AskRound, error) {
 	if _, err := s.db.ExecContext(ctx, `UPDATE ask_rounds SET status='interrupted', closed_at=? WHERE status='open' AND lease_until<?`, s.now(), s.now()); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT round_id,session_id,locale,status,created_at FROM ask_rounds r
+	rows, err := s.db.QueryContext(ctx, `SELECT round_id,session_id,locale,status,created_at,EXISTS(SELECT 1 FROM conversation_plan_runs p WHERE p.round_id=r.round_id AND p.session_id=r.session_id) FROM ask_rounds r
   WHERE status!='open' AND reported_version != (`+askRoundVersionSQL+`) AND EXISTS(SELECT 1 FROM ask_round_tasks m WHERE m.round_id=r.round_id)
   AND NOT EXISTS(SELECT 1 FROM ask_round_tasks m JOIN tasks t ON t.task_id=m.task_id
    WHERE m.round_id=r.round_id AND t.state NOT IN (?,?,?,?)) ORDER BY r.created_at,r.round_id`, StateDone, StateFailed, StateCancelled, StateExpired)
@@ -204,7 +213,7 @@ func (s *TaskStore) SettledAskRounds(ctx context.Context) ([]AskRound, error) {
 	var out []AskRound
 	for rows.Next() {
 		var r AskRound
-		if err := rows.Scan(&r.ID, &r.SessionID, &r.Locale, &r.Status, &r.CreatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.SessionID, &r.Locale, &r.Status, &r.CreatedAt, &r.ConfirmedPlan); err != nil {
 			rows.Close()
 			return nil, err
 		}

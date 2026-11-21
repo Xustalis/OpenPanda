@@ -517,3 +517,87 @@ func TestFallbackPromptNamesTheAgentThatActuallyRuns(t *testing.T) {
 		t.Fatalf("the plan's prompt must survive verbatim after the note: %q", got)
 	}
 }
+
+func TestDispatchRouteWeightsCoverageAndTaskTraits(t *testing.T) {
+	card := ledger.Card{Agents: map[string]ledger.Agent{
+		"cheap":    {Adapter: "general.py", Capabilities: []string{"coding"}, CostTier: "low"},
+		"editor":   {Adapter: "editor.py", Capabilities: []string{"coding", "file_edit"}, CostTier: "medium", BestAt: []string{"multi_file_edits"}, NotFor: []string{"code_review"}},
+		"reviewer": {Adapter: "review.py", Capabilities: []string{"coding", "file_edit"}, CostTier: "medium", BestAt: []string{"code_review"}},
+	}}
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
+	r.SetAgentProber(func(string, ledger.Agent) bool { return true })
+	for _, tc := range []struct {
+		required     []string
+		target, want string
+	}{
+		{[]string{"coding"}, "", "cheap"},
+		{[]string{"coding", "coding", "file_edit"}, "", "editor"},
+		{[]string{"coding", "file_edit"}, "Perform the code review", "reviewer"},
+		{nil, "Perform multi-file edits", "editor"},
+		{[]string{"agent:editor", "coding"}, "Perform a code review", "editor"},
+		{[]string{"reviewer", "agent:editor"}, "", "editor"},
+	} {
+		plan, err := r.DispatchRoute(tc.required, tc.target)
+		if err != nil || plan.Agent != tc.want {
+			t.Fatalf("required=%v target=%q: got %+v, %v, want %s", tc.required, tc.target, plan, err, tc.want)
+		}
+	}
+}
+
+func TestPreflightSubstituteReceivesIdentityAndReason(t *testing.T) {
+	r := NewRouter(scoreCard(), NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
+	r.SetAgentProber(func(name string, _ ledger.Agent) bool { return name != "cheap" })
+	plan, err := r.DispatchRoute([]string{"code:modify"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const task = "report your work on this task"
+	var got string
+	r.SetAdapterRunner(func(_ context.Context, _, prompt, _ string) AgentResult { got = prompt; return AgentResult{OK: true} })
+	res := r.Execute(context.Background(), plan, task, "", true)
+	if !res.OK || res.Agent != "expensive" || res.FallbackFrom != "cheap" || res.FallbackReason != plan.FallbackReason {
+		t.Fatalf("unexpected substitute result: %+v", res)
+	}
+	if !strings.Contains(got, substitutionIdentityNote("cheap", "expensive", plan.FallbackReason)) || !strings.HasSuffix(got, task) {
+		t.Fatalf("wrong substitute prompt: %q", got)
+	}
+}
+
+func TestDispatchRouteUsesReadyPrimaryAndTier(t *testing.T) {
+	card := scoreCard()
+	candidate := card.Agents["expensive"]
+	candidate.Tier = 2
+	card.Agents["expensive"] = candidate
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
+	r.SetAgentProber(func(name string, _ ledger.Agent) bool { return name != "cheap" })
+	plan, err := r.DispatchRoute([]string{"code:modify"})
+	if err != nil || plan.Agent != "expensive" || plan.Tier != 2 || len(plan.Alternates) != 0 || plan.FallbackFrom != "cheap" {
+		t.Fatalf("unready primary reached the plan: %+v, %v", plan, err)
+	}
+	r.SetAgentBlocked(func(name string) bool { return name == "expensive" })
+	if _, err = r.DispatchRoute([]string{"code:modify"}); err == nil || !strings.Contains(err.Error(), "circuit open") {
+		t.Fatalf("blocked last candidate: %v", err)
+	}
+	if _, err = r.DispatchRoute([]string{"agent:unknown", "code:modify"}); err == nil {
+		t.Fatal("unknown pin was re-staffed")
+	}
+}
+
+func TestLoginFailureWithSessionPreventsRedispatch(t *testing.T) {
+	r := NewRouter(scoreCard(), NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
+	r.SetAgentProber(func(string, ledger.Agent) bool { return true })
+	r.SetAdapterRunner(func(context.Context, string, string, string) AgentResult {
+		return AgentResult{ExitCode: 1, Result: "Not logged in · Please run /login", SessionID: "auth-shell"}
+	})
+	p, err := r.DispatchRoute([]string{"agent:cheap"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := r.Execute(context.Background(), p, "job", "", false)
+	if result.OK || result.SessionID != "auth-shell" {
+		t.Fatalf("result: %+v", result)
+	}
+	if _, err = r.DispatchRoute([]string{"agent:cheap"}); err == nil || !strings.Contains(err.Error(), "Please run /login") {
+		t.Fatalf("login refusal not reported on next dispatch: %v", err)
+	}
+}

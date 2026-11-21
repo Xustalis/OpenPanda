@@ -87,3 +87,10 @@ func TestDeviceConsentGoldenAndAuthority(t *testing.T) {
 		t.Fatal("expired consent accepted")
 	}
 }
+
+func TestScopeHashMatchesTSyncDelivery(t *testing.T) {
+	got, err := ScopeHash(ExecutionScope{FullGoal: true})
+	if err != nil || got != "sha256:800729d537217a2d7200030fbf2f0b2391b88d660bd2b31bfdcda18fd4deb7e5" {
+		t.Fatalf("scope hash %q: %v", got, err)
+	}
+}

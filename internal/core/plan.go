@@ -123,6 +123,7 @@ type PlanSummary struct {
 	PlanID    string   `json:"plan_id"`
 	Stages    int      `json:"stages"`
 	Done      int      `json:"done"`
+	Withdrawn int      `json:"withdrawn,omitempty"`
 	Failed    int      `json:"failed"`
 	Running   int      `json:"running"`
 	Review    int      `json:"review"`
@@ -141,12 +142,12 @@ type PlanSummary struct {
 func (s *TaskStore) ListPlans(ctx context.Context) ([]PlanSummary, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT plan_id, COUNT(*), MIN(created_at), MAX(updated_at),
-		       SUM(state = 'done'), SUM(state = 'failed'),
+		       SUM(state = 'done'), SUM(`+withdrawnPlanStageSQL+`), SUM(state = 'failed'),
 		       SUM(state IN ('running', 'dispatched', 'waiting_context')), SUM(state = 'review'),
 		       GROUP_CONCAT(stage_id),
-		       (SELECT t2.title FROM tasks t2 WHERE t2.plan_id = tasks.plan_id
+		       (SELECT t2.title FROM tasks t2 WHERE t2.plan_id = t.plan_id
 		        ORDER BY t2.rowid ASC LIMIT 1)
-		FROM tasks
+		FROM tasks t
 		WHERE plan_id IS NOT NULL AND plan_id != ''
 		GROUP BY plan_id
 		ORDER BY MAX(updated_at) DESC`)
@@ -159,7 +160,7 @@ func (s *TaskStore) ListPlans(ctx context.Context) ([]PlanSummary, error) {
 		var p PlanSummary
 		var stageIDs, goal sql.NullString
 		if err := rows.Scan(&p.PlanID, &p.Stages, &p.CreatedAt, &p.UpdatedAt,
-			&p.Done, &p.Failed, &p.Running, &p.Review, &stageIDs, &goal); err != nil {
+			&p.Done, &p.Withdrawn, &p.Failed, &p.Running, &p.Review, &stageIDs, &goal); err != nil {
 			return nil, err
 		}
 		if stageIDs.Valid && stageIDs.String != "" {
@@ -387,9 +388,7 @@ func (c *Core) startPlan(ctx context.Context, p plan.Plan, q QueueSpec, req *Exe
 // idempotent and safe to call from any completion path: a stage already released
 // is no longer in submitted, and a concurrent release loses the CAS.
 //
-// Readiness is computed by rebuilding the plan from the task rows and asking
-// plan.Ready, rather than re-deriving the rule here: the rows are the plan, and
-// one implementation of "ready" is easier to trust than two.
+// Rebuild the graph from durable task rows and visit dependencies first.
 func (c *Core) AdvancePlan(ctx context.Context, planID string) error {
 	stages, err := c.store.PlanStages(ctx, planID)
 	if err != nil {
@@ -428,102 +427,60 @@ func (c *Core) AdvancePlan(ctx context.Context, planID string) error {
 	p := planFromStages(stages)
 	released := 0
 	var firstErr error
-	// Failure propagation: a stage whose dependency chain contains a failed or
-	// cancelled stage can never legitimately run — its inputs either do not
-	// exist or rest on work that was abandoned. Without this pass such a stage
-	// would park in submitted forever (PendingPlans re-sweeps it every tick to
-	// no effect). We fail the dependents instead of cancelling them so the
-	// terminal state records why the plan stopped, and we propagate transitively:
-	// stage C needing failed B needing failed A fails on both counts.
-	//
-	// A stage parked in review is NOT a failure — a human may still approve it,
-	// releasing its dependents on the next pass. Only hard-terminal non-done
-	// states propagate.
-	for _, st := range p.Stages {
-		if done[st.ID] || failed[st.ID] {
-			continue
-		}
+	// Propagate failures in dependency order even when a consumer sorts
+	// before its producer in the persisted stage listing.
+	ordered, err := plan.Order(p)
+	if err != nil {
+		return err
+	}
+	for _, st := range ordered {
 		t := byStage[st.ID]
 		if t.State != StateSubmitted {
-			continue // already released — its own terminal outcome decides it
+			continue
 		}
-		var failedDep string
+		ready := true
+		var inputErr error
 		for _, need := range st.Needs {
 			if failed[need] {
-				failedDep = need
+				inputErr = fmt.Errorf("dependency %s did not complete", need)
 				break
 			}
-		}
-		if failedDep == "" {
-			continue
-		}
-		reason := fmt.Sprintf("dependency %s did not complete", failedDep)
-		c.logger.Warn("plan: stage fails on failed dependency", "plan", planID,
-			"stage", st.ID, "dep", failedDep)
-		c.EvTrace(ctx, t.TaskID, EvPlanStageChanged, map[string]any{
-			"plan_id":          planID,
-			"stage_id":         st.ID,
-			"stage_title":      t.Title,
-			"stage_count":      len(stages),
-			"transition":       "failed",
-			"needs_satisfied":  []string{},
-			"transition_error": reason,
-		})
-		// Submitted rows cannot transition to failed directly (state machine:
-		// submitted -> queued|cancelled only), so they go through cancelled.
-		// The audit event above already records the real reason.
-		if ferr := c.store.Cancel(ctx, t.TaskID); ferr != nil {
-			c.logger.Warn("plan: cancel dependent stage", "task", t.TaskID, "err", ferr)
-			continue
-		}
-		failed[st.ID] = true // propagate transitively within this pass
-	}
-	for _, st := range plan.Ready(p, done) {
-		t := byStage[st.ID]
-		if t.State != StateSubmitted {
-			continue // already released, running, or terminal
-		}
-		inputs, err := c.planStageInputs(ctx, t, byStage, plan.Inputs(p, st.ID))
-		// Keep the initial source snapshot in every stage, including the
-		// successors that also consume predecessor trees. Dependency outputs
-		// overlay the source in deterministic plan.Inputs order.
-		if err == nil && len(t.Inputs) > 0 {
-			inputs = append(append([]bus.ArtifactRef(nil), t.Inputs...), inputs...)
-		}
-		if err != nil {
-			// A missing input is not something waiting longer can fix: the
-			// predecessor is done and produced nothing fetchable, so the stage
-			// would run on absent data. Fail it and let the plan surface that.
-			c.logger.Warn("plan: stage inputs unresolved", "plan", planID, "stage", st.ID, "err", err)
-			c.EvTrace(ctx, t.TaskID, EvPlanStageChanged, map[string]any{
-				"plan_id":          planID,
-				"stage_id":         st.ID,
-				"stage_title":      t.Title, // §3.1.1 design doc field
-				"stage_count":      len(stages),
-				"transition":       "unlocked",  // design doc enum: unlocked|started|completed
-				"needs_satisfied":  []string{},  // unlock failed → nothing is
-				"transition_error": err.Error(), // best-effort, for detail view
-			})
-			if ferr := c.store.Cancel(ctx, t.TaskID); ferr != nil {
-				c.logger.Warn("plan: cancel unresolvable stage", "task", t.TaskID, "err", ferr)
+			if !done[need] {
+				ready = false
 			}
-			if firstErr == nil {
-				firstErr = err
-			}
+		}
+		if !ready && inputErr == nil {
 			continue
 		}
-		if len(inputs) > 0 {
-			if err := c.store.SetStageInputs(ctx, t.TaskID, inputs); err != nil {
-				if firstErr == nil {
-					firstErr = err
-				}
+		var inputs []bus.ArtifactRef
+		if inputErr == nil {
+			inputs, inputErr = c.planStageInputs(ctx, t, byStage, plan.Inputs(p, st.ID))
+			if inputErr != nil && firstErr == nil {
+				firstErr = inputErr
+			}
+		}
+		if inputErr != nil {
+			// Fence a dependency failure against concurrent release or stop.
+			reason := map[string]any{"failed": inputErr.Error()}
+			err := c.store.applyTransition(ctx, t.TaskID, StateSubmitted, StateFailed, t.OwnerNode, t.AttemptID, EvResult, reason, reason, true, t.StateVersion)
+			if errors.Is(err, ErrConflict) {
 				continue
 			}
+			if err != nil {
+				return err
+			}
+			failed[st.ID] = true
+			c.EvTrace(ctx, t.TaskID, EvPlanStageChanged, map[string]any{
+				"plan_id": planID, "stage_id": st.ID, "stage_title": t.Title, "stage_count": len(stages),
+				"transition": "failed", "needs_satisfied": []string{}, "transition_error": inputErr.Error(),
+			})
+			c.logger.Warn("plan: stage blocked by dependency", "plan", planID, "stage", st.ID, "err", inputErr)
+			continue
 		}
-		if err := c.store.Queue(ctx, t.TaskID, t.OwnerNode); err != nil {
-			if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
-				// Another completion released this stage first — the expected
-				// outcome of two predecessors finishing at once, not an error.
+		// A crash before release leaves the original source snapshot intact.
+		inputs = append(append([]bus.ArtifactRef(nil), t.Inputs...), inputs...)
+		if err := c.store.releasePlanStage(ctx, t, inputs); err != nil {
+			if errors.Is(err, ErrConflict) {
 				continue
 			}
 			if firstErr == nil {
@@ -602,7 +559,7 @@ func (c *Core) planStageInputs(ctx context.Context, consumer Task, byStage map[s
 			// successor with no inputs would run it against an empty
 			// directory and surface a mystery failure two hops later; fail it
 			// here with the real name. AdvancePlan turns this error into a
-			// cancelled stage with the reason on its audit trail.
+			// failed stage with the reason in its result.
 			return nil, fmt.Errorf("stage %s finished without an output artifact to hand to stage %s", need, consumer.StageID)
 		}
 		source := ""
@@ -1165,14 +1122,14 @@ func (c *Core) DispatchChild(ctx context.Context, child Task, in TaskInput) erro
 	case strings.TrimSpace(in.TargetNode) != "":
 		// An agent-named destination is a hard pin like a user-named one:
 		// "delegate this to the GPU box" must land there or fail honestly.
-		decision = c.routePinned(ctx, in.TargetNode, child.Chain, in.Requires, resourceRequirement(in.ResourceJSON))
+		decision = c.routePinned(ctx, in.TargetNode, child.Chain, in.Requires, resourceRequirement(in.ResourceJSON), in.SpecJSON)
 		if decision.Action == scheduler.ActionForward {
 			in.TargetNode = c.stablePeerID(ctx, pinWireDest(decision))
 		}
 	default:
 		decision = scheduler.RouteP(c.nodeID, child.Chain,
 			c.eligibleForSend(ctx, needsForInput(in), c.onlineEmployees(ctx)),
-			c.localMatch(), in.Requires, resourceRequirement(in.ResourceJSON),
+			c.localMatch(in.SpecJSON), in.Requires, resourceRequirement(in.ResourceJSON),
 			in.PreferredNode, in.Project)
 	}
 	if decision.Action == scheduler.ActionForward {

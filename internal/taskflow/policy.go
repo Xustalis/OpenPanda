@@ -192,12 +192,12 @@ func eligible(c Connection, p Policy, t taskproviders.Snapshot, now time.Time) e
 	if !p.Execute || !t.Permissions.Read || !t.Permissions.Execute {
 		return errors.New("task is not authorized for automation")
 	}
-	for _, scope := range []string{"tasks:read", "execution:read", "execution:claim", "execution:report"} {
+	for _, scope := range []string{"tasks:read", "execution:read", "execution:claim", "execution:report", "delivery:write"} {
 		if !hasScope(c.Scopes, scope) || !hasScope(space.Scopes, scope) {
 			return taskproviders.ErrUnsupported
 		}
 	}
-	if !c.Capabilities.Supports("executions") {
+	if !c.Capabilities.Supports("executions") || !c.Capabilities.Supports("deliveries") || (p.FinalAction && !c.Capabilities.Supports("finalActions")) {
 		return taskproviders.ErrUnsupported
 	}
 	if len(p.TaskIDs) > 0 && !slices.Contains(p.TaskIDs, t.Key.TaskID) || p.ProjectID != "" && p.ProjectID != t.ProjectID {

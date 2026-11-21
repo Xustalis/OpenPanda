@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
-	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
@@ -214,14 +213,14 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 	// for the all-mesh fleet every policy's ExecutorOK is true and the slice
 	// passes through unchanged.
 	employees = c.eligibleForSend(ctx, needsForInput(in), employees)
-	localMatch := c.localMatch()
+	localMatch := c.localMatch(in.SpecJSON)
 	var decision scheduler.Decision
 	pinned := strings.TrimSpace(in.TargetNode) != ""
 	if pinned {
 		// A user-named node is a hard pin: the task runs there, waits for the
 		// link, or fails with the reason — it never falls back to the
 		// highest-scored candidate. See routePinned.
-		decision = c.routePinned(ctx, in.TargetNode, chain, in.Requires, resourceRequirement(in.ResourceJSON))
+		decision = c.routePinned(ctx, in.TargetNode, chain, in.Requires, resourceRequirement(in.ResourceJSON), in.SpecJSON)
 		if decision.Action == scheduler.ActionForward {
 			// Carry the stable identity on the wire (k:<pubkey> when the peer
 			// proved one, else its instance id) so downstream hops and the
@@ -400,7 +399,7 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 		// pack failed). Forwarding that blind copy loses to just running it
 		// here, so the forward only stands when the tree actually travels.
 		if in.Project == "" && in.PreferredNode == "" && in.TargetNode == "" && in.ContextType == "file" &&
-			c.localMatch()(in.Requires) && len(payload.Inputs) == 0 {
+			c.localMatch(in.SpecJSON)(in.Requires) && len(payload.Inputs) == 0 {
 			c.logger.Info("keeping file task local: no context to forward", "task", t.TaskID)
 			return c.runLocal(ctx, t, in)
 		}
@@ -1049,75 +1048,32 @@ func (c *Core) retryLoop(ctx context.Context, taskID, intent string, required []
 			c.checkpointLoop.Reset(taskID)
 			return final, result, nil
 		}
-		// A machine-readable explanation for recovery diagnostics, including
-		// skipped retries. No stderr/endpoint/credential is persisted here.
-		if result.AttemptID == "" || final.AttemptID == result.AttemptID {
-			_ = c.store.RecordEvent(ctx, taskID, EvRecoveryAssessment, map[string]any{
-				"attempt_id": result.AttemptID, "node": c.nodeID, "assessment": assessRecovery(result),
-			})
-		}
-		if result.NoRetry {
-			// A contract failure is the outcome, not a transient error: the
-			// retry budget would re-run the agent and the same checks to
-			// collect the same verdict. Stop here and let the caller show the
-			// failed row with its evidence.
-			c.loop.Reset(taskID)
-			c.checkpointLoop.Reset(taskID)
-			return final, result, nil
-		}
-		if commander.AdapterUnavailable(result.Stderr) {
-			// The agent never started: its script or interpreter is missing on
-			// this node. That is a property of the install, not of the attempt —
-			// re-running reads the same filesystem and dies the same way, and
-			// parking it in review would file "the machine is misconfigured" as
-			// "a human should judge this work". Settle as failed with the
-			// reason adapterScript already wrote: reinstalling the adapters and
-			// resubmitting is the only step that can change the outcome.
-			c.loop.Reset(taskID)
-			c.checkpointLoop.Reset(taskID)
-			return final, result, nil
-		}
 		if result.AttemptID != "" && final.AttemptID != result.AttemptID {
-			// The row was rotated (lease-expiry reroute) and re-attempted while
-			// this loop idled in backoff: the failed row now belongs to a
-			// different attempt that owns its verdict — stand down.
+			// A different attempt owns this failed row and its recovery decision.
 			return final, result, nil
 		}
-		// A provider answer that names the model itself (400 model_not_found,
-		// an id the credential's plan does not serve) is as deterministic as
-		// the authorization refusal below: the same CLI sends the same id to
-		// the same endpoint, so every attempt collects the same 400. Retrying
-		// spends the budget and buries the real fix — the agent's own model
-		// configuration — under a park that reads as "the prompt needs
-		// changing". Park once, with the provider's words as the reason.
-		if commander.IsModelConfigFailure(result.Stderr) {
-			if rerr := c.store.ReviewAttempt(ctx, taskID, c.nodeID, result.AttemptID, result.Stderr); rerr != nil {
-				c.logger.Error("failed to park task on a model configuration failure", "task", taskID, "err", rerr)
+		assessment := assessRecovery(result)
+		if err := c.store.RecordEvent(ctx, taskID, EvRecoveryAssessment, map[string]any{
+			"attempt_id": final.AttemptID, "node": c.nodeID, "assessment": assessment,
+		}); err != nil {
+			return final, result, err
+		}
+		switch assessment.Strategy {
+		case RecoveryStop:
+			c.reviewReset(taskID)
+			return final, result, nil
+		case RecoveryHumanReview:
+			disposition := ApprovalNeedsChangedInput
+			if assessment.Category == "authorization" {
+				disposition = ApprovalResumeExecution
+			}
+			err := c.store.ReviewWithDispositionAttempt(ctx, taskID, c.nodeID, final.AttemptID, result.Stderr, disposition)
+			if err != nil && !errors.Is(err, ErrConflict) {
+				return final, result, err
 			}
 			c.reviewReset(taskID)
 			final, err = c.store.Get(ctx, taskID)
-			if err != nil {
-				return Task{}, result, err
-			}
-			return final, result, nil
-		}
-		// A tier-2 authorization refusal is deterministic policy, not a
-		// failed attempt: retrying cannot produce consent, so the task goes
-		// straight to review with the actionable reason instead of burning
-		// the retry budget (and re-spawning nothing) first.
-		if commander.IsAuthorizationRefusal(result.Stderr) {
-			// Recorded at error level, but not fatal: the refusal is real
-			// regardless, and the task still has to be settled below instead of
-			// being abandoned mid-flight.
-			if rerr := c.store.ReviewWithDispositionAttempt(ctx, taskID, c.nodeID, result.AttemptID, result.Stderr, ApprovalResumeExecution); rerr != nil {
-				c.logger.Error("review with disposition failed for authorization refusal", "task", taskID, "err", rerr)
-			}
-			c.reviewReset(taskID)
-			final, err = c.store.Get(ctx, taskID)
-			if err != nil {
-				return Task{}, result, err
-			}
-			return final, result, nil
+			return final, result, err
 		}
 		// A timeout/watchdog kill (exit 124) that still carries a live agent
 		// session is a checkpoint of the same run, not a fresh failure: the
@@ -1125,7 +1081,7 @@ func (c *Core) retryLoop(ctx context.Context, taskID, intent string, required []
 		// the checkpoint budget — much larger than the failure budget, since
 		// a long task legitimately spans several wall-clock slices — while a
 		// hard failure keeps the original tight bounds.
-		checkpoint := result.ExitCode == 124 && result.AgentSessionID != ""
+		checkpoint := assessment.Strategy == RecoverySessionResume
 		var allow bool
 		if checkpoint {
 			allow = c.checkpointLoop.Allow(taskID) && !c.checkpointsExhausted(ctx, taskID)

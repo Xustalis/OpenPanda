@@ -275,11 +275,11 @@ func TestAdvancePlanPropagatesFailure(t *testing.T) {
 	g2, _ := pi.store.Get(ctx, st2.TaskID)
 	g3, _ := pi.store.Get(ctx, st3.TaskID)
 
-	if g2.State != StateCancelled {
-		t.Fatalf("st2 state = %s, want %s", g2.State, StateCancelled)
+	if g2.State != StateFailed {
+		t.Fatalf("st2 state = %s, want %s", g2.State, StateFailed)
 	}
-	if g3.State != StateCancelled {
-		t.Fatalf("st3 state = %s, want %s (transitive failure)", g3.State, StateCancelled)
+	if g3.State != StateFailed {
+		t.Fatalf("st3 state = %s, want %s (transitive failure)", g3.State, StateFailed)
 	}
 }
 

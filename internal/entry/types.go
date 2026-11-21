@@ -272,6 +272,7 @@ type PlanSpec struct {
 // only run on that node — the requires match alone is a coincidence across a
 // fleet where every machine advertises the same agent.
 type PlanStageSpec struct {
+	Independent       bool               `json:"independent,omitempty"`
 	Coordination      string             `json:"coordination,omitempty"`
 	Objectives        *objectives.Policy `json:"objectives,omitempty"`
 	Acceptance        []contract.Check   `json:"acceptance,omitempty"`

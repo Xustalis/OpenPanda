@@ -61,7 +61,9 @@ func (s *ConversationService) sessionStore() *sessions.Store {
 	return s.sessions
 }
 func (s *ConversationService) State(ctx context.Context, sid string) (conversation.State, error) {
-	return s.store.Get(ctx, sid)
+	state, err := s.store.Get(ctx, sid)
+	state.Proposal = s.engine.proposalMarkdown(state.Proposal)
+	return state, err
 }
 
 func (s *ConversationService) SetPlanning(ctx context.Context, sid string, value bool) error {
@@ -196,11 +198,14 @@ func (s *ConversationService) interruptRound(ctx context.Context, g *conversatio
 	if cancel != nil {
 		cancel()
 	}
-	round, err := s.engine.TaskStore().AskRoundProgress(ctx, g.SessionID, g.RoundID)
-	if err != nil {
+	// The progress read doubles as the guard: a round that already vanished
+	// has no session operation left to settle.
+	if _, err := s.engine.TaskStore().AskRoundProgress(ctx, g.SessionID, g.RoundID); err != nil {
 		return
 	}
-	if closeErr == nil && round.Status == "stopped" {
+	// Revocation also cancels an implementation after its dispatch round
+	// closes. Finish only the matching, still-running session operation.
+	if closeErr == nil {
 		if st := s.sessionStore(); st != nil {
 			_, _ = st.FinishRunningOperation(g.SessionID, sessions.Operation{ID: g.RoundID, Status: "cancelled"})
 		}
@@ -441,10 +446,7 @@ func (s *ConversationService) run(g *conversation.Goal) {
 	}
 	history = append(history, s.engine.historyTurns(ctx, sess, sess.SummaryTurns)...)
 	history = append(history, entry.Turn{Role: "user", Content: "[Autonomous goal runtime] Original full objective: " + g.Objective + "\nContinue until the COMPLETE objective is verified. A task result or answer does not complete the goal. Call update_goal status=complete with a concrete audit only when every requirement is met. Report the same concrete blocker in three consecutive rounds before blocking. Never change the objective, budget or paused state. Ask for missing input instead of inventing it."})
-	workDir := sess.Worktree
-	if workDir == "" {
-		workDir = s.engine.WorkPath()
-	}
+	workDir := s.engine.SessionWorkDir(sess)
 	prompt := "Continue the active goal. Inspect previous results and checkpoints, perform remaining authorized work, and verify the complete objective."
 	// Publishing a goal is not an ask: the composer files no user turn, so the
 	// thread used to open with a reply to a message nobody could see. The first

@@ -580,7 +580,7 @@ func (s *Store) AppendTurn(id string, turn Turn) (*Session, error) {
 // snapshot costs one rewind target, not the turn itself. Threads without a
 // worktree cost a file read and return immediately.
 func (s *Store) AppendTurns(id string, turns ...Turn) (*Session, error) {
-	sess, appended, err := s.appendTurns(id, turns...)
+	sess, appended, err := s.PersistTurns(id, turns...)
 	if err != nil {
 		return nil, err
 	}
@@ -596,9 +596,9 @@ func (s *Store) AppendTurns(id string, turns ...Turn) (*Session, error) {
 	return sess, nil
 }
 
-// appendTurns is AppendTurns' locked half: the cross-process and in-process
-// read-modify-write, with no snapshotting in the middle of it.
-func (s *Store) appendTurns(id string, turns ...Turn) (*Session, bool, error) {
+// PersistTurns atomically writes turns without snapshotting the worktree. A
+// controller holding a database transaction may checkpoint after its commit.
+func (s *Store) PersistTurns(id string, turns ...Turn) (*Session, bool, error) {
 	if len(turns) == 0 {
 		sess, err := s.Get(id)
 		return sess, false, err

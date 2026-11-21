@@ -446,8 +446,7 @@ func TestTUIWelcomeFitsItsTerminal(t *testing.T) {
 }
 
 // TestTUIHintLineShedsHintsWhenNarrow: the legend must never wrap or be cut
-// mid-word, and submit/quit are the two hints it may not drop. The other three
-// go in reverse order of usefulness — thought, newline, then the mouse toggle.
+// mid-word, and submit/quit are the two hints it may not drop. Other shortcuts give way as the available width shrinks.
 func TestTUIHintLineShedsHintsWhenNarrow(t *testing.T) {
 	full := newTestTUI(t)
 	full = step(full, tea.WindowSizeMsg{Width: 120, Height: 40})
@@ -457,8 +456,8 @@ func TestTUIHintLineShedsHintsWhenNarrow(t *testing.T) {
 	// (a GUI-launched terminal, most CI images): the hints were all there, only
 	// the separator had fallen back to ASCII.
 	sep := full.th.glyph("·", "|")
-	if n := strings.Count(full.hintLine(), sep); n != 4 {
-		t.Fatalf("a wide terminal should show all five hints, separators=%d in %q", n, full.hintLine())
+	if n := strings.Count(full.hintLine(), sep); n != 5 || !strings.Contains(full.hintLine(), "/plan") {
+		t.Fatalf("a wide terminal should show all six hints, separators=%d in %q", n, full.hintLine())
 	}
 
 	narrow := newTestTUI(t)

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -299,15 +300,12 @@ func TestMouseHintNamesTheNextAction(t *testing.T) {
 	// afford to lose. The mouse hint therefore has to sit after those two, so a
 	// cramped terminal drops it last instead of hiding ctrl+t while there is
 	// still room to show it.
-	idx := -1
-	for i, hint := range hints {
-		if hint == m.mouseHint() {
-			idx = i
+	mouse := slices.Index(hints, m.mouseHint())
+	for _, key := range []string{"tui.hint.newline", "tui.hint.thought"} {
+		idx := slices.Index(hints, i18n.T(i18n.English, key))
+		if idx < 0 || idx >= mouse {
+			t.Fatalf("expected %s before the mouse hint in %v", key, hints)
 		}
-	}
-	if idx != 3 {
-		t.Fatalf("mouse hint at index %d of %d, want 3 (behind the thought and newline hints): %v",
-			idx, len(hints), hints)
 	}
 }
 

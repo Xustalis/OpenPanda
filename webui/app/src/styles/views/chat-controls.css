@@ -643,6 +643,7 @@
 }
 
 .composer-proposal { display: flex; align-items: flex-start; gap: 12px; padding: 10px 14px; border-top: 1px solid var(--border); font-size: 12px; }
+.composer-plan-trigger[aria-pressed="true"] { color: var(--text); background: var(--bg-active); }
 .composer-proposal button { flex-shrink: 0; border-radius: 8px; padding: 6px 10px; }
 @media (max-width: 480px) { .composer-proposal { flex-wrap: wrap; } }
 

@@ -79,8 +79,8 @@ func TestAdvancePlanFailsStageWithoutInputArtifact(t *testing.T) {
 	if gerr != nil {
 		t.Fatalf("get train: %v", gerr)
 	}
-	if got.State != StateCancelled {
-		t.Fatalf("train = %s, want cancelled (unresolvable input must not run empty)", got.State)
+	if got.State != StateFailed {
+		t.Fatalf("train = %s, want failed (unresolvable input must not run empty)", got.State)
 	}
 }
 
@@ -129,6 +129,10 @@ func TestWaitBackoffWakesOnStateChange(t *testing.T) {
 	ctx := context.Background()
 	c := newCoreWithAgent(t, "backoff-state")
 	tk := makeFailedRow(t, c, "backoff state")
+	// The retry loop writes the recovery assessment before entering backoff.
+	if err := c.store.RecordEvent(ctx, tk.TaskID, EvRecoveryAssessment, map[string]any{"assessment": RecoveryAssessment{Strategy: RecoveryBoundedRetry}}); err != nil {
+		t.Fatal(err)
+	}
 
 	go func() {
 		time.Sleep(150 * time.Millisecond)
@@ -137,7 +141,7 @@ func TestWaitBackoffWakesOnStateChange(t *testing.T) {
 		}
 	}()
 	start := time.Now()
-	if c.waitBackoff(ctx, tk.TaskID, time.Hour) {
+	if c.waitBackoff(ctx, tk.TaskID, 6*time.Second) {
 		t.Fatal("waitBackoff = true after the row left failed, want false")
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {

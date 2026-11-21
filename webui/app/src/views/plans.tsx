@@ -60,7 +60,8 @@ export function PlansView({
 
 function PlanCard(props: { plan: PlanSummary; open: boolean; onToggle: () => void }) {
   const { plan: p } = props
-  const pct = p.stages > 0 ? Math.round((p.done / p.stages) * 100) : 0
+  const remainingScope = p.stages - (p.withdrawn ?? 0)
+  const pct = remainingScope > 0 ? Math.round((p.done / remainingScope) * 100) : 0
   return (
     <div class={`card plan-card${props.open ? ' open' : ''}`}>
       <button class="plan-card-head" onClick={props.onToggle} aria-expanded={props.open}>
@@ -78,7 +79,8 @@ function PlanCard(props: { plan: PlanSummary; open: boolean; onToggle: () => voi
           {p.running > 0 && <span class="badge blue">{p.running} {t('plans.running')}</span>}
           {p.review > 0 && <span class="badge yellow">{p.review} {t('plans.review')}</span>}
           {p.failed > 0 && <span class="badge red">{p.failed} {t('plans.failed')}</span>}
-          <span class="badge green">{p.done}/{p.stages}</span>
+          {(p.withdrawn ?? 0) > 0 && <span class="badge">{p.withdrawn} {t('plans.withdrawn')}</span>}
+          <span class="badge green">{p.done}/{remainingScope}</span>
         </div>
         <div class="plan-progress" aria-hidden="true">
           <div class="plan-progress-fill" style={{ width: `${pct}%` }} />

@@ -1,6 +1,6 @@
 # Conversation planning and persistent goals
 
-Web, interactive CLI and TUI share one conversation service. Plan and Goal controls appear after slash-command selection. The Plan marker reflects persistent planning mode; the Goal marker reflects goal editing. A started goal has its own progress bar above the composer.
+Web, interactive CLI and TUI share one conversation service. The Web composer has a Plan button and opens each new proposal as rendered Markdown. Its pressed state shows when a plan is selected; the Goal marker reflects goal editing. A started goal has its own progress bar above the composer.
 
 `/plan` toggles persistent planning. `/plan <description>` enters planning and submits the description. Planning survives subsequent messages, session switches and restarts. It overrides the permission picker with read-only access: mutation tools and implementation dispatch are refused. Exiting planning restores the original permissions.
 

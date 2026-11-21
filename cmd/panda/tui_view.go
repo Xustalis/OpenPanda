@@ -1354,6 +1354,7 @@ func (m tuiModel) hintKeys() []hint {
 	}
 	return []hint{
 		{text: i18n.T(m.loc, "tui.hint.submit")},
+		{text: "/plan", shed: 2},
 		{text: i18n.T(m.loc, "tui.hint.newline"), shed: 2},
 		{text: i18n.T(m.loc, "tui.hint.thought"), shed: 3},
 		{text: m.mouseHint(), shed: 1},

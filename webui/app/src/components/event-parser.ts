@@ -811,6 +811,25 @@ export function formatTaskEvent(type: string, rawData?: string): FormattedEvent 
         rawJson,
       }
     }
+    case 'plan_adjustment_read': {
+      return {
+        type, label: t('events.plan_adjustment_read'), tags, rawJson,
+        badgeClass: 'info', summary: str(data?.instruction) || undefined,
+      }
+    }
+    case 'plan_intervention': {
+      const target = str(data?.target_stage)
+      const action = str(data?.kind)
+      const outcome = str(data?.outcome)
+      if (target) tags.push({ key: t('events.tag.stage'), value: target })
+      if (action) tags.push({ key: t('events.tag.action'), value: action })
+      if (outcome) tags.push({ key: t('events.tag.status'), value: outcome })
+      return {
+        type, label: t('events.plan_intervention'), tags, rawJson,
+        badgeClass: outcome === 'rejected' ? 'warn' : 'info',
+        summary: [str(data?.reason), str(data?.detail)].filter(Boolean).join(' · ') || undefined,
+      }
+    }
     case 'plan_stage_changed': {
       const stage = str(data?.stage_title) || str(data?.stage_label) || str(data?.stage_id)
       const transition = str(data?.transition)

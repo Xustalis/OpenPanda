@@ -208,11 +208,17 @@ func TestFallbackChainEvent(t *testing.T) {
 		t.Fatalf("fallback should run codex adapter, ran=%q result=%+v", ran, result)
 	}
 	events, _ := c.store.Events(ctx, task.TaskID)
-	found := false
+	found, started := false, false
 	for _, e := range events {
+		if e.Type == EvExecAgentStart {
+			started = strings.Contains(e.DataJSON, "mid_tier") && !strings.Contains(e.DataJSON, "cheap")
+		}
 		if e.Type == EvAgentFallback && strings.Contains(e.DataJSON, "cheap") && strings.Contains(e.DataJSON, "mid_tier") {
 			found = true
 		}
+	}
+	if !started {
+		t.Fatal("start must identify the available executor")
 	}
 	if !found {
 		t.Fatalf("event stream must record the fallback, events=%v", events)

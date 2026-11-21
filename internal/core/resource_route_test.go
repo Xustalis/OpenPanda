@@ -88,7 +88,7 @@ func TestResourceProfileCrossesTheWire(t *testing.T) {
 // empty for a decline. It exists so the assertions above read as "where does this
 // task go" without a full delegation round trip, which is covered elsewhere.
 func (c *Core) routeTargetForTest(ctx context.Context, requires []string, resourceJSON string) string {
-	d := scheduler.Route(c.nodeID, []string{c.nodeID}, c.onlineEmployees(ctx), c.localMatch(),
+	d := scheduler.Route(c.nodeID, []string{c.nodeID}, c.onlineEmployees(ctx), c.localMatch(""),
 		requires, resourceRequirement(resourceJSON), "")
 	switch d.Action {
 	case scheduler.ActionLocal:

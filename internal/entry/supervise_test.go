@@ -110,3 +110,28 @@ func TestSuperviseUnreachableParksForReview(t *testing.T) {
 		t.Fatalf("reason = %q, want the unverified marker", v.Reason)
 	}
 }
+
+// A decision that can change live work must be made against the current graph.
+// A normal review of identical evidence must never replay its interventions.
+func TestSupervisePlanActionsRequireFreshPlanContext(t *testing.T) {
+	ctx := context.Background()
+	const answer = `{"status":"done","reason":"column verified","plan_actions":[{"kind":"adjust","target_stage":"writer","instruction":"use revised column","reason":"column changed"}]}`
+	c := startModelServer(t, answer)
+	c.SetDiskCache(NewDiskCache(newCacheDB(t)))
+	calls := 0
+	for _, graph := range []string{"", "writer running", "writer running", ""} {
+		v, err := Supervise(ctx, c, "verify", "column verified", SuperviseOptions{PlanContext: graph, BeforeCall: func() error { calls++; return nil }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if graph == "" && len(v.PlanActions) != 0 {
+			t.Fatalf("ordinary verdict carried actions: %+v", v)
+		}
+		if graph != "" && (len(v.PlanActions) != 1 || v.PlanActions[0].TargetStage != "writer" || v.PlanActions[0].Instruction != "use revised column") {
+			t.Fatalf("graph verdict lost action: %+v", v)
+		}
+	}
+	if calls != 3 {
+		t.Fatalf("%d judge calls; expected two live plan reviews and one normal verdict", calls)
+	}
+}

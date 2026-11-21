@@ -14,6 +14,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/ctxstore"
+	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/plan"
@@ -423,14 +424,14 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 		// resolving nowhere declines honestly. What it never does is fall
 		// through to scored ranking — the pin names the destination, not a
 		// preference.
-		decision = c.routePinned(ctx, p.TargetNode, chain, required, resourceRequirement(p.ResourceJSON))
+		decision = c.routePinned(ctx, p.TargetNode, chain, required, resourceRequirement(p.ResourceJSON), p.SpecJSON)
 	} else {
 		// Trust zones (experimental): a next hop whose send ceiling cannot
 		// hold what this delegate carries is not a candidate — the task
 		// routes around it instead of arriving stripped of a need.
 		decision = scheduler.RouteP(c.nodeID, chain,
 			c.eligibleForSend(ctx, trust.NeedsOf(p), c.onlineEmployees(ctx)),
-			c.localMatch(), required, resourceRequirement(p.ResourceJSON),
+			c.localMatch(p.SpecJSON), required, resourceRequirement(p.ResourceJSON),
 			p.PreferredNode, p.Project)
 	}
 
@@ -892,42 +893,35 @@ func resourceRequirement(resourceJSON string) ledger.ResourceProfile {
 	}
 }
 
-// localMatch reports whether this node's commander can route the required
-// abilities locally. A nil router (no capability card) matches nothing.
-func (c *Core) localMatch() func([]string) bool {
+// Local admission considers the same roster and permissions as execution,
+// including when this node is accepting a task from a peer.
+func (c *Core) localMatch(specJSON string) func([]string) bool {
 	return func(required []string) bool {
-		ok, _ := c.localMatchReason(required)
+		ok, _ := c.localMatchReason(required, specJSON)
 		return ok
 	}
 }
 
-// localMatchReason is localMatch with the diagnosis attached: the same
-// decision, plus the per-candidate reason PlanUnusableReason already computes
-// (missing CLI, no model, endpoint unreachable). A decline that names only the
-// requirement sends the operator back to the task text; the reason names the
-// failing check, which is the thing that can be fixed.
-func (c *Core) localMatchReason(required []string) (bool, string) {
+func (c *Core) localMatchReason(required []string, specJSON string) (bool, string) {
 	router := c.currentRouter()
 	if router == nil {
 		return false, "no router on this node"
 	}
-	plan, err := router.Route(required)
+	spec := routingTaskSpec(specJSON)
+	router, err := taskRosterRouter(router, spec, required)
 	if err != nil {
 		return false, err.Error()
 	}
-	// A static ability match is not dispatch readiness: the plan must
-	// also have a usable executor. Without this gate a node whose
-	// harnesses are all installed-but-unconfigured — or whose model
-	// endpoint is down — still claims the task, accepts it, and blocks
-	// inside the adapter instead of letting the scheduler fail over to
-	// a healthy peer.
-	if router.PlanUsable(plan) {
-		return true, ""
+	plan, err := router.DispatchRoute(required, agentTaskTraits(spec)...)
+	if err != nil {
+		return false, err.Error()
 	}
-	if why := router.PlanUnusableReason(plan); why != "" {
-		return false, why
+	if plan.Kind == "agent" && (defense.NormalizeMode(spec.PermissionMode) == defense.ModePlan || spec.Kind == entry.TaskInvestigation || spec.Kind == entry.TaskCodeQuestion) {
+		if _, err := planModeAgent(router, plan); err != nil {
+			return false, err.Error()
+		}
 	}
-	return false, "no usable executor for the plan"
+	return true, ""
 }
 
 // onlineEmployees returns the known online nodes (self included) from the

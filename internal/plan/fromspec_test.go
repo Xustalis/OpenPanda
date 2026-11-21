@@ -139,3 +139,18 @@ func TestFromSpecPreservesStageAcceptanceAndBudgets(t *testing.T) {
 		t.Fatal("unsafe artifact accepted")
 	}
 }
+
+func TestFromConfirmedSpecPreservesForwardPrerequisites(t *testing.T) {
+	p, err := FromConfirmedSpec(entry.PlanSpec{Goal: "ordered delivery", Stages: []entry.PlanStageSpec{
+		{ID: "deliver", Intent: "deliver", Needs: []string{"verify"}},
+		{ID: "verify", Intent: "verify", Needs: []string{"audit"}},
+		{ID: "audit", Intent: "audit"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := Ready(p, nil)
+	if len(ready) != 1 || ready[0].ID != "audit" {
+		t.Fatalf("ready = %+v", ready)
+	}
+}

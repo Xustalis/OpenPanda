@@ -11,10 +11,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/config"
@@ -322,6 +324,9 @@ type Plan struct {
 	// the primary agent's CLI is unavailable at execution time, execAgent
 	// falls back through this chain.
 	Alternates []string
+	// When availability displaces the top-ranked agent, retain the decision for the task trace.
+	FallbackFrom   string
+	FallbackReason string
 	// ActuatorID is set when the plan resolves to a card actuator (§7.2):
 	// the command is that actuator's driver invocation, and the run path
 	// substitutes its {intent}/{action}/{param:<name>} placeholders from the
@@ -470,8 +475,10 @@ func (r *Router) resolveAgentName(req string) (string, ledger.Agent, bool) {
 // the candidates sorted by descending score (ties broken by name, so the
 // choice stays deterministic across map iteration orders).
 //
-// Score = capability match (1.0 exact / 0.9 token-subset) × cost_tier
-// discount + preferred-agents bonus, halved while the agent sits in a
+// The score starts with average capability coverage (1 exact / 0.9 token-
+// subset), discounted by cost tier plus a preferred-agent bonus. Matching a
+// card specialty increases it by half; a not_for match halves it. Health
+// demotes the rank while the agent sits in a
 // transient-failure cooldown (agenthealth.go). A requirement of the form
 // "agent:<name>" pins that exact agent — an explicit user choice never fans
 // out to substitutes.
@@ -483,48 +490,61 @@ func (r *Router) resolveAgentName(req string) (string, ledger.Agent, bool) {
 // team is an instruction, so the smallest roster of one employee must run the
 // work rather than fail to route.
 func (r *Router) RankAgents(required []string) []AgentCandidate {
+	return r.rankAgents(required, nil)
+}
+
+func (r *Router) rankAgents(required, traits []string) []AgentCandidate {
 	for _, req := range required {
 		if name, ag, ok := r.resolveAgentName(req); ok && r.agentAllowed(name) {
 			return []AgentCandidate{{Name: name, Agent: ag, Score: 1 + r.bonus(name)}}
 		}
 	}
 
-	preferred := make(map[string]bool, len(r.preferred))
-	for _, n := range r.preferred {
-		preferred[n] = true
+	// Each distinct required ability contributes once.
+	abilities := make([]string, 0, len(required))
+	for _, req := range required {
+		if req != "" && !slices.Contains(abilities, req) {
+			abilities = append(abilities, req)
+		}
 	}
-
+	var features []string
+	for _, list := range [][]string{abilities, traits} {
+		for _, feature := range list {
+			if value := normalizedTrait(feature); value != "" {
+				features = append(features, " "+value+" ")
+			}
+		}
+	}
 	var out []AgentCandidate
-	names := make([]string, 0, len(r.card.Agents))
-	for name := range r.card.Agents {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	for _, name := range names {
-		ag := r.card.Agents[name]
-		best := 0.0
-		for _, req := range required {
+	for name, ag := range r.card.Agents {
+		coverage := 0.0
+		for _, req := range abilities {
+			match := 0.0
 			for _, cap := range ag.Capabilities {
 				if cap == req {
-					if best < 1.0 {
-						best = 1.0
-					}
-				} else if ledger.AbilityMatches(cap, req) && best < 0.9 {
-					best = 0.9
+					match = 1
+					break
+				}
+				if ledger.AbilityMatches(cap, req) {
+					match = 0.9
 				}
 			}
+			coverage += match
 		}
-		if best == 0 {
-			// A roster member with no declared match still gets a floor
-			// score; without it a one-person team could not take a task
-			// whose abilities that person's card does not spell out.
-			if len(r.allowedAgents) == 0 {
-				continue
-			}
-			best = allowedFloor
+		if coverage > 0 {
+			coverage /= float64(len(abilities))
+		} else if len(r.allowedAgents) > 0 || len(abilities) == 0 {
+			coverage = allowedFloor / float64(max(1, len(abilities)))
+		} else {
+			continue
 		}
-		score := best*costMultiplier(ag.CostTier) + r.bonus(name)
+		score := coverage*costMultiplier(ag.CostTier) + r.bonus(name)
+		if taskTraitMatches(ag.BestAt, features) {
+			score *= 1.5
+		}
+		if taskTraitMatches(ag.NotFor, features) {
+			score *= 0.5
+		}
 		// An agent the node's breaker holds open keeps its capability rank but
 		// loses to every healthy candidate: the next dispatch should not start
 		// on the agent the last three failures already ruled out. Still a
@@ -549,6 +569,25 @@ func (r *Router) RankAgents(required []string) []AgentCandidate {
 		return out[i].Name < out[j].Name
 	})
 	return out
+}
+
+// Match whole phrases so a card's code_review also matches "code review".
+func taskTraitMatches(tags, features []string) bool {
+	for _, tag := range tags {
+		if phrase := normalizedTrait(tag); phrase != "" {
+			needle := " " + phrase + " "
+			for _, feature := range features {
+				if strings.Contains(feature, needle) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func normalizedTrait(s string) string {
+	return strings.ToLower(strings.Join(strings.FieldsFunc(s, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }), " "))
 }
 
 // bonus returns the preferred-agents score bonus for name.
@@ -594,6 +633,10 @@ func (r *Router) MatchManual(required []string) (ledger.ManualAbility, bool) {
 // to run `git status` and report the task done without the agent ever
 // starting.
 func (r *Router) Route(required []string) (Plan, error) {
+	return r.route(required, nil)
+}
+
+func (r *Router) route(required, traits []string) (Plan, error) {
 	agentPinned := false
 	for _, req := range required {
 		if strings.HasPrefix(req, "agent:") {
@@ -628,16 +671,25 @@ func (r *Router) Route(required []string) (Plan, error) {
 		return Plan{Kind: "native", Ability: act.ID, Command: act.Command,
 			Args: act.Args, Tier: tier, ActuatorID: act.ID}, nil
 	}
-	cands := r.RankAgents(required)
-	if len(cands) == 0 && len(required) == 0 {
-		cands = r.RankAgents([]string{"coding", "shell", "file_edit"})
-		if len(cands) == 0 && len(r.card.Agents) > 0 {
-			for name, ag := range r.card.Agents {
-				cands = append(cands, AgentCandidate{Name: name, Agent: ag, Score: 1.0})
+	if agentPinned {
+		var target string
+		for _, req := range required {
+			name, pinned, known := r.PinnedAgentName(req)
+			if !pinned {
+				continue
 			}
-			sort.Slice(cands, func(i, j int) bool { return cands[i].Name < cands[j].Name })
+			if !known {
+				return Plan{}, fmt.Errorf("agent %q is not on this node", req)
+			}
+			if target != "" && target != name {
+				return Plan{}, fmt.Errorf("conflicting agent pins %q and %q", target, name)
+			}
+			target = name
 		}
+		// A bare CLI alias elsewhere in requires must not override the explicit pin.
+		required = []string{"agent:" + target}
 	}
+	cands := r.rankAgents(required, traits)
 	if len(cands) > 0 {
 		top := cands[0]
 		// Agent plans carry a tier like native ones, and an undeclared tier now
@@ -672,6 +724,57 @@ func (r *Router) Route(required []string) (Plan, error) {
 		return Plan{Kind: "manual", Ability: ab.ID, Notify: ab.Notify}, nil
 	}
 	return Plan{}, fmt.Errorf("no capability matches required: %v", required)
+}
+
+// DispatchRoute chooses a primary and fallback chain from the agents that
+// can receive this task now. Route is the static card lookup used for previews.
+func (r *Router) DispatchRoute(required []string, traits ...string) (Plan, error) {
+	p, err := r.route(required, traits)
+	if err != nil || p.Kind != "agent" {
+		return p, err
+	}
+	candidates := append([]string{p.Agent}, p.Alternates...)
+	reasons := make([]string, len(candidates))
+	probe := func(i int) {
+		name := candidates[i]
+		if r.agentBlocked != nil && r.agentBlocked(name) {
+			reasons[i] = "circuit open"
+			return
+		}
+		_, reasons[i] = r.dispatchReadiness(name, r.card.Agents[name])
+	}
+	if len(candidates) > 1 && r.probeAgent == nil {
+		// Each endpoint has its own deadline. Don't sum the timeouts of a
+		// node's entire roster when determining which CLI to dispatch.
+		var wg sync.WaitGroup
+		for i := range candidates {
+			wg.Go(func() { probe(i) })
+		}
+		wg.Wait()
+	} else {
+		for i := range candidates {
+			probe(i)
+		}
+	}
+	ready := make([]string, 0, len(candidates))
+	for i, name := range candidates {
+		if reasons[i] == "" {
+			ready = append(ready, name)
+		} else {
+			reasons[i] = name + ": " + reasons[i]
+		}
+	}
+	if len(ready) == 0 {
+		return Plan{}, fmt.Errorf("no usable agent for %v (%s)", required, strings.Join(reasons, "; "))
+	}
+	name := ready[0]
+	if p.Agent != name {
+		p.FallbackFrom, p.FallbackReason = p.Agent, reasons[0]
+	}
+	ag := r.card.Agents[name]
+	p.Agent, p.Ability, p.Adapter, p.Tier = name, name, ag.Adapter, max(ag.Tier, defense.TierReversible)
+	p.Alternates = ready[1:]
+	return p, nil
 }
 
 // Execute runs the plan and returns a formatted result. authorized is the
@@ -830,17 +933,15 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 				name+" ("+defense.ErrNotAuthorized.Error()+": adapter has no restricted mode; authorize the task to run it)")
 			continue
 		}
-		if !r.agentDispatchable(name, ag) {
-			// Explain the skip in dispatch terms — "no model configured",
-			// "endpoint unreachable", "cli not found" — not a bare
-			// "unavailable", so the failure that eventually surfaces names
-			// the fix (configure a key, restore egress, install the CLI).
-			reason := "cli unavailable"
-			if _, why := r.agentUsable(name, ag); why != "" {
-				reason = why
-			}
+		if ok, reason := r.dispatchReadiness(name, ag); !ok {
 			unavailable = append(unavailable, name+" ("+reason+")")
 			continue
+		}
+		if ag.Tier > plan.Tier {
+			if err := defense.Authorize(ag.Tier, Authorized(ctx)); err != nil {
+				unavailable = append(unavailable, name+" ("+err.Error()+")")
+				continue
+			}
 		}
 		// The run is starting on a fallback candidate: say so NOW, at the
 		// switch, not only in the end-of-round fallback record — an
@@ -848,6 +949,7 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 		// an agent that never launched while the real runner works for
 		// minutes underneath it.
 		runPrompt := prompt
+		fallbackFrom, fallbackReason := plan.FallbackFrom, plan.FallbackReason
 		if name != plan.Agent {
 			reason := "primary failed or skipped"
 			if len(unavailable) > 0 {
@@ -856,15 +958,13 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 			if sink, ok := ctx.Value(progressKey{}).(ProgressFunc); ok {
 				sink(fmt.Sprintf("agent fallback — %s; %s is running this round", reason, name), "agent_switch")
 			}
-			// The substitute has to be told who it is. The prompt was written
-			// for the plan's agent and keeps naming it — a supervision
-			// followup like "report your identity as grok_build" arrives
-			// verbatim at the agent that stepped in, and an honest model
-			// answers it honestly: it reports itself as grok_build, claims the
-			// commands grok_build never ran, and the swap note on the result
-			// then contradicts the report underneath it. Naming the real
-			// runner at the top of its prompt is what keeps the two consistent.
-			runPrompt = substitutionIdentityNote(plan.Agent, name, reason) + "\n\n" + prompt
+			fallbackFrom, fallbackReason = plan.Agent, reason
+			if len(unavailable) > 0 {
+				fallbackReason = substitutionReason(plan.Agent, unavailable[0])
+			}
+		}
+		if fallbackFrom != "" && fallbackFrom != name {
+			runPrompt = substitutionIdentityNote(fallbackFrom, name, fallbackReason) + "\n\n" + prompt
 		}
 		// The tools policy rides the context (the runAdapter seam's signature
 		// stays unchanged for tests); runAdapterProcess copies it into the
@@ -964,9 +1064,9 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 		// swap from a bait-and-switch: which agent the plan pinned, and why it
 		// never answered. Both come from the attempt that failed — the
 		// successful fallback's own Result knows neither.
-		if i > 0 && plan.Agent != "" && len(unavailable) > 0 {
-			res.FallbackFrom = plan.Agent
-			res.FallbackReason = substitutionReason(plan.Agent, unavailable[0])
+		if fallbackFrom != name {
+			res.FallbackFrom = fallbackFrom
+			res.FallbackReason = fallbackReason
 		}
 
 		// If execution succeeded, or if user explicitly cancelled, return immediately.
@@ -983,6 +1083,11 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 		// alternate here would cold-start a different CLI at minute zero and
 		// overwrite the persisted handle with the alternate's fresh session,
 		// discarding everything the timed-out run accumulated.
+		if ar.SessionID != "" && ar.ExitCode != 124 && ar.Tokens == 0 && !ar.WorkObserved && IsAuthenticationSetupRequired(describeAgentFailure(ar)) {
+			// Some CLIs mint a session before they verify login. Preserve the
+			// checkpoint but remember the explicit refusal for future dispatches.
+			r.markAgentDispatchFailure(name, describeAgentFailure(ar))
+		}
 		if ar.ExitCode == 124 && ar.SessionID != "" {
 			return res
 		}
@@ -1447,6 +1552,20 @@ func isProviderFailureOrAuth(text string) bool {
 	return providerStatusRE.MatchString(low) || providerTimeoutRE.MatchString(low)
 }
 
+// IsAuthenticationSetupRequired recognizes a short CLI login diagnostic.
+func IsAuthenticationSetupRequired(s string) bool {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if len(s) > 512 {
+		return false
+	}
+	for _, prefix := range []string{"not logged in", "not signed in", "please run /login", "login required", "invalid api key", "invalid_api_key", "missing api key"} {
+		if s == prefix || strings.HasPrefix(s, prefix+" ") || strings.HasPrefix(s, prefix+":") {
+			return true
+		}
+	}
+	return false
+}
+
 // IsModelConfigFailure reports a provider answer that names the model itself:
 // the endpoint does not serve this id to the credential the CLI is configured
 // with. It is the one class of 400 a blind re-run cannot improve — the CLI,
@@ -1651,13 +1770,20 @@ func (r *Router) agentCooldown(name string) (time.Duration, string, bool) {
 // recent-failure memory. execAgent and Route both go through it so a test
 // prober cannot accidentally bypass a cooldown the last run just recorded.
 func (r *Router) agentDispatchable(name string, ag ledger.Agent) bool {
-	if _, _, cooling := r.agentCooldown(name); cooling {
-		return false
-	}
+	ok, _ := r.dispatchReadiness(name, ag)
+	return ok
+}
+
+func (r *Router) dispatchReadiness(name string, ag ledger.Agent) (bool, string) {
 	if r.probeAgent != nil {
-		return r.probeAgent(name, ag)
+		if _, _, cooling := r.agentCooldown(name); !cooling {
+			if r.probeAgent(name, ag) {
+				return true, ""
+			}
+			return false, "not dispatchable"
+		}
 	}
-	return r.AgentDispatchable(name, ag)
+	return r.agentUsable(name, ag)
 }
 
 // AgentDispatchable reports whether an agent is ready to receive a task right

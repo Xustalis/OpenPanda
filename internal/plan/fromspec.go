@@ -24,6 +24,47 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/objectives"
 )
 
+// FromConfirmedSpec preserves the order of a reviewed proposal when a model
+// omits a prerequisite. Additional independent roots must opt into parallel
+// execution explicitly; stages with declared dependencies keep those edges.
+func FromConfirmedSpec(spec entry.PlanSpec) (Plan, error) {
+	p, err := FromSpec(spec)
+	if err != nil {
+		return Plan{}, err
+	}
+	// A plan may declare consumers before their producers. Walk the
+	// already-validated graph before adding an implicit edge: explicit
+	// dependencies always win over the declaration-order fallback.
+	byID := make(map[string]*Stage, len(p.Stages))
+	for i := range p.Stages {
+		byID[p.Stages[i].ID] = &p.Stages[i]
+	}
+	for i := 1; i < len(p.Stages); i++ {
+		stage := &p.Stages[i]
+		if len(stage.Needs) != 0 || spec.Stages[i].Independent {
+			continue
+		}
+		previous := &p.Stages[i-1]
+		if !dependsOn(byID, previous, stage.ID, map[string]bool{}) {
+			stage.Needs = []string{previous.ID}
+		}
+	}
+	return p, nil
+}
+
+func dependsOn(stages map[string]*Stage, stage *Stage, target string, seen map[string]bool) bool {
+	if seen[stage.ID] {
+		return false
+	}
+	seen[stage.ID] = true
+	for _, need := range stage.Needs {
+		if need == target || dependsOn(stages, stages[need], target, seen) {
+			return true
+		}
+	}
+	return false
+}
+
 // FromSpec converts a model-emitted plan into an executable Plan, validating it.
 // A stage with no title borrows its intent's first line: the title is what shows
 // up on the task board, and "stage 2" tells an operator nothing.

@@ -961,7 +961,6 @@ func (r *repl) askContext(text string) ([]entry.Turn, string) {
 // next turn replays it as the model's own words), or the pointer summary
 // otherwise.
 func (r *repl) recordOutcome(ctx context.Context, text string, out *askengine.Result) {
-	defer r.printProposalConfirmation()
 	if out == nil {
 		return
 	}
@@ -1280,6 +1279,9 @@ func (r *repl) askMode(text, mode string) {
 			if tail != "" {
 				r.outln(r.renderMd(tail))
 			}
+		}
+		if review := proposalReview(r.loc, out, out.Answer); review != "" {
+			r.outln(r.renderMd(review))
 		}
 	case "clarify":
 		// No choice card on the line REPL: print the rendered question and

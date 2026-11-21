@@ -2161,6 +2161,9 @@ export function SessionsView({
     if (goal && activeId) setGoalEditor({ sid: activeId, id: goal.id, text: goal.text })
   }
 
+  // Arming the chip is local state; the backend turns planning on when the ask
+  // arrives with mode=plan, so leaving the mode is the only call that needs a
+  // session to exist.
   async function exitPlanning() {
     const sid = activeIdRef.current
     if (!sid) return
@@ -3022,7 +3025,7 @@ export function SessionsView({
               />
               <PermissionPicker value={permission} onChange={pickPermission} />
               {(armed === 'goal' || goalEditor?.sid === activeId) && <button type="button" class="composer-goal-trigger" title={t('sessions.goal.hint')} onClick={() => { setGoalEditor(null); setArmed(null); if (goalDraft !== null) removeModeCommand() }}><Icon name="target" size={16} />{t('sessions.goal.label')}</button>}
-              {(armed === 'plan' || controlState?.planning) && <button type="button" class="composer-goal-trigger composer-plan-trigger" title={t(armed === 'plan' && !controlState?.planning ? 'sessions.plan.hint' : 'sessions.plan.exit')} onClick={() => { if (controlState?.planning) void exitPlanning(); setArmed(null); if (planArgument(input) !== null) removeModeCommand() }}><Icon name="lightbulb" size={16} />{t('sessions.plan.label')}</button>}
+              {(armed === 'plan' || controlState?.planning) && <button type="button" class="composer-goal-trigger composer-plan-trigger" aria-pressed={armed === 'plan'} title={t(armed === 'plan' && !controlState?.planning ? 'sessions.plan.hint' : 'sessions.plan.exit')} onClick={() => { if (controlState?.planning) void exitPlanning(); setArmed(null); if (planArgument(input) !== null) removeModeCommand() }}><Icon name="lightbulb" size={16} />{t('sessions.plan.label')}</button>}
               {/* The model switch, immediately left of Send — the row's right
                   edge is where you reach for before sending, and "which model"
                   is the one more thing that decision wants asked. WorkBuddy's

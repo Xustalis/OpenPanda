@@ -1377,6 +1377,9 @@ var messages = map[Locale]map[string]string{
 		"ask.loop.noConvergePlan": "Tool calls did not converge after {n} rounds; the model's final suggestion was the multi-stage plan \"{goal}\", but no capability card is loaded, so it cannot be started.",
 		"ask.plan.invalid":        "The plan cannot run: {err}",
 		"ask.plan.synthesisTitle": "Integrate and deliver the final answer",
+		"ask.plan.auditTitle":     "Plan audit",
+		"ask.plan.auditRead":      "read",
+		"ask.plan.auditEarlier":   "{n} earlier decisions are available in the task event history.",
 	},
 	ChineseSimp: {
 		"doctor.network.exposure":           "网络暴露级别 {mode}：总线 {addr}，控制台 {panel}，数据报 {udp}。",
@@ -2739,6 +2742,9 @@ var messages = map[Locale]map[string]string{
 		"ask.loop.noConvergePlan": "已连续调用 {n} 轮工具未收敛；模型最终建议多阶段计划「{goal}」，但当前未加载能力卡片，无法启动。",
 		"ask.plan.invalid":        "计划无法执行：{err}",
 		"ask.plan.synthesisTitle": "整合结果并交付最终答案",
+		"ask.plan.auditTitle":     "计划审计",
+		"ask.plan.auditRead":      "已读",
+		"ask.plan.auditEarlier":   "另有 {n} 条较早的决定可在任务事件记录中查看。",
 	},
 	Japanese: {
 		"doctor.network.exposure":                "ネットワーク公開範囲 {mode}：バス {addr}、コンソール {panel}、データグラム {udp}。",
@@ -4086,6 +4092,9 @@ var messages = map[Locale]map[string]string{
 		"ask.loop.noConvergePlan": "ツール呼び出しが {n} ラウンドで収束しませんでした。モデルの最終提案はマルチステージ計画「{goal}」でしたが、能力カードが未ロードのため開始できません。",
 		"ask.plan.invalid":        "計画を実行できません：{err}",
 		"ask.plan.synthesisTitle": "結果を統合して最終回答を届ける",
+		"ask.plan.auditTitle":     "計画の監査",
+		"ask.plan.auditRead":      "既読",
+		"ask.plan.auditEarlier":   "以前の決定 {n} 件はタスクのイベント履歴で確認できます。",
 	},
 	Spanish: {
 		"doctor.network.exposure":                "Exposición de red {mode}: bus {addr}, consola {panel}, datagramas {udp}.",
@@ -5433,6 +5442,9 @@ var messages = map[Locale]map[string]string{
 		"ask.loop.noConvergePlan": "Las llamadas a herramientas no convergieron tras {n} rondas; la sugerencia final del modelo fue el plan multietapa «{goal}», pero no hay tarjeta de capacidades cargada, así que no se puede iniciar.",
 		"ask.plan.invalid":        "El plan no puede ejecutarse: {err}",
 		"ask.plan.synthesisTitle": "Integrar resultados y entregar la respuesta final",
+		"ask.plan.auditTitle":     "Auditoría del plan",
+		"ask.plan.auditRead":      "leído",
+		"ask.plan.auditEarlier":   "Hay {n} decisiones anteriores en el historial de eventos de las tareas.",
 	},
 	German: {
 		"doctor.network.exposure":                "Netzwerk-Exposition {mode}: Bus {addr}, Konsole {panel}, Datagramme {udp}.",
@@ -6780,5 +6792,8 @@ var messages = map[Locale]map[string]string{
 		"ask.loop.noConvergePlan": "Die Tool-Aufrufe konvergierten nach {n} Runden nicht; der finale Vorschlag des Modells war der mehrstufige Plan „{goal}“, aber es ist keine Fähigkeitskarte geladen — Start nicht möglich.",
 		"ask.plan.invalid":        "Der Plan kann nicht ausgeführt werden: {err}",
 		"ask.plan.synthesisTitle": "Ergebnisse integrieren und die finale Antwort liefern",
+		"ask.plan.auditTitle":     "Planprüfung",
+		"ask.plan.auditRead":      "gelesen",
+		"ask.plan.auditEarlier":   "{n} frühere Entscheidungen stehen im Ereignisverlauf der Aufgaben.",
 	},
 }

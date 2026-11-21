@@ -33,9 +33,9 @@ afterEach(() => {
   else Reflect.deleteProperty(globalThis, 'window')
 })
 
-test('the experiment requires an explicit opt-in and ignores legacy preferences', () => {
+test('a new browser shows the board and honors an explicit opt-out', () => {
   values.set('openpanda.team', 'true')
-  assert.equal(teamFeatureEnabled(), false)
+  assert.equal(teamFeatureEnabled(), true)
   for (const value of ['', 'false', '1', 'yes', 'garbage']) {
     values.set(TEAM_FEATURE_KEY, value)
     assert.equal(teamFeatureEnabled(), false)
@@ -70,15 +70,15 @@ test('other tabs and clearing storage update subscribers; unrelated keys do not'
     storageEvent(TEAM_FEATURE_KEY)
     values.clear()
     storageEvent(null)
-    assert.deepEqual(seen, [true, false])
+    assert.deepEqual(seen, [true, true])
   } finally { stop() }
   storageEvent(TEAM_FEATURE_KEY)
-  assert.deepEqual(seen, [true, false])
+  assert.deepEqual(seen, [true, true])
 })
 
-test('unavailable storage defaults off and permits toggling for the current page', () => {
+test('unavailable storage defaults on and permits toggling for the current page', () => {
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, get() { throw new Error('blocked') } })
-  assert.equal(teamFeatureEnabled(), false)
+  assert.equal(teamFeatureEnabled(), true)
   setTeamFeatureEnabled(true)
   assert.equal(teamFeatureEnabled(), true)
   setTeamFeatureEnabled(false)

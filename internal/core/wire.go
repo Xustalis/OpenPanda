@@ -303,14 +303,14 @@ func (c *Core) rerouteDeclined(ctx context.Context, taskID string) bool {
 	resReq := resourceRequirement(t.ResourceJSON)
 
 	decision := scheduler.RouteP(c.nodeID, append(slices.Clone(seenChain), evicted...),
-		eligible, c.localMatch(), t.Requires, resReq, "", t.Project)
+		eligible, c.localMatch(t.SpecJSON), t.Requires, resReq, "", t.Project)
 	revival := false
 	if decision.Action == scheduler.ActionDecline && len(evicted) > 0 {
 		// Excluding the lapsed executor left no route — with no alternate it
 		// is still the only place this task can run, and parking the delivery
 		// on the outbox beats a terminal decline over a transient silence.
 		decision = scheduler.RouteP(c.nodeID, seenChain,
-			eligible, c.localMatch(), t.Requires, resReq, "", t.Project)
+			eligible, c.localMatch(t.SpecJSON), t.Requires, resReq, "", t.Project)
 		if decision.Action == scheduler.ActionDecline {
 			// No ONLINE route exists at all — Route never sees the evicted
 			// executor because its link is down. The delivery parks in

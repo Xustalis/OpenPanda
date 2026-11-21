@@ -64,8 +64,13 @@ function jobAgent(job: RoundJob) {
 function JobSpeaker({ job, finished }: { job: RoundJob; finished?: boolean }) {
   const agent = jobAgent(job)
   const state = job.task?.state
+  // A stalled review is the more specific fact: the task stopped moving for a
+  // reason, and saying which dependencies it waits for would read as progress.
+  const waitingForDependencies = state === 'submitted' && job.task?.plan_meta?.needs
   const stateLabel = job.task && isStalledReview(job.task)
-    ? t('detail.stalledReview') : t(state ? `state.${state}` : 'sessions.round.unknown')
+    ? t('detail.stalledReview')
+    : t(waitingForDependencies ? 'sessions.round.waitingForDependencies'
+      : state ? `state.${state}` : 'sessions.round.unknown')
   const report = finished ? currentRoundReport(job) : undefined
   const timestamp = report?.ts ?? (job.task ? Date.parse(job.task.updated_at) / 1000 : 0)
   const stamp = finished && Number.isFinite(timestamp) && clockTime(timestamp, locale())
@@ -242,7 +247,7 @@ export function SessionTaskRound({ round, reportSelection, onReport, onOpenTask,
       </div>
     </> : <>
       <RoundFold speaker={<PandaSpeaker ts={stamp} />} header={<>
-        <strong class="session-round-subject">{t('sessions.round.dispatched', { n: round.jobs.length })}</strong>
+        <strong class="session-round-subject">{t('sessions.round.total', { n: round.jobs.length })}</strong>
         {round.running >= 2 && <span class="session-round-parallel" data-testid="parallel-execution">{t('sessions.round.parallel')}</span>}
         {round.running > 0 && <span class="session-round-meta">{t('sessions.round.running', { n: round.running })}</span>}
         {round.waiting > 0 && <span class="session-round-meta">{t('sessions.round.queued', { n: round.waiting })}</span>}

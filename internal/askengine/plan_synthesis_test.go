@@ -74,3 +74,38 @@ func TestPlanDeliveryChecksKeepBothRequirements(t *testing.T) {
 		t.Fatalf("lost or duplicated a delivery requirement: %+v %v", checks, err)
 	}
 }
+
+func TestConfirmedImplementationPreservesOrderAndIndependentBranches(t *testing.T) {
+	e, store, ctx := newStageTestEngine(t)
+	e.queueTasks = true
+	spec := &entry.PlanSpec{Goal: "Audit first, render second, run a separate inventory in parallel, then deliver", FinalStage: "deliver", Stages: []entry.PlanStageSpec{
+		{ID: "audit", Intent: "Inspect the implementation."},
+		{ID: "render", Intent: "Render the inspected implementation.", Needs: []string{}},
+		{ID: "inventory", Intent: "Inspect an unrelated input.", Independent: true},
+		{ID: "deliver", Intent: "Verify and deliver.", Needs: []string{"render", "inventory"}},
+	}}
+	res, err := e.startClassifiedPlan(ctx, spec, AskScope{confirmedImplementation: true}, false, StreamCallbacks{})
+	if err != nil || !res.OK {
+		t.Fatalf("start plan: %+v %v", res, err)
+	}
+	stages, err := store.PlanStages(ctx, res.PlanID)
+	if err != nil || len(stages) != 4 {
+		t.Fatalf("stages=%+v err=%v", stages, err)
+	}
+	for _, st := range stages {
+		switch st.StageID {
+		case "audit", "inventory":
+			if st.State != core.StateQueued || len(st.Needs) != 0 {
+				t.Fatalf("independent stage not ready: %+v", st)
+			}
+		case "render":
+			if st.State != core.StateSubmitted || len(st.Needs) != 1 || st.Needs[0] != "audit" {
+				t.Fatalf("render dispatched before audit: %+v", st)
+			}
+		case "deliver":
+			if st.State != core.StateSubmitted || len(st.Needs) != 2 {
+				t.Fatalf("lost final join: %+v", st)
+			}
+		}
+	}
+}

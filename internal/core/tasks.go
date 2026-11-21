@@ -619,7 +619,7 @@ func (s *TaskStore) applyState(ctx context.Context, taskID, from, to, owner, att
 	return s.applyTransition(ctx, taskID, from, to, owner, attemptID, event, data, result, false)
 }
 
-func (s *TaskStore) applyTransition(ctx context.Context, taskID, from, to, owner, attemptID, event string, data, result any, checkOwner bool) error {
+func (s *TaskStore) applyTransition(ctx context.Context, taskID, from, to, owner, attemptID, event string, data, result any, checkOwner bool, expectVersion ...int) error {
 	now := s.now()
 	dataJSON, _ := json.Marshal(data)
 	var resultJSON any
@@ -644,6 +644,10 @@ func (s *TaskStore) applyTransition(ctx context.Context, taskID, from, to, owner
 		if attemptID != "" {
 			query += " AND attempt_id=?"
 			args = append(args, attemptID)
+		}
+		if len(expectVersion) > 0 {
+			query += " AND state_version=?"
+			args = append(args, expectVersion[0])
 		}
 		res, err := tx.ExecContext(ctx, query, args...)
 		if err != nil {
@@ -3157,16 +3161,30 @@ func (s *TaskStore) recoverBatchTx(ctx context.Context, tx *sql.Tx, from []strin
 // merely moved between active states is still cancellable, and the loop lands
 // the cancel on the fresh state.
 func (s *TaskStore) Cancel(ctx context.Context, taskID string) error {
+	_, err := s.cancelUnsettled(ctx, taskID)
+	return err
+}
+
+func (s *TaskStore) cancelUnsettled(ctx context.Context, taskID string) (bool, error) {
 	for attempt := 0; attempt < 5; attempt++ {
 		cur, err := s.Get(ctx, taskID)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if Terminal(cur.State) {
-			return nil // already done/cancelled/expired
+			return false, nil // already done/cancelled/expired
+		}
+		if cur.State == StateFailed {
+			events, err := s.Events(ctx, taskID)
+			if err != nil {
+				return false, err
+			}
+			if !RecoveryPending(events) {
+				return false, nil // preserve the settled error and its cause
+			}
 		}
 		if !CanTransition(cur.State, StateCancelled) {
-			return fmt.Errorf("%w: %s -> %s", ErrIllegal, cur.State, StateCancelled)
+			return false, fmt.Errorf("%w: %s -> %s", ErrIllegal, cur.State, StateCancelled)
 		}
 		// Guarded UPDATE (P1-4): a concurrent Complete between the pre-check and
 		// this write must win — overwriting done back to cancelled would lose the
@@ -3186,13 +3204,13 @@ func (s *TaskStore) Cancel(ctx context.Context, taskID string) error {
 			}
 			return s.recordEventTx(ctx, tx, taskID, EvCancel, map[string]any{"from": cur.State})
 		}); err != nil {
-			return err
+			return false, err
 		}
 		if !conflicted {
-			return nil
+			return true, nil
 		}
 	}
-	return fmt.Errorf("%w: task %s cancelled concurrently", ErrConflict, taskID)
+	return false, fmt.Errorf("%w: task %s cancelled concurrently", ErrConflict, taskID)
 }
 
 // CancelCascade cancels taskID and every descendant. Descendants are found by
@@ -3223,10 +3241,13 @@ func (s *TaskStore) cancelCascade(ctx context.Context, taskID string, visited ma
 		return err
 	}
 	if !Terminal(cur.State) {
-		if err := s.Cancel(ctx, taskID); err != nil {
+		changed, err := s.cancelUnsettled(ctx, taskID)
+		if err != nil {
 			return err
 		}
-		*cancelled = append(*cancelled, taskID)
+		if changed {
+			*cancelled = append(*cancelled, taskID)
+		}
 	}
 	children, err := s.Children(ctx, taskID)
 	if err != nil {

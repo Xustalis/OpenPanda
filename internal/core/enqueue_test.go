@@ -369,6 +369,24 @@ func TestEnqueueRoutesToPeer(t *testing.T) {
 	t.Fatal("queued task never reached done via peer within deadline")
 }
 
+func TestPrivateTasksPinnedToSameHarnessHaveIndependentLocks(t *testing.T) {
+	c := queueTestCore(t)
+	for _, pin := range []string{"agent:claude_code", "agent:codex"} {
+		var keys []string
+		for _, title := range []string{"left", "right"} {
+			row, err := c.Enqueue(context.Background(), TaskInput{Title: title, Intent: title, Requires: []string{pin}, TargetNode: c.nodeID}, DefaultQueueSpec())
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := queue.DefaultKeys(row.ResourceKeys, row.Project, row.WorkDir, row.TaskID)
+			if len(got) != 1 || slices.Contains(keys, got[0]) || got[0] != "task:"+row.TaskID {
+				t.Fatalf("%s private workspace acquired %v, previous %v", pin, got, keys)
+			}
+			keys = append(keys, got[0])
+		}
+	}
+}
+
 // TestAnonymousTasksRunInParallel is the end-to-end proof of the
 // serialization fix: two anonymous tasks — no keys, no project, no pinned
 // work dir — occupy one private work dir each (prepareRunDir's
@@ -482,7 +500,9 @@ func TestSameWorkDirSerializes(t *testing.T) {
 		t.Fatalf("enqueue second: %v", err)
 	}
 
-	deadline := time.Now().Add(3 * time.Second)
+	// The native fixture starts a second copy of the test executable. Wait for
+	// its readiness barrier even on a loaded builder.
+	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		f, _ := c.store.Get(ctx, first.TaskID)
 		if _, err := os.Stat(ready); f.State == StateRunning && err == nil {
@@ -506,7 +526,8 @@ func TestSameWorkDirSerializes(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("first task never reached running")
+	firstState, err := c.store.Get(ctx, first.TaskID)
+	t.Fatalf("fixture never signaled ready: state=%s result=%s err=%v", firstState.State, firstState.ResultJSON, err)
 }
 
 // TestDrainFlagPausesQueueAndBeatsDraining covers the maintenance-mode

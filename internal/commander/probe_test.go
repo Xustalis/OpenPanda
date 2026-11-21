@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -73,6 +75,61 @@ func TestProbePostsMinimalModelRequest(t *testing.T) {
 	}
 	if !strings.Contains(gotBody, `"max_tokens":1`) || !strings.Contains(gotBody, "ping") {
 		t.Fatalf("probe body is not a minimal completion: %s", gotBody)
+	}
+}
+
+func TestDispatchProbeVerdictIsCredentialSpecific(t *testing.T) {
+	var requests atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.Header.Get("Authorization") != "Bearer valid" {
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+	}))
+	defer srv.Close()
+	spec := ProbeSpec{Endpoint: srv.URL, APIType: config.APITypeOpenAI, Model: "shared", APIKey: "valid", KeyDefinitive: true}
+	if v := modelProbe(spec); !v.OK {
+		t.Fatalf("usable credential: %+v", v)
+	}
+	spec.APIKey = "revoked"
+	if v := modelProbe(spec); !v.Rejected {
+		t.Fatalf("revoked credential: %+v", v)
+	}
+	spec.KeyDefinitive = false
+	if v := modelProbe(spec); !v.OK {
+		t.Fatalf("refreshable credential: %+v", v)
+	}
+	if n := requests.Load(); n != 3 {
+		t.Fatalf("distinct credentials and credential states made %d requests", n)
+	}
+}
+
+func TestConcurrentDispatchProbesShareRequest(t *testing.T) {
+	var requests atomic.Int64
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) == 1 {
+			close(entered)
+		}
+		<-release
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	var workers sync.WaitGroup
+	spec := ProbeSpec{Endpoint: srv.URL, APIType: config.APITypeOpenAI}
+	for range 8 {
+		workers.Go(func() {
+			if v := modelProbe(spec); !v.OK {
+				t.Errorf("probe: %+v", v)
+			}
+		})
+	}
+	<-entered
+	close(release)
+	workers.Wait()
+	if n := requests.Load(); n != 1 {
+		t.Fatalf("concurrent routing made %d model requests", n)
 	}
 }
 

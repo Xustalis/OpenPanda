@@ -1497,19 +1497,21 @@ func classifyReviewCause(dataRaw string) string {
 // whole point of the strip is "what is happening to this task right now", and
 // a queued or injected user note that never shows up reads as dropped input.
 var visibleTraceTypes = map[string]bool{
-	"reasoning":          true,
-	"classify_result":    true,
-	"route_decision":     true,
-	"delegation_hop":     true,
-	"exec_agent_start":   true,
-	"skill_load":         true,
-	"prompt_context":     true,
-	"supervision_round":  true,
-	"tier2_triggered":    true,
-	"plan_stage_changed": true,
-	"artifact_transfer":  true,
-	"user_msg":           true,
-	"user_msg_consumed":  true,
+	"reasoning":            true,
+	"classify_result":      true,
+	"route_decision":       true,
+	"delegation_hop":       true,
+	"exec_agent_start":     true,
+	"skill_load":           true,
+	"prompt_context":       true,
+	"supervision_round":    true,
+	"tier2_triggered":      true,
+	"plan_stage_changed":   true,
+	"plan_intervention":    true,
+	"plan_adjustment_read": true,
+	"artifact_transfer":    true,
+	"user_msg":             true,
+	"user_msg_consumed":    true,
 }
 
 // afterCursor reads the ?after=<eventID> cursor an incremental read carries.

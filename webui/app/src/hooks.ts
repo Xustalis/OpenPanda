@@ -328,6 +328,8 @@ export function orbitPhaseFromTraces(
         break
       case 'exec_agent_start':
       case 'plan_stage_changed':
+      case 'plan_intervention':
+      case 'plan_adjustment_read':
       case 'supervision_round':
       case 'artifact_transfer':
         phase = Math.max(phase, 2) as 0 | 1 | 2 | 3
