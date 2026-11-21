@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -495,51 +497,87 @@ func TestServerStderrIsRedacted(t *testing.T) {
 	}
 }
 
-// os/exec copies stderr independently from stdout. Force its writer to lag
-// behind the transport error so diagnostics cannot depend on goroutine order.
-type delayedStderr struct {
-	tail    *tailBuffer
-	started chan struct{}
-	release chan struct{}
+// gatedTail blocks every stderr write until the test releases it, and records
+// whether the tail was read while a write was still in flight. The invariant
+// it guards is ordering, not content shape: reading before the copier drains
+// cannot see diagnostics that arrive after the transport error, no matter how
+// os/exec happens to chunk them.
+type gatedTail struct {
+	mu        sync.Mutex
+	buf       []byte
+	started   chan struct{}
+	release   chan struct{}
+	once      sync.Once
+	inFlight  atomic.Int32
+	readEarly atomic.Bool
 }
 
-func (w *delayedStderr) Write(p []byte) (int, error) {
+func newGatedTail() *gatedTail {
+	return &gatedTail{started: make(chan struct{}, 1), release: make(chan struct{})}
+}
+
+func (g *gatedTail) Write(p []byte) (int, error) {
+	g.inFlight.Add(1)
+	defer g.inFlight.Add(-1)
 	select {
-	case w.started <- struct{}{}:
+	case g.started <- struct{}{}:
 	default:
 	}
-	<-w.release
-	return w.tail.Write(p)
+	<-g.release
+	g.mu.Lock()
+	g.buf = append(g.buf, p...)
+	g.mu.Unlock()
+	return len(p), nil
 }
+
+func (g *gatedTail) String() string {
+	if g.inFlight.Load() > 0 {
+		g.readEarly.Store(true)
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return strings.TrimSpace(string(g.buf))
+}
+
+// releaseAll unblocks the copier. Cleanup and the deadline path both need it,
+// and closing an unbuffered channel twice panics.
+func (g *gatedTail) releaseAll() { g.once.Do(func() { close(g.release) }) }
 
 func TestTransportErrorDrainsStderrBeforeDecoration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	tail := &tailBuffer{}
-	writer := &delayedStderr{tail: tail, started: make(chan struct{}, 1), release: make(chan struct{})}
+	tail := newGatedTail()
 	cmd := executil.CommandContext(ctx, os.Args[0])
 	cmd.Env = append(os.Environ(), fakeEnv("OPENPANDA_MCP_DIE=1", "OPENPANDA_MCP_DIE_SECRET=1")...)
-	cmd.Stderr = writer
+	cmd.Stderr = tail
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	c := &Client{cmd: cmd, stderr: tail}
-	t.Cleanup(func() { _ = c.Close() })
+	t.Cleanup(func() {
+		tail.releaseAll()
+		_ = c.Close()
+	})
 	select {
-	case <-writer.started:
+	case <-tail.started:
 	case <-ctx.Done():
-		close(writer.release)
+		tail.releaseAll()
 		t.Fatal(ctx.Err())
 	}
-	// Release the copy after decorate starts; a mere read of tail is too early.
-	timer := time.AfterFunc(50*time.Millisecond, func() { close(writer.release) })
+	// Release the copier while decorate sits inside Close. The timer only
+	// guarantees liveness: an implementation that returns without waiting does
+	// so before it fires, which the in-flight assertion below catches — the
+	// verdict never depends on the timer's exact expiry.
+	timer := time.AfterFunc(50*time.Millisecond, tail.releaseAll)
 	defer timer.Stop()
 	err := c.decorate(errors.New("transport EOF"))
-	// Ensure cleanup cannot block if the old implementation returned early.
 	if timer.Stop() {
-		close(writer.release)
+		tail.releaseAll()
+	}
+	if tail.readEarly.Load() {
+		t.Fatalf("decorate read the stderr tail while the copier was still writing: %v", err)
 	}
 	if !strings.Contains(err.Error(), "module not found") || !strings.Contains(err.Error(), "[redacted]") || strings.Contains(err.Error(), "sk-super-secret-value") {
-		t.Fatalf("transport error lost drained/redacted stderr: %v", err)
+		t.Fatalf("transport error lost drained/redacted stderr (tail=%q): %v", tail.String(), err)
 	}
 }
