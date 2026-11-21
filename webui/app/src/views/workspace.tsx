@@ -849,7 +849,7 @@ export function WorkspaceView() {
           at the far right, exactly where the chat's own card hangs. */}
       <header class="ws-head">
         <Icon name="devices" size={16} class="ws-head-icon" />
-        <span class="ws-title">{t('nav.workspace')}</span>
+        <h1 class="ws-title">{t('nav.workspace')}</h1>
         {/* The key reads as a subtitle rather than a footer: one line of
             glyph + name for the six machine classes the plates encode. The
             two line styles are still named by the edges' own tooltips. */}
