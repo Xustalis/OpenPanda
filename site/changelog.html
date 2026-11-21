@@ -124,7 +124,18 @@
 
       <section class="pg-section" id="unreleased">
         <h2 data-i18n="cl.unreleased.t">开发中（尚未发版）</h2>
-        <p class="pg-lead" data-i18n="cl.unreleased.d">本轮会话与交付可靠性修复已记入下方 v0.1.6 与仓库 CHANGELOG.md；这里只留 v0.1.6 之后尚无版本号的工作。</p>
+        <p class="pg-lead" data-i18n="cl.unreleased.d">v0.1.6 之后尚未发版的工作记录在仓库 CHANGELOG.md 的 [Unreleased] 段；本页在该版本发布时同步这一段的内容。</p>
+        <ul>
+          <li data-i18n="cl.unreleased.a">目标与计划成为会话的两种模式：目标跨轮次存在，可设预算并可暂停、恢复、停止与编辑；计划先给出带版本的提案，确认后才进入执行，运行中的计划可被评审修正，每一次决定都留下可查的审计。</li>
+          <li data-i18n="cl.unreleased.b">计划整图发布，阶段产物带因果元数据：合并时保留编辑与删除，后代覆盖祖先，并发分歧判为冲突；需要合并的计划只派给声明该能力的节点，旧节点被跳过而不是拖垮合并。</li>
+          <li data-i18n="cl.unreleased.c">业务协作与 TaskSync 进入 CLI、MCP 与 Web 控制台：新增 panda work 与 panda connection 两个命令、首次草稿授权、工作看板、签名交付与受控最终动作；控制台的实验性协作面默认开启，可在设置里关闭。</li>
+          <li data-i18n="cl.unreleased.j">MCP 改为精简目录：panda mcp --compact 只发布必要工具，其余通过 panda_tools / panda_tool_call 按需发现；技能可搜索并逐页读取（panda skill search|show|read，对应 MCP 的 panda_skill_search / panda_skill_read），预览不等于启用。</li>
+          <li data-i18n="cl.unreleased.e">执行可靠性：卡住的任务被明确命名并可重试或结束，失败按限流、输入被拒、供应商故障或模型配置分类，重试是一次明确动作；结果、交付、决定与最终动作进入带租约栅栏与退避的持久 outbox。</li>
+          <li data-i18n="cl.unreleased.f">安全边界：Windows 获得原生 AppContainer 沙箱，standard/strict 在后端缺失时拒绝运行而不是降级；入站同意在缺少密钥或签名时失败关闭；作用域外的改动不合并，共享工作区用租约互斥。</li>
+          <li data-i18n="cl.unreleased.g">路由与移交：任务难度参与执行器排序，失败的 harness 先交给下一个候选、注入兜底排在最后；只有完全没产生输出的任务才允许跨设备移交，重复执行不会重复工具副作用。</li>
+          <li data-i18n="cl.unreleased.h">控制台：可展开的执行步骤、验收徽章与批准等待时间、计划依赖图、键盘快捷键与可搜索的模型选择器；草稿跟随自己的线程，不再串进下一个会话。</li>
+          <li data-i18n="cl.unreleased.i">记忆与技能：长期记忆改为带类别与键的断言（记 user.name 而不是当前这个名字），含糊写入被拒绝；四个离线技能固定上游版本、许可证与资源哈希，可先读再启用。</li>
+        </ul>
       </section>
 
       <article class="pg-release pg-release-current" id="v016">
