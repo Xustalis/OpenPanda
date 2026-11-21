@@ -129,9 +129,12 @@ export interface WorkResearch {
 
 export class ApiError extends Error {
   readonly status: number
-  constructor(status: number, message: string) {
+  /** Machine-readable refusal code (X-OpenPanda-Error), when the server sent one. */
+  readonly code?: string
+  constructor(status: number, message: string, code?: string) {
     super(message)
     this.status = status
+    this.code = code
   }
 }
 
@@ -261,7 +264,7 @@ async function request<T>(
           unauthorizedListeners.forEach((fn) => fn())
         }
         const text = await res.text().catch(() => '')
-        throw new ApiError(res.status, text || res.statusText)
+        throw new ApiError(res.status, text || res.statusText, res.headers.get('X-OpenPanda-Error') || undefined)
       }
       return (await res.json()) as T
     } catch (err) {
@@ -534,7 +537,7 @@ export interface Task {
    *  login) — a re-run and a reworded prompt both fail the same way, so the
    *  card names that agent's configuration instead of asking for new input.
    *  Empty for every other park; callers fall back to the disposition. */
-  review_cause?: 'stagnation' | 'model_config' | 'rate_limited' | 'input_rejected' | 'provider_error' | ''
+  review_cause?: 'authentication_required' | 'stagnation' | 'model_config' | 'rate_limited' | 'input_rejected' | 'provider_error' | ''
   /** Latest review failure, redacted on the server and available on brief rows. */
   review_reason?: string
   /** Explicit re-execution is available; this never accepts failed work. */
@@ -1238,7 +1241,7 @@ export const api = {
   workMembers(id: string, space: string): Promise<{ accountId: string; name: string; role: string }[]> {
     return request('GET', `/api/work/connections/${encodeURIComponent(id)}/spaces/${encodeURIComponent(space)}/members`)
   },
-  workPolicy(id: string, space: string): Promise<WorkPolicy> {
+  workPolicy(id: string, space: string): Promise<WorkPolicy & { configured?: boolean }> {
     return request('GET', `/api/work/connections/${encodeURIComponent(id)}/spaces/${encodeURIComponent(space)}/policy`)
   },
   workBindings(id: string, space: string): Promise<WorkProjectBinding[]> {
@@ -1282,6 +1285,11 @@ export const api = {
   },
   patchRemoteWork(connection: string, task: WorkTask, body: RemoteWorkInput, key: string): Promise<WorkTask> {
     return request('PATCH', `/api/work/tasks/${encodeURIComponent(workTaskKey(task))}?connection=${encodeURIComponent(connection)}`, body, { headers: { 'Idempotency-Key': key, 'If-Match': JSON.stringify(task.snapshot.taskRevision) } })
+  },
+  requestFirstDraft(task: WorkTask, authEpoch: string, requestId: string): Promise<{ requestId: string; alreadyStarted: boolean; state: string }> {
+    return request('POST', `/api/work/tasks/${encodeURIComponent(workTaskKey(task))}/draft?connection=${encodeURIComponent(task.connectionId)}`, {
+      accountId: task.accountId, authEpoch, taskRevision: task.snapshot.taskRevision,
+    }, { headers: { 'Idempotency-Key': requestId } })
   },
   requestWork(connection: string, taskKey: string, requestId: string): Promise<{ requestId: string; alreadyStarted: boolean; state: string }> {
     return request('POST', `/api/work/tasks/${encodeURIComponent(taskKey)}/run?connection=${encodeURIComponent(connection)}`, { requestId, purpose: 'execute' }, { headers: { 'Idempotency-Key': requestId } })
@@ -2976,6 +2984,13 @@ export interface ServerGoal {
 export interface ConversationState {
   planning: boolean; proposal_version: number; proposal?: string
   confirmed_version: number; goal?: ServerGoal
+  /** Present only while a confirmed proposal is executing in the background.
+   *  That round has no SSE response of its own, so this — refreshed by the
+   *  once-a-second state poll — is what keeps the console from looking
+   *  stuck between "confirm" and the first transcript line. */
+  implementation?: {
+    round: string; phase: string; detail?: string; task_id?: string
+  }
 }
 export interface ConversationControl {
   action: 'mode' | 'confirm' | 'create' | 'edit' | 'pause' | 'resume' | 'clear' | 'stop'
