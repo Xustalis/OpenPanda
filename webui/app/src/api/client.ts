@@ -532,7 +532,7 @@ export interface Task {
    *  login) — a re-run and a reworded prompt both fail the same way, so the
    *  card names that agent's configuration instead of asking for new input.
    *  Empty for every other park; callers fall back to the disposition. */
-  review_cause?: 'model_config' | 'rate_limited' | 'input_rejected' | 'provider_error' | ''
+  review_cause?: 'stagnation' | 'model_config' | 'rate_limited' | 'input_rejected' | 'provider_error' | ''
   /** Latest review failure, redacted on the server and available on brief rows. */
   review_reason?: string
   /** Explicit re-execution is available; this never accepts failed work. */

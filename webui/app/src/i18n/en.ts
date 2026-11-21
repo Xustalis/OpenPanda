@@ -433,6 +433,10 @@ const en: Messages = {
   'detail.needsChangedInputHint':
     'Approve is disabled: re-running the same input would fail the same way. Fix the cause below, then resubmit the task.',
   'detail.reject': 'Reject',
+  'detail.stalledReview': 'Task stalled',
+  'detail.stalledReviewHint': 'The agent repeated its output and no alternate agent was available. Try again to put this task back in the queue and continue.',
+  'detail.stalledRetry': 'Try again',
+  'detail.stalledEnd': 'End task',
   'detail.continue': 'Continue',
   'detail.continueHint': 'The supervisor reported work remaining — continue resumes the same session with a fresh round budget',
   'detail.continuedToast': 'Continuation queued',

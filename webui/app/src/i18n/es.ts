@@ -430,6 +430,10 @@ const es: Messages = {
   'detail.needsChangedInputHint':
     'Aprobar está deshabilitado: repetir la misma entrada fallaría igual. Corrige el error de abajo y vuelve a enviar la tarea.',
   'detail.reject': 'Rechazar',
+  'detail.stalledReview': 'Tarea estancada',
+  'detail.stalledReviewHint': 'El agente repitió su respuesta y no había otro agente disponible. Si vuelves a intentarlo, la tarea volverá a la cola para continuar.',
+  'detail.stalledRetry': 'Volver a intentar',
+  'detail.stalledEnd': 'Finalizar tarea',
   'detail.continue': 'Continuar',
   'detail.continueHint': 'El supervisor informó trabajo pendiente — continuar retoma la misma sesión con un nuevo presupuesto de rondas',
   'detail.continuedToast': 'Continuación en cola',

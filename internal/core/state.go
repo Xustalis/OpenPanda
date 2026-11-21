@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
+	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
@@ -334,7 +335,18 @@ func (t Task) NeedsFollowup() bool {
 	if needsFollowupResult(t.ResultJSON) {
 		return true
 	}
-	return t.ApprovalDisposition == ApprovalAcceptWork && t.ObjectiveApprovalError() != nil
+	return t.ApprovalDisposition == ApprovalAcceptWork &&
+		(t.stalledReviewResult() || t.ObjectiveApprovalError() != nil)
+}
+
+// Older stalled results may have been parked without needs_followup.
+func (t Task) stalledReviewResult() bool {
+	var result struct {
+		Verdict string `json:"verdict"`
+		Reason  string `json:"verdict_reason"`
+	}
+	return json.Unmarshal([]byte(t.ResultJSON), &result) == nil &&
+		result.Verdict == entry.VerdictReview && isStagnationReason(result.Reason)
 }
 
 // GetUserLocale returns the task's language preference as an i18n.Locale,

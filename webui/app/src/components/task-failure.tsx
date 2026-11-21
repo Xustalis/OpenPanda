@@ -3,9 +3,14 @@
 import type { Task } from '../api/client'
 import { t } from '../i18n'
 
+export function isStalledReview(task: Task): boolean {
+  return task.state === 'review' && task.approval_disposition === 'accept_work' && task.review_cause === 'stagnation'
+}
+
 /** The same error leads the transcript, task dock, board and detail page.
  * The server supplies it even on brief rows, where events/results are absent. */
 export function taskReviewLabel(task: Task): string {
+  if (isStalledReview(task)) return t('detail.stalledReview')
   if (task.needs_followup) return t('detail.continue')
   switch (task.review_cause) {
     case 'rate_limited': return t('detail.failureRateLimited')
@@ -27,10 +32,12 @@ export function TaskFailureNotice({ task }: { task: Task }) {
   if (!task.retry_available) hint = t(task.review_cause === 'model_config'
     ? 'detail.approveBlockedModelConfig' : 'detail.needsChangedInputHint')
   if (task.needs_followup) hint = t('detail.continueHint')
+  const stalled = isStalledReview(task)
+  if (stalled) hint = t('detail.stalledReviewHint')
   return (
     <div class="task-failure" role="alert" data-testid="task-failure">
       <strong>{taskReviewLabel(task)}</strong>
-      <pre>{task.review_reason}</pre>
+      {!stalled && <pre>{task.review_reason}</pre>}
       <p>{hint}</p>
     </div>
   )
