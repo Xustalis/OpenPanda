@@ -4,6 +4,9 @@ package core
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,6 +15,18 @@ import (
 )
 
 func TestLocalProviderRefusalHandsOffToPeer(t *testing.T) {
+	// The peer advertises only installed, configured agents during hello.
+	// Execution itself uses the adapter runners below.
+	bin := t.TempDir()
+	name := "claude"
+	if runtime.GOOS == "windows" {
+		name += ".cmd"
+	}
+	if err := os.WriteFile(filepath.Join(bin, name), nil, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("ANTHROPIC_API_KEY", "native-test-key")
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	origin := newSuperviseCore(t, "origin", 1)
