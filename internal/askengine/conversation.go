@@ -439,11 +439,7 @@ func (s *ConversationService) run(g *conversation.Goal) {
 	if sess.Summary != "" {
 		history = append(history, entry.Turn{Role: "user", Content: sessions.SummaryMarker + "\n" + sess.Summary})
 	}
-	for i, t := range sess.Turns {
-		if i >= sess.SummaryTurns && !t.DisplayArchive {
-			history = append(history, entry.Turn{Role: t.Role, Content: t.Text})
-		}
-	}
+	history = append(history, s.engine.historyTurns(ctx, sess, sess.SummaryTurns)...)
 	history = append(history, entry.Turn{Role: "user", Content: "[Autonomous goal runtime] Original full objective: " + g.Objective + "\nContinue until the COMPLETE objective is verified. A task result or answer does not complete the goal. Call update_goal status=complete with a concrete audit only when every requirement is met. Report the same concrete blocker in three consecutive rounds before blocking. Never change the objective, budget or paused state. Ask for missing input instead of inventing it."})
 	workDir := sess.Worktree
 	if workDir == "" {
