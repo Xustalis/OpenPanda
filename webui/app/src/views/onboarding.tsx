@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import {
   api,
   type ModelRoster,
@@ -9,24 +9,23 @@ import {
   type ProviderInfo,
 } from '../api/client'
 import { useLocaleRerender } from '../hooks'
-import { locale, localeNames, locales, setLocale, t, type Locale } from '../i18n'
+import { loadLocale, locale, localeNames, locales, setLocale, t, type Locale } from '../i18n'
 import { toast } from '../components/toast'
 import { TermsContent } from '../components/terms'
 import { ModelPicker } from '../components/model-picker'
 import { useModalFocus } from '../components/modal-focus'
 import { ProviderCard } from '../components/provider-card'
-import { navigate } from '../nav'
+import { navigate, parseHash } from '../nav'
 import { onboardingGate } from '../utils/onboarding'
 import { MODEL_SAVED_EVENT, notifyModelSaved } from '../model-events'
 import { needsPlaintextConsent } from './model-endpoint'
-import { GuideStep } from './onboarding-guide'
+import { GuideTour } from './onboarding-guide'
 
 // First-run onboarding: `panda web` boots zero-config — the panel is fully
 // reachable but chat cannot answer until a model is set up, and the TUI
 // additionally walks language → terms → approval before the first prompt.
-// The web console runs the same four steps in a wizard modal, persisting
-// each answer through POST /api/onboarding so a browser-first install lands
-// in the same configured state as a terminal one.
+// The browser includes a tour over the live console between consent and
+// approvals. Both entry points share the saved onboarding configuration.
 
 type Step = 'language' | 'terms' | 'guide' | 'approval' | 'model'
 const STEPS: Step[] = ['language', 'terms', 'guide', 'approval', 'model']
@@ -38,7 +37,12 @@ const STEPS: Step[] = ['language', 'terms', 'guide', 'approval', 'model']
  *  dismissal is an answer too: re-opening the full wizard on every page load
  *  after the user clicked "not now" is nagging, so only a genuinely fresh
  *  install auto-opens. */
-export function OnboardingBanner() {
+type TourControls = {
+  setTourRailOpen(open: boolean): void
+  setTeamLessonActive(active: boolean): void
+}
+
+export function OnboardingBanner(tourControls: TourControls) {
   useLocaleRerender()
   const [state, setState] = useState<OnboardingState | null>(null)
   const [open, setOpen] = useState(false)
@@ -62,7 +66,10 @@ export function OnboardingBanner() {
   // with stale consent gets the banner; opening the modal every launch was
   // the "why does this keep popping up" complaint.
   useEffect(() => {
-    if (gate?.firstRun) setOpen(true)
+    if (!gate?.firstRun) return
+    // The native Settings dialog would sit above the first-run wizard.
+    if (parseHash().view === 'settings') navigate({ view: 'sessions', id: null }, true)
+    setOpen(true)
   }, [gate?.firstRun])
 
   if (!state || completed) return null
@@ -108,6 +115,7 @@ export function OnboardingBanner() {
         <OnboardingWizard
           state={state}
           termsOnly={termsOnly}
+          {...tourControls}
           onClose={dismiss}
           onDone={() => {
             setCompleted(true)
@@ -119,7 +127,7 @@ export function OnboardingBanner() {
   )
 }
 
-/** The four-step wizard, plus the terms-only pass. The model step lives at the
+/** The first-run wizard, plus the terms-only pass. The model step lives at the
  *  end of the tour (a fresh install has no other place to land), but it is not
  *  a standalone destination: "already onboarded, still no model" is a settings
  *  job, and its banner CTA opens 设置 → 模型 instead of this modal. */
@@ -128,7 +136,7 @@ function OnboardingWizard(props: {
   termsOnly: boolean
   onClose(): void
   onDone(): void
-}) {
+} & TourControls) {
   useLocaleRerender()
   // Re-consent (termsOnly) must not re-run the tour: the install was already
   // configured, and this pass only collects a signature.
@@ -136,14 +144,43 @@ function OnboardingWizard(props: {
   const [stepIdx, setStepIdx] = useState(0)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [language, setLanguage] = useState(locale)
+  const requestedLanguage = useRef(language)
+  const languageSave = useRef(Promise.resolve())
   const step = steps[stepIdx]
   const box = useRef<HTMLDivElement>(null)
-  useModalFocus(box, true)
+  const touring = step === 'guide'
+  useModalFocus(box, !touring)
+  const finishTour = useCallback(() => setStepIdx(STEPS.indexOf('approval')), [])
+
+  async function pickLanguage(l: Locale) {
+    setLanguage(l)
+    setError('')
+    requestedLanguage.current = l
+    try {
+      // The first visit may need to fetch a dictionary. Only preview the last choice.
+      await loadLocale(l)
+      if (requestedLanguage.current !== l) return
+      await setLocale(l)
+      if (requestedLanguage.current !== l) return
+    } catch (e) {
+      if (requestedLanguage.current === l) {
+        setLanguage(locale())
+        setError(e instanceof Error ? e.message : String(e))
+      }
+      return
+    }
+    // Keep preview writes in order so an older request cannot overwrite Next.
+    languageSave.current = languageSave.current
+      .then(() => api.postOnboarding({ locale: l }))
+      .then(() => {}, () => {})
+  }
 
   async function save(patch: OnboardingPatch): Promise<boolean> {
     setBusy(true)
     setError('')
     try {
+      if (step === 'language') await languageSave.current
       await api.postOnboarding(patch)
       return true
     } catch (e) {
@@ -155,12 +192,9 @@ function OnboardingWizard(props: {
   }
 
   async function next() {
-    // The language chips persist their own locale on click, but the step is
-    // preselected and "next" is the obvious button — so the common path wrote
-    // nothing and config kept locale:"". That empty string is one of the four
-    // signals the gate uses to decide "fresh install", and it is why a later
-    // re-onboard started from the language step again.
-    if (step === 'language' && !(await save({ locale: locale() }))) return
+    // Persist the preselected language even when the user clicks Next without
+    // touching a radio. The first-run gate treats an empty locale as unset.
+    if (step === 'language' && !(await save({ locale: language }))) return
     if (step === 'terms' && !(await save({ terms_accepted: true }))) return
     if (stepIdx < steps.length - 1) {
       setStepIdx(stepIdx + 1)
@@ -175,16 +209,20 @@ function OnboardingWizard(props: {
     if (await save({ onboarded: true })) props.onDone()
   }
 
-  // Backdrop click / Escape close like every other modal — a skipped wizard
-  // simply reopens on next launch until terms are accepted.
+  // The tour handles Escape itself so closing it continues to approvals.
   useEffect(() => {
+    if (touring) return
     const on = (e: KeyboardEvent) => {
       if (e.key === 'Escape') props.onClose()
     }
     addEventListener('keydown', on)
     return () => removeEventListener('keydown', on)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [touring])
+
+  if (touring) {
+    return <GuideTour onFinish={finishTour} setRailOpen={props.setTourRailOpen} setTeamLessonActive={props.setTeamLessonActive} />
+  }
 
   return (
     <div
@@ -193,7 +231,7 @@ function OnboardingWizard(props: {
         if (e.target === e.currentTarget) props.onClose()
       }}
     >
-      <div ref={box} class={`modal onboarding-modal wizard${step === 'guide' ? ' is-guide' : ''}`}
+      <div ref={box} class="modal onboarding-modal wizard"
         role="dialog" aria-modal="true" aria-label={t('onboarding.title')}>
         <div class="wizard-progress" aria-hidden="true">
           {steps.map((s, i) => (
@@ -205,9 +243,8 @@ function OnboardingWizard(props: {
           <span class="wizard-step-label">{t(`onboarding.step.${step}`)}</span>
         </div>
 
-        {step === 'language' && <LanguageStep />}
+        {step === 'language' && <LanguageStep value={language} onPick={pickLanguage} disabled={busy} />}
         {step === 'terms' && <TermsStep />}
-        {step === 'guide' && <GuideStep />}
         {step === 'approval' && (
           <ApprovalStep
             initial={props.state.approval_mode}
@@ -224,14 +261,15 @@ function OnboardingWizard(props: {
         {step !== 'approval' && step !== 'model' && (
           <div class="modal-actions">
             <button type="button" class="btn" onClick={props.onClose}>
-              {t(step === 'guide' ? 'onboarding.guide.skip' : 'onboarding.skip')}
+              {t('onboarding.skip')}
             </button>
-            <button type="button" class="btn primary" disabled={busy} onClick={next}>
-              {step === 'terms'
-                ? t('onboarding.agree')
-                : step === 'guide'
-                  ? t('onboarding.guide.cta')
-                  : t('onboarding.next')}
+            <button
+              type="button"
+              class="btn primary"
+              disabled={busy || (step === 'language' && language !== locale())}
+              onClick={next}
+            >
+              {t(step === 'terms' ? 'onboarding.agree' : 'onboarding.next')}
             </button>
           </div>
         )}
@@ -242,26 +280,31 @@ function OnboardingWizard(props: {
 
 // ---- Step 1: language ----
 
-function LanguageStep() {
-  const cur = locale()
+function LanguageStep({ value, onPick, disabled }: {
+  value: Locale
+  onPick(l: Locale): void
+  disabled: boolean
+}) {
   return (
     <>
-      <h2 class="modal-title">{t('onboarding.langTitle')}</h2>
-      <div class="wizard-langs" role="radiogroup">
+      <h2 class="modal-title wizard-language-title" id="wizard-language-title">
+        {t('onboarding.langTitle')}
+      </h2>
+      <div class="wizard-langs" role="radiogroup" aria-labelledby="wizard-language-title">
         {locales.map((l) => (
-          <button
-            key={l}
-            type="button"
-            role="radio"
-            aria-checked={cur === l}
-            class={`wizard-lang${cur === l ? ' on' : ''}`}
-            onClick={() => {
-              setLocale(l as Locale)
-              void api.postOnboarding({ locale: l }).catch(() => {})
-            }}
-          >
-            {localeNames[l]}
-          </button>
+          <label key={l} class="wizard-lang" lang={l}>
+            <input
+              class="wizard-lang-radio"
+              type="radio"
+              name="onboarding-language"
+              value={l}
+              checked={value === l}
+              tabIndex={value === l ? 0 : -1}
+              disabled={disabled}
+              onChange={() => onPick(l)}
+            />
+            <span>{localeNames[l]}</span>
+          </label>
         ))}
       </div>
     </>

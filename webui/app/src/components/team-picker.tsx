@@ -84,7 +84,7 @@ export function TeamRoster(props: {
   }
 
   return (
-    <div class="team-panel" role="dialog" aria-label={t('sessions.teamTitle')}>
+    <div class="team-panel" role="dialog" aria-label={t('sessions.teamTitle')} data-tour-region="">
       <p class="team-panel-label">{t('sessions.teamLabel')}</p>
       <div
         class="team-list"

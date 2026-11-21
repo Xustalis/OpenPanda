@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { t } from '../i18n'
 import { ComposerPanda } from './composer-panda'
 import { AgentFace, TeamRoster } from './team-picker'
@@ -24,6 +24,7 @@ export function ComposerPet(props: {
    *  the card at once instead of waiting out the double-press window. The
    *  roster stays reachable — see the press model in composer-panda.tsx. */
   working: boolean
+  guided: boolean
   /** The thread's roster, as the session carries it. */
   team: string[]
   onTeam(names: string[]): void
@@ -39,8 +40,14 @@ export function ComposerPet(props: {
     if (props.working) setOpen(false)
   }, [props.working])
 
+  // The tutorial keeps the roster open while the reader uses its bubble.
+  // Leaving the lesson closes the roster without resetting draft picks.
+  useLayoutEffect(() => {
+    if (props.guided) return () => setOpen(false)
+  }, [props.guided])
+
   useEffect(() => {
-    if (!open) return
+    if (!open || props.guided) return
     const onDown = (e: MouseEvent) => {
       if (box.current && !box.current.contains(e.target as Node)) setOpen(false)
     }
@@ -55,7 +62,7 @@ export function ComposerPet(props: {
       document.removeEventListener('mousedown', onDown)
       document.removeEventListener('keydown', onKey, true)
     }
-  }, [open])
+  }, [open, props.guided])
 
   const picked = props.team
   // Three faces, then a count: the row sits beside a 44px sprite and a fourth
@@ -63,10 +70,11 @@ export function ComposerPet(props: {
   const shown = picked.slice(0, 3)
 
   return (
-    <div class="composer-pet" ref={box}>
+    <div class="composer-pet" ref={box} data-tour-target="team">
       <ComposerPanda
         working={props.working}
         expanded={open}
+        immediatePress={props.guided}
         onPress={() => setOpen((v) => !v)}
         label={`${t('sessions.teamTitle')} · ${t('panda.poke')}`}
       />
@@ -84,7 +92,7 @@ export function ComposerPet(props: {
         <TeamRoster
           value={picked}
           onChange={props.onTeam}
-          onManage={props.onManage}
+          onManage={props.guided ? undefined : props.onManage}
           onClose={() => setOpen(false)}
         />
       )}

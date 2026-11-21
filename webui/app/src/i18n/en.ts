@@ -954,6 +954,7 @@ const en: Messages = {
     'Fill in your provider details to enable chat. Saved settings apply immediately — no restart needed.',
   'onboarding.step.language': 'Language',
   'onboarding.step.terms': 'Terms',
+  'onboarding.step.guide': 'Quick tour',
   'onboarding.step.approval': 'Approvals',
   'onboarding.step.model': 'Model',
   'onboarding.langTitle': 'Choose your language',
@@ -974,43 +975,24 @@ const en: Messages = {
   'onboarding.skip': 'Not now',
 
   // First-run tour (after the terms step, before the model step)
-  'onboarding.guide.title': 'A three-minute look around',
-  'onboarding.guide.sub':
-    'The console does three things: you say something, it gets done, you stay in charge. Here is the map, the panda in the corner, and how a model gets wired up.',
-  'onboarding.guide.nav': 'The left rail',
   'onboarding.guide.nav.newChat':
     'Starts a thread. The session appears when the first message leaves the box.',
   'onboarding.guide.nav.workspace':
     'Devices and agents on one map. Wheel zooms, a click shows the edges.',
   'onboarding.guide.nav.control': 'Queue, plans and projects — three boards over the same tasks.',
-  'onboarding.guide.nav.team': 'Experimental and off by default. Enable it in Settings to view business tasks, team spaces and items awaiting confirmation.',
   'onboarding.guide.nav.memory': 'What this node has learned. Read, edit, delete.',
-  'onboarding.guide.nav.settings': 'Models, policies, agents, MCP, skills, system.',
-  'onboarding.guide.panda': 'The panda in the corner',
-  'onboarding.guide.panda.pose': 'Standing = idle · hopping = answering · lying = off duty',
-  'onboarding.guide.panda.click': 'One click',
-  'onboarding.guide.panda.clickDesc': 'Opens the team card — pick who works on this thread.',
-  'onboarding.guide.panda.working': 'Mid-answer',
-  'onboarding.guide.panda.workingDesc':
-    'Opens at once, no squish — the roster stays live during a turn.',
-  'onboarding.guide.panda.double': 'Double click',
-  'onboarding.guide.panda.doubleDesc': 'Squashes it. A toy — nothing is counted or remembered.',
-  'onboarding.guide.panda.burst': 'Keep tapping',
-  'onboarding.guide.panda.burstDesc': 'It stops offering the card and just takes the pokes.',
-  'onboarding.guide.panda.night': '20:00–08:00',
-  'onboarding.guide.panda.nightDesc': 'It lies down. Tasks keep running; the pose is decoration.',
-  'onboarding.guide.model': 'Wiring up a model',
-  'onboarding.guide.model.one': 'Settings → Models → Add connection',
-  'onboarding.guide.model.oneDesc':
-    'Pick a provider, paste the endpoint and key. One card is one account.',
-  'onboarding.guide.model.two': 'Add models to the card',
-  'onboarding.guide.model.twoDesc': 'Click a row to switch. Name the alias however you like.',
-  'onboarding.guide.model.three': 'Press Test connection',
-  'onboarding.guide.model.threeDesc': 'A ✓ and a latency means it answers.',
-  'onboarding.guide.modelNote':
-    'The next step walks you through it once — and it stays editable in Settings.',
-  'onboarding.guide.cta': 'Continue',
   'onboarding.guide.skip': 'Skip the tour',
+  'onboarding.guide.tryClick': 'Click the highlighted control to try it.',
+  'onboarding.guide.composer': 'Prompt editor',
+  'onboarding.guide.overview': 'Explore the console',
+  'onboarding.guide.firstChat': 'Start your first chat',
+  'onboarding.guide.back': 'Back',
+  'onboarding.guide.workdirDesc': 'Choose the project folder Panda should look at. Pick a recent folder or open a new one. This does not create a conversation.',
+  'onboarding.guide.teamDesc': 'Click the panda next to the message box to open the roster. By default, Panda picks a worker for each task. Select one or more workers to limit this conversation’s tasks to them.',
+  'onboarding.guide.composerDesc': 'Try the example below or write your own question. The tour keeps it as a draft without sending it. Send it after setting up approvals and a model.',
+  'onboarding.guide.exampleLabel': 'Try this prompt',
+  'onboarding.guide.example': 'Help me understand this project. What does it do, and where should I start reading? Do not edit files yet.',
+  'onboarding.guide.done': 'Done',
 
   // Skills view
   'skills.title': 'Skills',

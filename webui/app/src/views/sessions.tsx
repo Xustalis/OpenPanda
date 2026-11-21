@@ -123,12 +123,14 @@ function promptLabel(text: string): string {
  * and one worktree-isolated conversation on the right, streaming over SSE. */
 export function SessionsView({
   activeId,
+  teamLessonActive,
   project,
   ws,
   onOpenSession,
   onLogout,
 }: {
   activeId: string | null
+  teamLessonActive: boolean
   project?: string | null
   /** The workspace a brand-new thread was handed in from (the history's
    *  per-directory "+"), by project name. It seeds the composer's directory
@@ -3067,6 +3069,7 @@ export function SessionsView({
             <div class="composer-head">
               <ComposerPet
                 working={busy}
+                guided={teamLessonActive}
                 team={team}
                 onTeam={pickTeam}
                 onManage={() => navigateView('settings:agents')}
@@ -3101,6 +3104,7 @@ export function SessionsView({
                   setPickedDir(path)
                   setDirTouched(true)
                 }}
+                tourTarget="workdir"
                 label={t('sessions.chooseDir')}
                 disabled={busy}
               />

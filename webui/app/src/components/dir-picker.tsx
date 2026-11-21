@@ -154,6 +154,7 @@ const normDir = (p: string) => p.replace(/[\\/]+$/, '').toLowerCase()
  *  beside the name — the chip is one line of small print, and an × parked next
  *  to a long folder name would either crowd it or be pushed out of the clamp. */
 export function DirButton({
+  tourTarget,
   value = '',
   onChange,
   label,
@@ -161,6 +162,7 @@ export function DirButton({
 }: {
   value?: string
   onChange: (path: string) => void
+  tourTarget?: string
   /** The picker's own name, shown while nothing is chosen. */
   label: string
   disabled?: boolean
@@ -264,7 +266,7 @@ export function DirButton({
   }
 
   return (
-    <div class="workdir-pick" ref={box}>
+    <div class="workdir-pick" ref={box} data-tour-target={tourTarget}>
       <div
         class={`workdir-btn${value ? ' has-value' : ''}${disabled ? ' is-disabled' : ''}`}
         /* The bubble is where the whole path lives: the label shows the folder
@@ -280,6 +282,7 @@ export function DirButton({
         <button
           type="button"
           class="workdir-open"
+          data-tour-focus={tourTarget ? '' : undefined}
           aria-haspopup="dialog"
           aria-expanded={open}
           aria-label={value ? `${label}: ${value}` : label}
@@ -307,7 +310,7 @@ export function DirButton({
         )}
       </div>
       {open && (
-        <div class="wd-panel" role="dialog" aria-label={label}>
+        <div class="wd-panel" role="dialog" aria-label={label} data-tour-region={tourTarget ? '' : undefined}>
           <div class="wd-search-wrap">
             <Icon name="search" size={14} class="wd-search-icon" />
             <input

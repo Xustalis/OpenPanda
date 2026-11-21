@@ -44,7 +44,10 @@ export function useModalFocus(
     if (!root) return
 
     const restoreTo = (document.activeElement as HTMLElement | null) ?? null
-    const focusables = () => Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE))
+    const focusables = () =>
+      Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
+        (el) => el.getAttribute('tabindex') !== '-1',
+      )
 
     const first = initial ? root.querySelector<HTMLElement>(initial) : null
     ;(first ?? focusables()[0] ?? root).focus()

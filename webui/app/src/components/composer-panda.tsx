@@ -58,6 +58,7 @@ export function ComposerPanda({
   onPress,
   label,
   expanded,
+  immediatePress,
 }: {
   working: boolean
   /** Fired on a single press (after the double-press window). */
@@ -67,6 +68,8 @@ export function ComposerPanda({
   label?: string
   /** Whether the card this press opens is currently open. */
   expanded?: boolean
+  /** Reserve the button for the roster while its tutorial is active. */
+  immediatePress?: boolean
 }) {
   /* A counter, not a flag: the animation has to replay on every press, and
      bumping the sprite's `key` remounts it, which is the only reliable way to
@@ -156,7 +159,8 @@ export function ComposerPanda({
     // answer streams toggles the card on the spot. Nothing is parked and no
     // window is waited out — the second press of a double tap has no squish to
     // land on, so it can only mean the same thing the first one did.
-    if (working) {
+    // The tutorial also uses single presses to demonstrate the roster.
+    if (working || immediatePress) {
       onPress()
       return
     }
