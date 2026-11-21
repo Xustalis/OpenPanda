@@ -79,7 +79,7 @@ import { ComposerInput, type CompletionItem } from './sessions/composer-input'
 import { QueuedNotes } from './sessions/queued-notes'
 import { fmtSize, type PendingAttachment } from './sessions/attachment-pills'
 import { AttachMenu } from './sessions/attach-menu'
-import { GoalBar, goalActive, goalNeedsMoreBudget, legacyGoalFor, useComposerGoals, type ComposerGoal } from './sessions/goal-bar'
+import { GoalBar, goalActive, goalNeedsMoreBudget, legacyGoalFor, useComposerGoals } from './sessions/goal-bar'
 import { PlanProposalDock } from './sessions/plan-proposal-dock'
 import { GoalBudgetDialog, PlanProposalDialog } from './sessions/conversation-dialogs'
 import { projectForDir, waitDevReady } from './sessions/session-project'
@@ -498,7 +498,10 @@ export function SessionsView({
   const busy = threadBusy(localBusy, activeId, session, liveIds.length)
   const goalAction = useRef<string | null>(null)
   const [pendingGoalAction, setPendingGoalAction] = useState<string | null>(null)
-  const { goal, state: controlState, refresh: refreshControl, goalFor } = useComposerGoals(activeId, session?.operation, Boolean(pendingGoalAction))
+  const {
+    goal, shownGoal, state: controlState, refresh: refreshControl, goalFor,
+    completedGoalKey, dismissCompletedGoal,
+  } = useComposerGoals(activeId, session?.operation, Boolean(pendingGoalAction))
   const legacyGoal = activeId && !goal ? legacyGoalFor(activeId) : undefined
   const [goalEditor, setGoalEditor] = useState<{ sid: string; id: string; text: string } | null>(null)
   const [budgetGoal, setBudgetGoal] = useState<{ sid: string; id: string } | null>(null)
@@ -523,7 +526,6 @@ export function SessionsView({
   // Still parsed so a hand-typed `/goal …` keeps its menu suppressed and its
   // send routed; the chip no longer mirrors it.
   const goalDraft = goalArgument(input)
-  const shownGoal: ComposerGoal | undefined = goal?.phase === 'cancelled' ? undefined : goal
   // The pre-execution question the running turn is parked on. Cleared when the
   // browser answers, when the turn ends, or when the user cancels it.
   const [clarify, setClarify] = useState<{
@@ -1387,6 +1389,7 @@ export function SessionsView({
   async function sendIntoRunningTurn(text: string, tray: PendingAttachment[]) {
     const sid = activeId
     if (!sid || (!text && tray.length === 0)) return
+    const completedGoal = completedGoalKey(sid)
     try {
       // Upload before the note so a failed upload leaves the draft intact.
       let mentions: string[] = []
@@ -1399,6 +1402,7 @@ export function SessionsView({
       // note as an attachment, the same shape an uploaded file's mention takes.
       const refs = tray.flatMap((p) => (p.ref ? [p.ref] : []))
       const r = await api.sendSessionMessage(sid, text, false, [...mentions, ...refs])
+      if (completedGoal) dismissCompletedGoal(sid, completedGoal)
       // Only clear once the server accepted it: a refused note is still the
       // user's text, and losing it to an optimistic clear costs more than the
       // round trip.
@@ -1648,6 +1652,9 @@ export function SessionsView({
       void sendIntoRunningTurn(raw, tray)
       return
     }
+    // Snapshot the completion at send time so a goal that finishes during
+    // this turn (or an automatic continuation) keeps its completion readout.
+    const completedGoal = fromComposer && activeId ? completedGoalKey(activeId) : undefined
     // Claim the slot before the async file expansion — a second Enter during
     // the /api/fs/read round-trips must not start a parallel ask.
     const ctrl = new AbortController()
@@ -1896,6 +1903,7 @@ export function SessionsView({
             queuedTurn.current = text
           },
           onOperation: (operationID) => {
+            if (operationID && completedGoal) dismissCompletedGoal(sid, completedGoal)
             if (inflight.current === ctrl && inflightSid.current === sid) {
               inflightOperation.current = operationID
               patch((m) => ({ ...m, operation_id: operationID }))

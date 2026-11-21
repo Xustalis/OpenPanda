@@ -25,6 +25,13 @@ function present(goal?: ServerGoal): ComposerGoal | undefined {
   }
 }
 
+function completionKey(goal?: ServerGoal): string | undefined {
+  // A resumed goal can complete again under the same id.
+  return goal?.status === 'complete' ? `${goal.id}:${goal.generation}:${goal.rounds}` : undefined
+}
+
+function dismissalStorageKey(sid: string): string { return `openpanda.dismissedGoal:${sid}` }
+
 export function legacyGoalFor(sid: string): ComposerGoal | undefined {
   try {
     const goal = JSON.parse(sessionStorage.getItem('openpanda.composerGoals') || '{}')[sid]
@@ -34,6 +41,7 @@ export function legacyGoalFor(sid: string): ComposerGoal | undefined {
 
 export function useComposerGoals(sessionId: string | null, operation: SessionOperation | undefined, stopping: boolean) {
   const [states, setStates] = useState<Record<string, ConversationState>>({})
+  const [dismissed, setDismissed] = useState<Record<string, string>>({})
   const current = useRef(states)
   const nextRequest = useRef(0)
   const appliedRequests = useRef(new Map<string, number>())
@@ -64,7 +72,28 @@ export function useComposerGoals(sessionId: string | null, operation: SessionOpe
     void poll()
     return () => { alive = false; unsubscribe(); window.clearTimeout(timer) }
   }, [sessionId, operation?.id, stopping])
-  return { goal: present(states[sessionId ?? '']?.goal), state: states[sessionId ?? ''], refresh, goalFor: (sid: string) => present(current.current[sid]?.goal) }
+  const sid = sessionId ?? ''
+  const state = states[sid]
+  const goal = present(state?.goal)
+  const completed = completionKey(state?.goal)
+  let dismissedKey = dismissed[sid]
+  if (completed && !dismissedKey) {
+    try { dismissedKey = sessionStorage.getItem(dismissalStorageKey(sid)) ?? '' } catch { /* Storage is optional. */ }
+  }
+  return {
+    goal,
+    shownGoal: goal?.phase === 'cancelled' || (completed && completed === dismissedKey) ? undefined : goal,
+    state,
+    refresh,
+    goalFor: (id: string) => present(current.current[id]?.goal),
+    completedGoalKey: (id: string) => completionKey(current.current[id]?.goal),
+    dismissCompletedGoal(id: string, key: string) {
+      // An acknowledgement for an older completion may arrive out of order.
+      if (completionKey(current.current[id]?.goal) !== key) return
+      setDismissed((previous) => ({ ...previous, [id]: key }))
+      try { sessionStorage.setItem(dismissalStorageKey(id), key) } catch { /* Storage is optional. */ }
+    },
+  }
 }
 
 export function GoalBar({ goal, pending, onStart, onPause, onCancel, onStop, onEdit }: {
