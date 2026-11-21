@@ -3,11 +3,13 @@
 package doctor
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"gopkg.in/yaml.v3"
 )
 
@@ -306,5 +308,87 @@ network:
 	}
 	if found.Fix != FixExposure {
 		t.Fatalf("fix = %q, want %q", found.Fix, FixExposure)
+	}
+}
+
+// A node that has meshed before must not have its shared secret replaced: a
+// fresh secret exiles every node it already paired with. The history lives in
+// employee_cache, not in the current peer list, so the check has to read the
+// database — a path the repair used to reach without any test.
+func TestMeshHistoryReadsOtherNodes(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "panda.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE employee_cache (id TEXT PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO employee_cache(id) VALUES('another-node')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{}
+	cfg.Storage.DBPath = dbPath
+	cfg.Node.Name = "meshed"
+	cfg.Node.Kind = config.NodeKindPhysical
+	if !hasMeshHistory(cfg) {
+		t.Fatal("another node in employee_cache is mesh history")
+	}
+
+	// The node's own row is not history.
+	again, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	if _, err := again.Exec(`DELETE FROM employee_cache`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := again.Exec(`INSERT INTO employee_cache(id) VALUES(?)`, core.RuntimeNodeID(cfg.Node.Name, cfg.Node.Kind, cfg.Node.EffectiveIdentity())); err != nil {
+		t.Fatal(err)
+	}
+	if hasMeshHistory(cfg) {
+		t.Fatal("the node's own row is not mesh history")
+	}
+}
+
+func TestRepairSecretRefusesAfterMeshHistory(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "panda.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE employee_cache (id TEXT PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO employee_cache(id) VALUES('another-node')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{}
+	cfg.Storage.DBPath = dbPath
+	cfg.Node.Name = "meshed"
+	cfg.Node.Kind = config.NodeKindPhysical
+	checks := []Check{{Key: "doctor.network.nosecret", Fix: FixSecret}}
+	res := Repair(checks, filepath.Join(dir, "config.yaml"), nil, RepairOptions{
+		Mutate: func(fn func(*config.Config) error) error { return fn(cfg) },
+	})
+	if len(res) != 1 || res[0].OK {
+		t.Fatalf("repair = %+v, want a refusal", res)
+	}
+	if res[0].Msg != "doctor.fix.secret.meshed" {
+		t.Fatalf("msg = %q, want doctor.fix.secret.meshed", res[0].Msg)
+	}
+	if cfg.Network.SharedSecret != "" {
+		t.Fatalf("refused repair still minted a secret: %q", cfg.Network.SharedSecret)
 	}
 }

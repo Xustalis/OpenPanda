@@ -78,8 +78,15 @@ const stagnationReasonSuffix = " stalled: identical output across consecutive ro
 
 func isStagnationReason(reason string) bool {
 	agent, ok := strings.CutSuffix(reason, stagnationReasonSuffix)
-	return ok && strings.HasPrefix(agent, "agent ") && len(agent) > len("agent ") &&
-		!strings.ContainsAny(strings.TrimPrefix(agent, "agent "), " \t\r\n")
+	if !ok || !strings.HasPrefix(agent, "agent ") {
+		return false
+	}
+	// Agent names come from configuration and may contain spaces ("claude
+	// code"). Only an empty name, or one carrying a line break, is not a
+	// named-agent stall: the suffix is exact, so the name is the only
+	// variable part.
+	name := strings.TrimPrefix(agent, "agent ")
+	return strings.TrimSpace(name) != "" && !strings.ContainsAny(name, "\t\r\n")
 }
 
 type reviewQueryer interface {

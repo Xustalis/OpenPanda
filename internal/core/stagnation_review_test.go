@@ -14,6 +14,19 @@ import (
 
 const testStagnationReason = "agent claude_code stalled: identical output across consecutive rounds with no alternate agents"
 
+func TestStagnationReasonAcceptsSpacedAgentNames(t *testing.T) {
+	spaced := "agent claude code stalled: identical output across consecutive rounds with no alternate agents"
+	if !isStagnationReason(spaced) {
+		t.Fatalf("a configured agent name may contain spaces: %q", spaced)
+	}
+	if isStagnationReason("agent  stalled: identical output across consecutive rounds with no alternate agents") {
+		t.Fatal("an empty agent name is not a named-agent stall")
+	}
+	if isStagnationReason("agent one\nagent two stalled: identical output across consecutive rounds with no alternate agents") {
+		t.Fatal("a name carrying a line break is not a single agent")
+	}
+}
+
 func TestStagnationReviewOffersExplicitContinuation(t *testing.T) {
 	ctx := context.Background()
 	c := NewCore(openTestDB(t), "node-1", ledger.Card{

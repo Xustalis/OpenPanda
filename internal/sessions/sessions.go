@@ -184,6 +184,18 @@ func (t *Turn) normalizePlanConfirmation() {
 	t.Kind, t.Ref = planConfirmationKind, strconv.FormatInt(version, 10)
 }
 
+// PlanConfirmationReceiptVersion reports the version carried by a receipt-only
+// body. Builds before the instruction was preserved wrote "/plan confirm N";
+// the console labels such a turn from Kind/Ref, so the body is only read to
+// rebuild the model history from the stored plan run.
+func (t Turn) PlanConfirmationReceiptVersion() (int64, bool) {
+	if t.Kind != planConfirmationKind || !strings.HasPrefix(t.Text, "/plan confirm ") {
+		return 0, false
+	}
+	version, err := strconv.ParseInt(strings.TrimPrefix(t.Text, "/plan confirm "), 10, 64)
+	return version, err == nil && version > 0
+}
+
 // Session is one chat thread. Worktree/Branch are empty when the work path is
 // not a git repository (sessions then run in the shared work dir).
 type Session struct {
