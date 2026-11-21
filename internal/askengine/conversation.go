@@ -101,7 +101,18 @@ func (s *ConversationService) Control(ctx context.Context, sid, id, action, text
 	if err = s.store.Control(ctx, sid, id, action, text, budget); err != nil {
 		return err
 	}
-	if action == "clear" || action == "stop" || action == "edit" {
+	switch action {
+	case "pause":
+		// Pausing is an interruption, not just a status flag: a round that is
+		// still waiting on the model would keep thinking (and spending) long
+		// after the user asked it to hold, and its live operation would keep
+		// the thread "busy" with no way to stop it from the goal bar. Stop the
+		// round now but leave its dispatched tasks alone; the goal stays
+		// paused, and the next resume claims a fresh round from the transcript.
+		// Plan implementation rounds keep running — a paused-by-plan goal has
+		// no round of its own to cancel.
+		s.interruptRound(ctx, state.Goal)
+	case "clear", "stop", "edit":
 		s.cancelRound(ctx, state.Goal)
 		s.cancelRevokedPlans(ctx, sid)
 	}
@@ -172,7 +183,11 @@ func (s *ConversationService) cancelRevokedPlans(ctx context.Context, sid string
 	}
 }
 
-func (s *ConversationService) cancelRound(ctx context.Context, g *conversation.Goal) {
+// interruptRound stops the round's own runner — its model wait above all —
+// without touching work it already dispatched. A pause holds the controller;
+// it does not revoke jobs the user already set in motion, so those keep
+// running and report into the transcript as usual.
+func (s *ConversationService) interruptRound(ctx context.Context, g *conversation.Goal) {
 	if g.RoundID == "" {
 		return
 	}
@@ -183,8 +198,9 @@ func (s *ConversationService) cancelRound(ctx context.Context, g *conversation.G
 	if cancel != nil {
 		cancel()
 	}
-	round, err := s.engine.TaskStore().AskRoundProgress(ctx, g.SessionID, g.RoundID)
-	if err != nil {
+	// The progress read doubles as the guard: a round that already vanished
+	// has no session operation left to settle.
+	if _, err := s.engine.TaskStore().AskRoundProgress(ctx, g.SessionID, g.RoundID); err != nil {
 		return
 	}
 	// Revocation also cancels an implementation after its dispatch round
@@ -193,6 +209,17 @@ func (s *ConversationService) cancelRound(ctx context.Context, g *conversation.G
 		if st := s.sessionStore(); st != nil {
 			_, _ = st.FinishRunningOperation(g.SessionID, sessions.Operation{ID: g.RoundID, Status: "cancelled"})
 		}
+	}
+}
+
+func (s *ConversationService) cancelRound(ctx context.Context, g *conversation.Goal) {
+	if g.RoundID == "" {
+		return
+	}
+	s.interruptRound(ctx, g)
+	round, err := s.engine.TaskStore().AskRoundProgress(ctx, g.SessionID, g.RoundID)
+	if err != nil {
+		return
 	}
 	for _, task := range round.Tasks {
 		if !core.Terminal(task.State) {
@@ -417,11 +444,7 @@ func (s *ConversationService) run(g *conversation.Goal) {
 	if sess.Summary != "" {
 		history = append(history, entry.Turn{Role: "user", Content: sessions.SummaryMarker + "\n" + sess.Summary})
 	}
-	for i, t := range sess.Turns {
-		if i >= sess.SummaryTurns && !t.DisplayArchive {
-			history = append(history, entry.Turn{Role: t.Role, Content: t.Text})
-		}
-	}
+	history = append(history, s.engine.historyTurns(ctx, sess, sess.SummaryTurns)...)
 	history = append(history, entry.Turn{Role: "user", Content: "[Autonomous goal runtime] Original full objective: " + g.Objective + "\nContinue until the COMPLETE objective is verified. A task result or answer does not complete the goal. Call update_goal status=complete with a concrete audit only when every requirement is met. Report the same concrete blocker in three consecutive rounds before blocking. Never change the objective, budget or paused state. Ask for missing input instead of inventing it."})
 	workDir := s.engine.SessionWorkDir(sess)
 	prompt := "Continue the active goal. Inspect previous results and checkpoints, perform remaining authorized work, and verify the complete objective."

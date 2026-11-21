@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -140,6 +141,59 @@ type Turn struct {
 	// CreatedAt/UpdatedAt cannot express. Zero on transcripts written before
 	// the field existed — readers fall back to the session stamps there.
 	TS int64 `json:"ts,omitempty"`
+}
+
+const (
+	planConfirmationKey  = "plan:user:"
+	planConfirmationKind = "plan_confirmation"
+)
+
+// PlanConfirmationTurn records the user's confirmation in the transcript. The
+// text stays the implementation instruction: later turns replay the transcript
+// as the model's history, and a receipt-only body ("/plan confirm 2") would
+// strip the requirements the implementation has to keep honouring. Kind and
+// Ref are what let the console draw it as a confirmation instead of a message
+// the user typed.
+func PlanConfirmationTurn(round string, version int64, instruction string) Turn {
+	return Turn{
+		Role: "user", Text: instruction,
+		Kind: planConfirmationKind, Ref: strconv.FormatInt(version, 10),
+		RoundID: round, IdempotencyKey: planConfirmationKey + round,
+	}
+}
+
+// normalizePlanConfirmation labels transcripts written before the kind existed.
+// It deliberately leaves Text alone: the old text was already the instruction,
+// and the model still needs it on every later turn.
+func (t *Turn) normalizePlanConfirmation() {
+	if t.Role != "user" || !strings.HasPrefix(t.IdempotencyKey, planConfirmationKey) {
+		return
+	}
+	if t.Kind == planConfirmationKind && t.Ref != "" {
+		return
+	}
+	rest, ok := strings.CutPrefix(t.Text, "Implement user-confirmed proposal version ")
+	if !ok {
+		return
+	}
+	number, _, _ := strings.Cut(rest, " ")
+	version, err := strconv.ParseInt(number, 10, 64)
+	if err != nil || version <= 0 {
+		return
+	}
+	t.Kind, t.Ref = planConfirmationKind, strconv.FormatInt(version, 10)
+}
+
+// PlanConfirmationReceiptVersion reports the version carried by a receipt-only
+// body. Builds before the instruction was preserved wrote "/plan confirm N";
+// the console labels such a turn from Kind/Ref, so the body is only read to
+// rebuild the model history from the stored plan run.
+func (t Turn) PlanConfirmationReceiptVersion() (int64, bool) {
+	if t.Kind != planConfirmationKind || !strings.HasPrefix(t.Text, "/plan confirm ") {
+		return 0, false
+	}
+	version, err := strconv.ParseInt(strings.TrimPrefix(t.Text, "/plan confirm "), 10, 64)
+	return version, err == nil && version > 0
 }
 
 // Session is one chat thread. Worktree/Branch are empty when the work path is
@@ -1541,6 +1595,9 @@ func (s *Store) load(id string) (*Session, error) {
 	// every caller downstream reads one model. A file that predates the list
 	// keeps its transcript; the first write persists the new shape.
 	sess.normalizeSide()
+	for i := range sess.Turns {
+		sess.Turns[i].normalizePlanConfirmation()
+	}
 	return &sess, nil
 }
 

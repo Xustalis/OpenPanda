@@ -642,12 +642,99 @@
   }
 }
 
-/* Versioned proposals live in the composer without altering the goal bar. */
 .composer-proposal { display: flex; align-items: flex-start; gap: 12px; padding: 10px 14px; border-top: 1px solid var(--border); font-size: 12px; }
-.composer-proposal details { min-width: 0; flex: 1; }
 .composer-plan-trigger[aria-pressed="true"] { color: var(--text); background: var(--bg-active); }
-.composer-proposal summary { cursor: pointer; font-weight: 600; }
-.composer-plan-document { margin-top: 8px; max-height: min(32vh, 320px); overflow: auto; overflow-wrap: anywhere; }
-.composer-plan-document pre { overflow-x: auto; }
-.composer-proposal > button { flex-shrink: 0; border-radius: 8px; padding: 6px 10px; }
+.composer-proposal button { flex-shrink: 0; border-radius: 8px; padding: 6px 10px; }
 @media (max-width: 480px) { .composer-proposal { flex-wrap: wrap; } }
+
+/* The proposal bar stands on the lane between the transcript and the composer
+   — after the reply that produced it, outside the input's frame. It shares the
+   composer's measure so the two read as one column: the bar is what you act
+   on, the box below is where you type next. The clarify card uses the same
+   shelf, so "something is waiting for you" always appears in the same place. */
+.plan-dock {
+  flex: none;
+  /* The pet stands on the composer's top edge (38px tall, 6px of it inside the
+     box), so the shelf above the box has to give that overhang back or the
+     panda lands on the proposal bar. */
+  padding: 0 calc(var(--sp-6) + var(--panel-lane)) 34px var(--chat-leading-gutter);
+  transition: padding-right var(--dur-med) var(--ease-standard);
+}
+.plan-dock-card {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  max-width: min(100%, var(--composer-measure, 820px));
+  margin-inline: auto;
+  padding: 8px 10px 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-xs);
+  animation: plan-dock-in var(--dur-med) var(--ease-standard);
+}
+.plan-dock-icon {
+  display: flex;
+  flex: none;
+  color: var(--brand);
+}
+.plan-dock-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+.plan-dock-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+.plan-dock-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+.plan-dock-review { flex: none; }
+@keyframes plan-dock-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .plan-dock-card { animation: none; }
+}
+@media (max-width: 480px) {
+  .plan-dock-card { flex-wrap: wrap; }
+  .plan-dock-review { width: 100%; }
+}
+
+.conversation-dialog {
+  margin: auto;
+  max-height: calc(100dvh - 24px);
+  color: var(--text);
+}
+.conversation-dialog::backdrop { background: var(--backdrop-darker); }
+.conversation-dialog .modal-actions { flex-wrap: wrap; }
+.conversation-dialog.plan-dialog[open] {
+  display: flex;
+  flex-direction: column;
+  width: min(680px, calc(100vw - 24px));
+}
+.plan-dialog .modal-title,
+.plan-dialog .modal-actions { flex-shrink: 0; }
+.plan-dialog-body {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  overflow-wrap: anywhere;
+}
+.goal-budget-form label {
+  display: grid;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+}

@@ -7,10 +7,22 @@ import { Icon } from '../../components/icons'
 import { t } from '../../i18n'
 
 export type GoalPhase = 'ready' | 'running' | 'review' | 'paused' | 'finished' | 'interrupted' | 'cancelled' | 'blocked' | 'usage_limited' | 'budget_limited'
-export interface ComposerGoal { id: string; text: string; phase: GoalPhase; round?: string; tokens?: number; reason?: string }
+export interface ComposerGoal { id: string; text: string; phase: GoalPhase; round?: string; tokens?: number; tokenBudget?: number; reason?: string }
 export function goalActive(goal?: ComposerGoal): boolean { return goal?.phase === 'running' || goal?.phase === 'review' }
+export function goalNeedsMoreBudget(goal: ComposerGoal): boolean {
+  return goal.tokenBudget != null && (goal.tokens ?? 0) >= goal.tokenBudget
+}
+
 function present(goal?: ServerGoal): ComposerGoal | undefined {
-  return goal && { id: goal.id, text: goal.objective, phase: goal.status === 'active' ? 'running' : goal.status === 'complete' ? 'finished' : goal.status, round: goal.round_id, tokens: goal.tokens, reason: goal.reason }
+  return goal && {
+    id: goal.id,
+    text: goal.objective,
+    phase: goal.status === 'active' ? 'running' : goal.status === 'complete' ? 'finished' : goal.status,
+    round: goal.round_id,
+    tokens: goal.tokens,
+    tokenBudget: goal.token_budget,
+    reason: goal.reason,
+  }
 }
 
 export function legacyGoalFor(sid: string): ComposerGoal | undefined {
@@ -23,24 +35,32 @@ export function legacyGoalFor(sid: string): ComposerGoal | undefined {
 export function useComposerGoals(sessionId: string | null, operation: SessionOperation | undefined, stopping: boolean) {
   const [states, setStates] = useState<Record<string, ConversationState>>({})
   const current = useRef(states)
+  const nextRequest = useRef(0)
+  const appliedRequests = useRef(new Map<string, number>())
   async function refresh(sid: string) {
+    const request = ++nextRequest.current
     const state = await api.conversationState(sid)
-    current.current = { ...current.current, [sid]: state }
-    setStates(current.current)
+    if (request > (appliedRequests.current.get(sid) ?? 0)) {
+      appliedRequests.current.set(sid, request)
+      current.current = { ...current.current, [sid]: state }
+      setStates(current.current)
+    }
     return state
   }
   useEffect(() => {
     if (!sessionId) return
+    const sid = sessionId
     let alive = true
     let timer = 0
     async function poll() {
       try {
-        const state = await api.conversationState(sessionId!)
-        if (alive) { current.current = { ...current.current, [sessionId!]: state }; setStates(current.current) }
+        await refresh(sid)
       } catch { /* Reconnect without starting a round. */ }
       if (alive) timer = window.setTimeout(poll, 1000)
     }
-    const unsubscribe = busSubscribeChange(ev => { if (ev.kinds.includes('conversation')) void refresh(sessionId!) })
+    const unsubscribe = busSubscribeChange(ev => {
+      if (ev.kinds.includes('conversation')) void refresh(sid).catch(() => {})
+    })
     void poll()
     return () => { alive = false; unsubscribe(); window.clearTimeout(timer) }
   }, [sessionId, operation?.id, stopping])
@@ -59,17 +79,16 @@ export function GoalBar({ goal, pending, onStart, onPause, onCancel, onStop, onE
   const active = goalActive(goal)
   // The bar only exists once the goal is published, so there is no draft
   // "start" step left: not active means resume.
-  const nextAction = active ? 'pause' : 'resume'
+  const nextAction = active ? 'pause' : goalNeedsMoreBudget(goal) ? 'raiseBudget' : 'resume'
   const actionLabel = t('sessions.goal.' + nextAction)
   const cancelLabel = t('sessions.goal.clear')
-  const showState = true
   const title = goal.text || t('sessions.goal.hint')
   return (
     <section class="composer-goal" aria-label={t('sessions.goal.label')}>
       <Icon name="target" size={17} />
       <div class="composer-goal-copy">
         <strong class="composer-goal-title" title={title}>{title}</strong>
-        <span class={showState ? 'composer-goal-state' : 'sr-only'} aria-live="polite">
+        <span class="composer-goal-state" aria-live="polite">
           {t('sessions.goal.state.' + goal.phase)}
         </span>
       </div>

@@ -63,6 +63,46 @@ func (e *Engine) proposalMarkdown(raw string) string {
 	return doc.String()
 }
 
+// planInstruction is the prompt an implementation round hands the model. The
+// same text is stored on the confirmation turn, so every later turn replays
+// the requirements instead of a receipt.
+func planInstruction(version int64, proposal string) string {
+	return fmt.Sprintf("Implement user-confirmed proposal version %d in the current session. Inspect the saved transcript and existing task results/checkpoints first; continue remaining work without repeating completed side effects. Preserve the original requirements and verify the result.\n\n%s", version, proposal)
+}
+
+// HistoryText is the text a stored turn contributes to the model's history.
+// A confirmation written by an earlier build carries only "/plan confirm N";
+// the proposal is still in conversation_plan_runs, so the instruction can be
+// rebuilt from (session, version, round) without rewriting the session file.
+func (e *Engine) HistoryText(ctx context.Context, sid string, t sessions.Turn) string {
+	version, ok := t.PlanConfirmationReceiptVersion()
+	if !ok || e.db == nil {
+		return t.Text
+	}
+	var proposal string
+	// version is monotonic within a session, so it identifies the run without
+	// depending on round_id being written yet (Confirm inserts the row before
+	// the round exists).
+	if err := e.db.QueryRowContext(ctx,
+		`SELECT proposal FROM conversation_plan_runs WHERE session_id=? AND version=? ORDER BY rowid DESC LIMIT 1`,
+		sid, version).Scan(&proposal); err != nil || strings.TrimSpace(proposal) == "" {
+		return t.Text
+	}
+	return planInstruction(version, proposal)
+}
+
+// historyTurns is the transcript slice the model replays, from index `from`.
+func (e *Engine) historyTurns(ctx context.Context, sess *sessions.Session, from int) []entry.Turn {
+	out := make([]entry.Turn, 0, len(sess.Turns))
+	for i, t := range sess.Turns {
+		if i < from || t.DisplayArchive {
+			continue
+		}
+		out = append(out, entry.Turn{Role: t.Role, Content: e.HistoryText(ctx, sess.ID, t)})
+	}
+	return out
+}
+
 func (e *Engine) saveProposal(ctx context.Context, scope AskScope, text string) (int64, error) {
 	if scope.planRevision == nil {
 		return e.Conversations(nil).store.SaveProposal(ctx, scope.SessionID, text)
@@ -332,8 +372,11 @@ func (s *ConversationService) runPlan(sid, round, proposal string, version int64
 	// Planning replies and confirmation prompts are display-only here.
 	proposal = conversation.ProposalBody(proposal)
 	history, resuming := confirmedPlanHistory(sess, version, s.engine.ContextWindow())
-	prompt := fmt.Sprintf("Implement user-confirmed proposal version %d in the current session. Continue from existing task results and checkpoints, preserve the requirements and verify the result.\n\n%s", version, proposal)
-	_, _ = st.AppendTurn(sid, sessions.Turn{Role: "user", Text: prompt, RoundID: round, IdempotencyKey: "plan:user:" + round})
+	// The instruction is stored with the turn, so a later turn replays the
+	// requirements rather than a receipt, and both sides of this file agree on
+	// one wording (planInstruction).
+	prompt := planInstruction(version, proposal)
+	_, _ = st.AppendTurn(sid, sessions.PlanConfirmationTurn(round, version, prompt))
 	workDir := s.engine.SessionWorkDir(sess)
 	scope := AskScope{confirmedImplementation: true, SessionID: sid, RoundID: round, WorkDir: workDir, Project: sess.Project, Agents: sess.Team, PermissionMode: sess.PermissionMode, PersonalMemory: true}
 	if !resuming {

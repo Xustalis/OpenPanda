@@ -125,8 +125,28 @@ func TestPlanningRejectsStaleProposalProducer(t *testing.T) {
 	if _, err := s.SaveProposal(ctx, "session", "old planning request", state.ProposalVersion, oldGeneration); !errors.Is(err, ErrConflict) {
 		t.Fatalf("old mode producer accepted: %v", err)
 	}
+	if _, err := s.Confirm(ctx, "session", state.ProposalVersion); !errors.Is(err, ErrConflict) {
+		t.Fatalf("proposal from a previous planning mode accepted: %v", err)
+	}
 	if _, err := s.SaveProposal(ctx, "session", "new mode proposal"); err != nil {
 		t.Fatal(err)
+	}
+	state, err := s.Get(ctx, "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	version, generation, err := s.BeginPlanningRequest(ctx, "session")
+	if err != nil || version != state.ProposalVersion || generation <= state.ModeGeneration {
+		t.Fatalf("new planning request: version=%d generation=%d error=%v", version, generation, err)
+	}
+	if _, err = s.Confirm(ctx, "session", version); !errors.Is(err, ErrConflict) {
+		t.Fatalf("proposal from a superseded request accepted: %v", err)
+	}
+	if _, err = s.SaveProposal(ctx, "session", "late older result", version, state.ModeGeneration); !errors.Is(err, ErrConflict) {
+		t.Fatalf("superseded producer published: %v", err)
+	}
+	if v, err := s.SaveProposal(ctx, "session", "latest request proposal", version, generation); err != nil || v != version+1 {
+		t.Fatalf("current producer failed: version=%d error=%v", v, err)
 	}
 	var old string
 	if err := s.DB.QueryRow("SELECT proposal FROM conversation_proposals WHERE session_id='session' AND version=1").Scan(&old); err != nil || old != "newer result" {
@@ -167,7 +187,7 @@ func TestPlanVersionsAndGoalPause(t *testing.T) {
 		t.Fatal("duplicate confirmation accepted")
 	}
 	st, _ = s.Get(ctx, "session")
-	if st.Planning || st.Goal.Status != "paused" || st.Goal.ID != g.ID {
+	if st.Planning || st.Proposal != "" || st.Goal.Status != "paused" || st.Goal.ID != g.ID {
 		t.Fatalf("confirmation resumed before implementation: %+v", st)
 	}
 	if _, err = s.Claim(ctx, g, "owner", "en"); !errors.Is(err, ErrConflict) {

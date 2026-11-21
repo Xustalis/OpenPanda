@@ -37,6 +37,42 @@ func (h *handler) getDoctor(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// fixDoctor serves POST /api/doctor/fix — the one-click repair behind the
+// self-check list. The body names the failing check keys to repair (empty
+// means every fixable one) and, for a legacy-exposure finding, the mode to
+// declare.
+//
+// The handler re-runs the suite rather than trusting the report the caller
+// rendered. A finding can disappear between the two requests (another surface
+// fixed it, a peer connected), and a repair must only run for a problem that
+// still exists — repairing from a stale list could mint a secret or narrow a
+// bind for something that is already gone. The cost is one extra probe pass
+// per click, the model endpoint being the slow one. The console refreshes
+// /api/doctor itself once the results are in.
+func (h *handler) fixDoctor(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Keys     []string `json:"keys"`
+		Exposure string   `json:"exposure"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, errors.New("invalid JSON body"))
+		return
+	}
+	if h.cfg == nil {
+		writeErr(w, http.StatusServiceUnavailable, errors.New("config not loaded"))
+		return
+	}
+	checks := doctor.Run(h.configPath)
+	results := doctor.Repair(checks, h.configPath, req.Keys, doctor.RepairOptions{
+		Exposure: req.Exposure,
+		// mutateCfgErr runs the edit under the lock every other config writer
+		// holds, so the snapshot the daemon keeps serving and the file on
+		// disk cannot disagree.
+		Mutate: h.mutateCfgErr,
+	})
+	writeJSON(w, map[string]any{"results": results})
+}
+
 // allowedReadRoot reports whether abs may be read through /api/fs/read: the
 // workspace root, the memory tree, the per-project memory tree, or any
 // registered project's work dir. The TUI's /read is unbounded because it runs

@@ -7,8 +7,13 @@
   align-items: center;
   gap: var(--sp-3);
 }
-.doctor-head .btn {
+/* The repair + rerun buttons ride one right-aligned group: with the old
+   margin-left:auto on every .btn they drifted apart as soon as a second one
+   appeared. */
+.doctor-actions {
   margin-left: auto;
+  display: flex;
+  gap: var(--sp-2);
 }
 .doctor-list {
   list-style: none;
@@ -25,6 +30,8 @@
   padding: 7px 10px;
   border-radius: var(--radius-sm);
   font-size: var(--text-md);
+  /* A repair result sits on its own line under the row it belongs to. */
+  flex-wrap: wrap;
 }
 .doctor-check.bad {
   background: var(--semantic-danger-soft);
@@ -50,6 +57,38 @@
 .doctor-pairs {
   font-size: var(--text-xs);
   overflow-wrap: anywhere;
+}
+.doctor-row-actions {
+  margin-left: auto;
+  display: flex;
+  gap: var(--sp-2);
+  flex: none;
+}
+/* Indented under the label column, so the outcome reads as part of the row
+   rather than as a second finding. */
+.doctor-fix {
+  flex-basis: 100%;
+  margin-left: calc(16px + var(--sp-3));
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+.doctor-fix.ok {
+  color: var(--semantic-good);
+}
+.doctor-fix.bad {
+  color: var(--semantic-danger);
+}
+/* Results whose row the repair removed (two PATH rows fold into one). */
+.doctor-fixes {
+  list-style: none;
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.doctor-fixes .doctor-fix {
+  margin-left: 0;
 }
 .cost-stats {
   display: flex;

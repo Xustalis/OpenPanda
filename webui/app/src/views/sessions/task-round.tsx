@@ -12,6 +12,7 @@ import { useFileOpener } from '../../components/file-link'
 import { Icon } from '../../components/icons'
 import { splitReportHead } from '../../components/report-head'
 import { receiptCopy } from '../../components/task-delivery'
+import { isStalledReview } from '../../components/task-failure'
 import { mergeLive, recentAttemptSteps } from '../../components/task-live'
 import { clockTime, formatDuration } from '../../format/time'
 import { useChangeSignal, useTaskEvents, useTraceForTask } from '../../hooks'
@@ -63,9 +64,13 @@ function jobAgent(job: RoundJob) {
 function JobSpeaker({ job, finished }: { job: RoundJob; finished?: boolean }) {
   const agent = jobAgent(job)
   const state = job.task?.state
-  const label = state === 'submitted' && job.task?.plan_meta?.needs
-    ? 'sessions.round.waitingForDependencies'
-    : state ? 'state.' + state : 'sessions.round.unknown'
+  // A stalled review is the more specific fact: the task stopped moving for a
+  // reason, and saying which dependencies it waits for would read as progress.
+  const waitingForDependencies = state === 'submitted' && job.task?.plan_meta?.needs
+  const stateLabel = job.task && isStalledReview(job.task)
+    ? t('detail.stalledReview')
+    : t(waitingForDependencies ? 'sessions.round.waitingForDependencies'
+      : state ? `state.${state}` : 'sessions.round.unknown')
   const report = finished ? currentRoundReport(job) : undefined
   const timestamp = report?.ts ?? (job.task ? Date.parse(job.task.updated_at) / 1000 : 0)
   const stamp = finished && Number.isFinite(timestamp) && clockTime(timestamp, locale())
@@ -74,7 +79,7 @@ function JobSpeaker({ job, finished }: { job: RoundJob; finished?: boolean }) {
       <span class="session-round-avatar" aria-hidden="true"><Icon name="bot" size={16} /></span>}
     {agent && <span class="msg-name">{agent.includes(':') ? agent : prettyAgent(agent)}</span>}
     <span class={`msg-cast-state${state ? ` is-${state}` : ''}`}>
-      <span class="msg-report-dot" aria-hidden="true" />{t(label)}
+      <span class="msg-report-dot" aria-hidden="true" />{stateLabel}
     </span>
     {stamp && <span class="session-round-meta">{stamp}</span>}
     {report?.duration_ms ? <span class="session-round-meta">{t('sessions.elapsed', { d: formatDuration(report.duration_ms) })}</span> : null}

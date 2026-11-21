@@ -126,6 +126,7 @@ panda repl      # 进入交互命令行
 panda web       # 打开内嵌 Web 控制台（回环监听、自动登录）
 panda service install   # 把 Web 控制台注册为用户级常驻服务（退出登录/重启后仍在）
 panda doctor    # 自检：二进制 / PATH / 配置 / 适配器 / agent 是否就绪
+panda doctor --fix   # 顺手修掉能自动修的项（PATH 持久化、shared_secret、旧版暴露、任务保留期、适配器）
 ```
 
 > `panda service` 管理的是**控制台**服务（macOS `com.openpanda.web`、Linux `openpanda-web.service`、Windows `OpenPandaWeb`）；daemon 的自启单元仍由安装器注册，两者可以同时存在——daemon 持锁时控制台自动降级为借用引擎，不抢节点。

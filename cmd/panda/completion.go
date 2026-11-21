@@ -52,7 +52,7 @@ var completionFlags = map[string][]string{
 	"web":           {"--config", "--card"},
 	"plan run":      {"--dry-run", "--config", "--card"},
 	"status":        {"--config"},
-	"doctor":        {"--config"},
+	"doctor":        {"--config", "--fix", "--exposure"},
 	"repl":          {"--config", "--card", "--mcp", "--resume", "--new"},
 }
 
@@ -63,6 +63,7 @@ var completionFlagValues = map[string][]string{
 	"--priority":      {"low", "medium", "normal", "high", "critical"},
 	"--mode":          {"parallel", "serial"},
 	"--output-format": {"json", "stream-json"},
+	"--exposure":      {"loopback", "lan"},
 }
 
 func runCompletion(args []string) {

@@ -593,6 +593,11 @@ function OrchTask(props: {
           id="orch-tab-panel"
           role="region"
           aria-label={openTab.label}
+          /* Remount per section so the panel's short rise plays on every
+             switch — the card changes what it holds, it does not repaint in
+             place. Section state is per-section anyway (the log's "show all"
+             belongs to the log). */
+          key={openTab.key}
         >
           {openTab.key === 'trace' && <TaskTrace task={task} bare />}
           {openTab.key === 'result' && <ResultBlock text={resultText(task.result ?? '')} />}

@@ -232,6 +232,11 @@ func mergePreservedConfig(oldRaw []byte, def *config.Config, modelConfigured boo
 	if merged.Node.Identity == "" {
 		merged.Node.Identity = def.Node.Identity
 	}
+	// Exposure is resolved from the old document, not inherited from the
+	// fresh defaults: a pre-0.1.5 file that only declared listen_addr is
+	// legacy, and letting it fall through to the default "loopback" would
+	// narrow a node the operator had deliberately exposed.
+	merged.Network.ExposureMode = config.ResolveExposure(oldRaw)
 	if modelConfigured {
 		merged.Model = def.Model
 	}

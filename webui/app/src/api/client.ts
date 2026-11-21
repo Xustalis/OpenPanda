@@ -534,7 +534,7 @@ export interface Task {
    *  login) — a re-run and a reworded prompt both fail the same way, so the
    *  card names that agent's configuration instead of asking for new input.
    *  Empty for every other park; callers fall back to the disposition. */
-  review_cause?: 'model_config' | 'rate_limited' | 'input_rejected' | 'provider_error' | ''
+  review_cause?: 'stagnation' | 'model_config' | 'rate_limited' | 'input_rejected' | 'provider_error' | ''
   /** Latest review failure, redacted on the server and available on brief rows. */
   review_reason?: string
   /** Explicit re-execution is available; this never accepts failed work. */
@@ -2213,6 +2213,15 @@ export const api = {
     return request('GET', '/api/doctor')
   },
 
+  /** Apply the repairs behind the given check keys; an empty list means every
+   *  fixable finding. `exposure` only matters for a legacy-exposure repair. */
+  doctorFix(keys: string[] = [], exposure = ''): Promise<DoctorFixResult[]> {
+    return request<{ results?: DoctorFixResult[] }>('POST', '/api/doctor/fix', {
+      keys,
+      exposure,
+    }).then((r) => r.results ?? [])
+  },
+
   contextInfo(): Promise<ContextInfo> {
     return request('GET', '/api/context')
   },
@@ -2589,6 +2598,22 @@ export interface DoctorCheck {
   key: string
   ok: boolean
   pairs?: string[]
+  /** Repair id for a failure the console can fix itself (path, secret,
+   *  exposure, retention, adapters); absent means the fix is a human
+   *  decision. */
+  fix?: string
+}
+
+export interface DoctorFixResult {
+  /** The check this repair ran for. */
+  key: string
+  fix: string
+  ok: boolean
+  /** i18n key for the outcome sentence. */
+  msg: string
+  pairs?: string[]
+  /** The running process keeps its old settings until a restart. */
+  restart?: boolean
 }
 
 export interface DoctorReport {
@@ -2896,7 +2921,7 @@ export interface SessionTurn {
    *  plan instead of a single task (sessions.go, `case "plan"`); its `ref` is
    *  the plan id, so the thread can draw the stages the panda cut the job
    *  into. */
-  kind?: 'answer' | 'task' | 'plan' | 'error'
+  kind?: 'answer' | 'task' | 'plan' | 'error' | 'plan_confirmation'
   ref?: string
   /** Machine reason on an error-kind turn (e.g. "model_config") — the panel
    *  stamps it so a replayed transcript keeps the matching fix-it CTA. */

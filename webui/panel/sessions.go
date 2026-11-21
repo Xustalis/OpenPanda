@@ -1913,7 +1913,7 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 			func(ctx context.Context, evicted []sessions.Turn) (string, error) {
 				turns := make([]entry.Turn, 0, len(evicted))
 				for _, t := range evicted {
-					turns = append(turns, entry.Turn{Role: t.Role, Content: t.Text})
+					turns = append(turns, entry.Turn{Role: t.Role, Content: eng.HistoryText(ctx, sess.ID, t)})
 				}
 				return eng.SummarizeTurns(ctx, turns)
 			}); err == nil {
@@ -1931,7 +1931,7 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		if t.OperationID == roundID && t.Role == "user" {
 			continue
 		}
-		history = append(history, entry.Turn{Role: t.Role, Content: t.Text})
+		history = append(history, entry.Turn{Role: t.Role, Content: eng.HistoryText(execCtx, sess.ID, t)})
 	}
 
 	// Pre-execution questions (entry clarify + the large-task plan card) park
