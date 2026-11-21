@@ -363,7 +363,13 @@ func (m *managedExecution) authority(ctx context.Context, fresh bool) (flowRun, 
 	if wire.Key != f.Snapshot.Key || snapshot.InputRevision != f.Input || snapshot.AssignmentRevision != f.Assignment || snapshot.AutomationGeneration != f.Automation {
 		return f, c, taskproviders.ErrAuthorizationChanged
 	}
-	return f, c, eligible(live, p, snapshot, s.now())
+	if err := eligible(live, p, snapshot, s.now()); err != nil {
+		return f, c, err
+	}
+	// Snapshot pages omit task bodies. Use the authorized detail for this
+	// input revision when building the queue intent and the model prompt.
+	f.Snapshot.Description = snapshot.Description
+	return f, c, nil
 }
 
 func (m *managedExecution) command(ctx context.Context, kind string, body any) (string, error) {

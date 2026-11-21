@@ -308,8 +308,7 @@ func TestModelConfigFailureParksWithoutRetrying(t *testing.T) {
 		t.Fatalf("result stderr = %q, want the provider's model refusal", result.Stderr)
 	}
 
-	// The assessment has to say "stop": a reader that only sees the event log
-	// would otherwise wait for a retry that is never coming.
+	// The assessment keeps waiters pending until the review transition commits.
 	events, err := c.store.Events(ctx, task.TaskID)
 	if err != nil {
 		t.Fatalf("events: %v", err)
@@ -326,8 +325,8 @@ func TestModelConfigFailureParksWithoutRetrying(t *testing.T) {
 		if err := json.Unmarshal([]byte(e.DataJSON), &data); err != nil {
 			t.Fatalf("assessment: %v", err)
 		}
-		if data.Assessment.Category != "model_config" || data.Assessment.Strategy != RecoveryStop {
-			t.Fatalf("assessment = %+v, want model_config/stop", data.Assessment)
+		if data.Assessment.Category != "model_config" || data.Assessment.Strategy != RecoveryHumanReview {
+			t.Fatalf("assessment = %+v, want model_config/human_review", data.Assessment)
 		}
 	}
 	if !seen {

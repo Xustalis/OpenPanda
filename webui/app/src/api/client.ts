@@ -43,7 +43,7 @@ export interface WorkTask {
     projectId: string
     assigneeAccountIds: string[] | null
     sourceRef: { provider: string; id: string; url?: string }
-    dueAt?: { kind: string; value: string } | null
+    dueAt?: { kind: string; value: string; timezone?: string } | null
     taskRevision: string
     inputRevision: string
     permissions: { read: boolean; edit: boolean; execute: boolean }
@@ -336,6 +336,8 @@ export type TraceKind =
   | 'supervision_round'
   | 'tier2_triggered'
   | 'plan_stage_changed'
+  | 'plan_intervention'
+  | 'plan_adjustment_read'
   | 'artifact_transfer'
   // Live-narrative set streamed alongside the orbit tracks (panel events.go):
   // agent-level activity — the work happening *inside* a phase.
@@ -2512,6 +2514,7 @@ export interface PlanSummary {
   plan_id: string
   stages: number
   done: number
+  withdrawn?: number
   failed: number
   running: number
   review: number

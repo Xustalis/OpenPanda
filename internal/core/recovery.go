@@ -16,7 +16,8 @@ import (
 
 // superviseAgentFailure asks the Panda model for a recovery instruction while
 // the task still owns its workspace and its original authorization.
-func (c *Core) superviseAgentFailure(ctx context.Context, supervisor *entry.Client, taskID, intent string, res commander.Result, files []string, evidence string, round, budget int) entry.SuperviseVerdict {
+func (c *Core) superviseAgentFailure(ctx context.Context, supervisor *entry.Client, task Task, intent string, res commander.Result, files []string, evidence string, round, budget int) entry.SuperviseVerdict {
+	taskID := task.TaskID
 	diagnosis := boundedEvidenceText(security.Redact(res.Stderr), 4096)
 	report, _ := json.Marshal(map[string]any{
 		"agent":          res.Agent,
@@ -33,7 +34,7 @@ func (c *Core) superviseAgentFailure(ctx context.Context, supervisor *entry.Clie
 		"A failed execution cannot be accepted as done.\n\n" +
 		"[执行退出码] " + strconv.Itoa(res.ExitCode) + "\n" + string(report) + "\n" + boundedEvidenceText(security.Redact(evidence), 8192)
 	c.EvTrace(ctx, taskID, EvJudgeStart, map[string]any{"round": round, "budget": budget, "phase": "failure_recovery"})
-	v, err := entry.Supervise(ctx, supervisor, intent, prompt, c.supervisionOptions(ctx, taskID, supervisor))
+	v, err := entry.Supervise(ctx, supervisor, intent, prompt, c.planReviewOptions(ctx, task, c.supervisionOptions(ctx, taskID, supervisor)))
 	if err != nil {
 		c.logger.Warn("recovery supervise call failed", "task", taskID, "err", err)
 	}
@@ -106,12 +107,12 @@ func assessRecovery(r bus.TaskResultPayload) RecoveryAssessment {
 		// endpoint: the fix is in the agent's own model configuration, so the
 		// row stops here with the provider's own words as the reason.
 		a.Category = "model_config"
-		a.Strategy = RecoveryStop
+		a.Strategy = RecoveryHumanReview
 		a.ReplaySafety = "safe_after_environment_fix"
 	case commander.IsAuthorizationRefusal(r.Stderr):
 		a.Category = "authorization"
 		a.Strategy = RecoveryHumanReview
-	case r.Tokens == 0 && authenticationSetupRequired(r.Stderr):
+	case r.Tokens == 0 && commander.IsAuthenticationSetupRequired(r.Stderr):
 		// Commander already tried permitted provider rescue and alternates.
 		// Re-dispatching a logged-out CLI cannot change its credentials and
 		// merely hits the dispatch-failure cooldown. Preserve the first cause.
@@ -147,20 +148,6 @@ func providerBillingRequired(s string) bool {
 	return false
 }
 
-// Match a short CLI diagnostic, never a quoted phrase buried in a task report.
-func authenticationSetupRequired(s string) bool {
-	s = strings.ToLower(strings.TrimSpace(s))
-	if len(s) > 512 {
-		return false
-	}
-	for _, prefix := range []string{"not logged in", "not signed in", "please run /login", "login required", "invalid api key", "invalid_api_key", "missing api key"} {
-		if s == prefix || strings.HasPrefix(s, prefix+" ") || strings.HasPrefix(s, prefix+":") {
-			return true
-		}
-	}
-	return false
-}
-
 // RecoveryPending distinguishes a transient failed row from a settled failure.
 // Readers must wait through the result->assessment write gap and retry backoff.
 func RecoveryPending(events []Event) bool {
@@ -172,9 +159,9 @@ func RecoveryPending(events []Event) bool {
 			var p struct{ Assessment RecoveryAssessment }
 			if json.Unmarshal([]byte(events[i].DataJSON), &p) == nil {
 				switch p.Assessment.Strategy {
-				case RecoveryBoundedRetry, RecoverySessionResume:
+				case RecoveryBoundedRetry, RecoverySessionResume, RecoveryHumanReview:
 					return true
-				case RecoveryStop, RecoveryHumanReview:
+				case RecoveryStop:
 					return false
 				}
 			}

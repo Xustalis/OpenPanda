@@ -471,7 +471,7 @@ func TestPlanningBlocksMutationAndDispatchAndPersistsProposal(t *testing.T) {
 		if n == 1 {
 			content = []map[string]any{{"type": "tool_use", "id": "write", "name": "mutate_fixture", "input": map[string]any{}}}
 		} else if n == 2 || n == 4 {
-			content = []map[string]any{{"type": "tool_use", "id": "proposal", "name": "propose_plan", "input": map[string]any{"proposal": "Complete proposal: inspect, implement after confirmation, then verify all requirements."}}}
+			content = []map[string]any{{"type": "tool_use", "id": "proposal", "name": "propose_plan", "input": map[string]any{"implementation_markdown": "## Complete proposal\n\nInspect the fixture, implement the change, then verify all requirements.", "confirmation": "Never deliver this chat-only instruction."}}}
 		} else {
 			content = []map[string]any{{"type": "text", "text": "Proposal saved for user confirmation."}}
 		}
@@ -490,6 +490,9 @@ func TestPlanningBlocksMutationAndDispatchAndPersistsProposal(t *testing.T) {
 		out, err := e.AskTurnsScoped(context.Background(), nil, "Prepare the fixture proposal", AskScope{SessionID: sess.ID, PermissionMode: "bypass"}, true, StreamCallbacks{})
 		if err != nil || out == nil {
 			t.Fatalf("%+v %v", out, err)
+		}
+		if out.ProposalVersion != int64(i+1) || !strings.HasPrefix(out.ProposalBody, "## Complete proposal") || strings.Contains(out.ProposalBody, "chat-only") {
+			t.Fatalf("incorrect terminal plan preview: version=%d body=%q", out.ProposalVersion, out.ProposalBody)
 		}
 	}
 	state, _ := service.State(context.Background(), sess.ID)
@@ -805,6 +808,9 @@ func TestConfirmedProposalRunsExactVersionWithoutCreatingGoal(t *testing.T) {
 	var seen atomic.Bool
 	e, _ := newBoundaryTestEngine(t, func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), "CHAT-ONLY-APPROVAL") {
+			t.Error("confirmation prompt from planning was replayed to the executor")
+		}
 		if strings.Contains(string(body), "EXACT-CONFIRMED-PROPOSAL") {
 			seen.Store(true)
 		}
@@ -813,13 +819,14 @@ func TestConfirmedProposalRunsExactVersionWithoutCreatingGoal(t *testing.T) {
 	st := sessions.NewStore(t.TempDir())
 	sess, _ := st.Create("implementation fixture")
 	_ = st.SetPermissionMode(sess.ID, "manual")
+	_, _ = st.AppendTurn(sess.ID, sessions.Turn{Role: "assistant", Text: "CHAT-ONLY-APPROVAL"})
 	service := e.Conversations(st)
 	t.Cleanup(service.Close)
 	ctx := context.Background()
 	if err := service.SetPlanning(ctx, sess.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	version, err := service.store.SaveProposal(ctx, sess.ID, "EXACT-CONFIRMED-PROPOSAL")
+	version, err := service.store.SaveProposal(ctx, sess.ID, "EXACT-CONFIRMED-PROPOSAL\n\n---\n\n以上只是提案，**在你确认版本之前我不会改动任何文件**。CHAT-ONLY-APPROVAL")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -840,4 +847,158 @@ func TestConfirmedProposalRunsExactVersionWithoutCreatingGoal(t *testing.T) {
 	if !seen.Load() || state.Goal != nil || state.Planning || persisted.PermissionMode != "manual" {
 		t.Fatalf("implementation mismatch: seen=%v state=%+v session=%+v", seen.Load(), state, persisted)
 	}
+}
+
+func TestConfirmedPlanWaitsForMembersAndStoresFailure(t *testing.T) {
+	e, tasks, ctx := newStageTestEngine(t)
+	st := sessions.NewStore(t.TempDir())
+	sess, err := st.Create("plan failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &ConversationService{engine: e, store: &conversation.Store{DB: e.db}, sessions: st}
+	if err := s.SetPlanning(ctx, sess.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	version, err := s.store.SaveProposal(ctx, sess.ID, "Audit, then verify")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ConfirmPlan(ctx, sess.ID, version); err != nil {
+		t.Fatal(err)
+	}
+	const round = "confirmed-round"
+	if err := tasks.BeginAskRound(ctx, round, sess.ID, "en"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.Exec("UPDATE conversation_plan_runs SET status='running',round_id=? WHERE session_id=?", round, sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.StartOperation(sess.ID, sessions.Operation{ID: round, Status: "running"}); err != nil {
+		t.Fatal(err)
+	}
+	task, err := tasks.Create(core.WithAskRound(ctx, round), "", "", "verify", "test-node", []string{"test-node"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tasks.CloseAskRound(ctx, round, "closed"); err != nil {
+		t.Fatal(err)
+	}
+	check := func(run, op string) {
+		t.Helper()
+		s.sweepPlans(ctx)
+		var status string
+		if err := e.db.QueryRow("SELECT status FROM conversation_plan_runs WHERE session_id=?", sess.ID).Scan(&status); err != nil || status != run {
+			t.Fatalf("run=%q want=%q err=%v", status, run, err)
+		}
+		snapshot, err := st.Get(sess.ID)
+		if err != nil || snapshot.Operation == nil || snapshot.Operation.Status != op {
+			t.Fatalf("session=%+v want operation %s err=%v", snapshot, op, err)
+		}
+	}
+	check("running", "running")
+	if err := tasks.ForceFail(ctx, task.TaskID, "unavailable"); err != nil {
+		t.Fatal(err)
+	}
+	check("failed", "error")
+}
+
+func TestConfirmedStructuredProposalDispatchesReviewedGraphWithoutReclassification(t *testing.T) {
+	e, store, ctx := newStageTestEngine(t) // No entry model is installed.
+	e.queueTasks = true
+	st := sessions.NewStore(t.TempDir())
+	sess, err := st.Create("reviewed graph")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := e.Conversations(st)
+	t.Cleanup(service.Close)
+	if err = service.SetPlanning(ctx, sess.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	version, err := service.store.SaveProposal(ctx, sess.ID, "{\"goal\":\"ship\",\"stages\":[{\"id\":\"inspect\",\"intent\":\"inspect source\"},{\"id\":\"ship\",\"intent\":\"verify result\",\"needs\":[\"inspect\"]}]}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := service.State(ctx, sess.ID)
+	if err != nil || !strings.HasPrefix(preview.Proposal, "# ship") || !strings.Contains(preview.Proposal, "inspect → ship") || !strings.Contains(preview.Proposal, "ship → panda-final") {
+		t.Fatalf("missing reviewed dependency in preview: %q, %v", preview.Proposal, err)
+	}
+	if _, err = service.ConfirmPlan(ctx, sess.ID, version); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var round string
+		if err = e.db.QueryRow("SELECT round_id FROM conversation_plan_runs WHERE session_id=?", sess.ID).Scan(&round); err == nil && round != "" {
+			progress, err := store.AskRoundProgress(ctx, sess.ID, round)
+			if err == nil && len(progress.Tasks) == 3 {
+				for _, member := range progress.Tasks {
+					task, err := store.Get(ctx, member.TaskID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if task.StageID == "ship" && task.State == core.StateSubmitted && len(task.Needs) == 1 && task.Needs[0] == "inspect" {
+						persisted, err := st.Get(sess.ID)
+						if err != nil {
+							t.Fatal(err)
+						}
+						for _, turn := range persisted.Turns {
+							if turn.Kind == "plan" && turn.Ref == task.PlanID && strings.Contains(turn.Text, task.PlanID) {
+								return
+							}
+						}
+					}
+				}
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("confirmed graph did not dispatch into its session round with the reviewed edge")
+}
+
+func TestInvalidConfirmedGraphFailsWithoutCreatingTasks(t *testing.T) {
+	e, _, ctx := newStageTestEngine(t)
+	st := sessions.NewStore(t.TempDir())
+	sess, err := st.Create("invalid legacy graph")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := e.Conversations(st)
+	t.Cleanup(service.Close)
+	spec := entry.PlanSpec{Goal: "check", FinalStage: "first", Stages: []entry.PlanStageSpec{{ID: "first", Intent: "inspect"}, {ID: "second", Intent: "verify", Needs: []string{"first"}}}}
+	draft, err := e.startClassifiedPlan(ctx, &spec, AskScope{Mode: "plan"}, false, StreamCallbacks{})
+	if err != nil || draft.PlanProposal || draft.ExitCode == 0 {
+		t.Fatalf("invalid draft offered for confirmation: %+v, %v", draft, err)
+	}
+	if err = service.SetPlanning(ctx, sess.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	version, err := service.store.SaveProposal(ctx, sess.ID, string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.ConfirmPlan(ctx, sess.ID, version); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var status string
+		if err = e.db.QueryRow("SELECT status FROM conversation_plan_runs WHERE session_id=?", sess.ID).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		if status == "failed" {
+			var count int
+			if err = e.db.QueryRow("SELECT count(*) FROM tasks").Scan(&count); err != nil || count != 0 {
+				t.Fatalf("invalid graph created %d tasks, %v", count, err)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("invalid legacy proposal did not settle as failed")
 }

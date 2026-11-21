@@ -30,6 +30,7 @@ const (
 	// executor and was extracted into this node's copy of the project → what
 	// changed, and where it landed.
 	EvProjectSync      = "project_sync"
+	EvPlanIntervention = "plan_intervention"  // durable cross-stage supervision decision
 	EvPlanStageChanged = "plan_stage_changed" // plan stage unlock/start/complete → plan_id/stage_id/transition
 	EvArtifactTransfer = "artifact_transfer"  // artifact fetch → from/to/hash/size/ok/elapsed
 	EvAgentUsage       = "agent_usage"        // adapter's structured token breakdown → agent/input/output/cache_*

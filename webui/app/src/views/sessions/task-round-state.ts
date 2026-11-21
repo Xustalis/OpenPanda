@@ -102,6 +102,10 @@ export function projectTaskRounds(msgs: ChatMsg[], tasks: Task[] | null, openOpe
     add(task.id, task.operation_id)
   }
   for (const msg of msgs) {
+    if (msg.role === 'user' && msg.idempotency_key?.startsWith('plan:user:')) {
+      hidden.add(msg.k)
+      continue
+    }
     // Controller replies can share the task round ID while carrying their
     // own goal audit or plan outcome. Keep those turns in the transcript.
     if (msg.idempotency_key?.startsWith('goal:') || msg.idempotency_key?.startsWith('plan:')) continue

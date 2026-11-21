@@ -399,7 +399,27 @@ func planGoalFromStages(ctx context.Context, store *core.TaskStore, stages []cor
 // watch, it is not a failure); the first terminal-but-not-done stage is the
 // plan's failure; an all-done board is the clean finish. A board still in
 // flight — the watch detached — keeps OK and reports nothing final.
-func (e *Engine) planBoardVerdict(ctx context.Context, store *core.TaskStore, res *Result, stages []core.Task) {
+func (e *Engine) planBoardVerdict(ctx context.Context, store *core.TaskStore, res *Result, stages []core.Task) (auditErr error) {
+	// Render the durable decisions only alongside a terminal result. A
+	// partial board or a human approval request has no final audit yet.
+	defer func() {
+		if res.PlanID == "" || res.NeedsApproval || (res.OK && res.Answer == "") {
+			return
+		}
+		audit, err := RenderPlanAudit(ctx, e.Locale(), store, res.PlanID)
+		if err != nil {
+			auditErr = err
+			e.logger.Warn("read plan audit", "plan", res.PlanID, "err", err)
+			return
+		}
+		if audit == "" {
+			return
+		}
+		if res.Answer == "" {
+			res.Answer = res.Stderr
+		}
+		res.Answer = strings.TrimSpace(res.Answer + "\n\n" + audit)
+	}()
 	for _, st := range stages {
 		if st.State != core.StateReview {
 			continue
@@ -419,7 +439,18 @@ func (e *Engine) planBoardVerdict(ctx context.Context, store *core.TaskStore, re
 		}
 		return
 	}
+	withdrawn := make(map[string]bool)
 	for _, st := range stages {
+		if st.State == core.StateCancelled && st.PlanID != "" {
+			ok, err := store.PlanStageWithdrawn(ctx, st.TaskID)
+			if err != nil {
+				return err
+			}
+			if ok {
+				withdrawn[st.TaskID] = true
+				continue
+			}
+		}
 		if st.State == core.StateFailed || st.State == core.StateCancelled || st.State == core.StateExpired {
 			p := settledPayload(st)
 			res.OK, res.ExitCode = false, 1
@@ -439,7 +470,7 @@ func (e *Engine) planBoardVerdict(ctx context.Context, store *core.TaskStore, re
 		return
 	}
 	for _, st := range stages {
-		if st.State != core.StateDone {
+		if st.State != core.StateDone && !withdrawn[st.TaskID] {
 			return
 		}
 	}
@@ -450,6 +481,7 @@ func (e *Engine) planBoardVerdict(ctx context.Context, store *core.TaskStore, re
 			return
 		}
 	}
+	return
 }
 
 // stageEventReason recovers a settled stage's reason from its audit trail —

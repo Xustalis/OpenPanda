@@ -413,6 +413,14 @@ func TestRecoveredReceiptReportsUnknownBeforeReconciled(t *testing.T) {
 	if _, err = finalaction.Publish(context.Background(), a.Intent, func(context.Context) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
+	// A background pass racing a live publisher must leave its receipt alone.
+	if err = x.s.reconcileLocalReceipts(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	live, err := x.s.action(context.Background(), a.ID)
+	if err != nil || live.State != "dispatching" || live.Receipt != nil {
+		t.Fatalf("premature reconciliation: %s %v", live.State, err)
+	}
 	if err = x.e.recover(context.Background(), "owner"); err != nil {
 		t.Fatal(err)
 	}

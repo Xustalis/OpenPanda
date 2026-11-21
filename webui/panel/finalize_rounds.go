@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/log"
@@ -112,8 +113,13 @@ func (h *handler) finalizeAskRounds(ctx context.Context) bool {
 		if lang == "" {
 			lang = fallback
 		}
+		text, err := h.auditedRoundSummary(ctx, r, lang)
+		if err != nil {
+			log.From(ctx).Warn("round summary audit", "round", r.ID, "err", err)
+			continue
+		}
 		if _, err := h.sessions.AppendTurn(r.SessionID, sessions.Turn{
-			Role: "assistant", Kind: "answer", RoundID: r.ID, Text: roundSummary(r, lang), IdempotencyKey: roundSummaryKey(r),
+			Role: "assistant", Kind: "answer", RoundID: r.ID, Text: text, IdempotencyKey: roundSummaryKey(r),
 		}); err != nil {
 			log.From(ctx).Warn("round summary append", "round", r.ID, "err", err)
 			continue
@@ -123,4 +129,42 @@ func (h *handler) finalizeAskRounds(ctx context.Context) bool {
 		}
 	}
 	return true
+}
+
+// A confirmed implementation publishes its synthesis and audit in one durable
+// answer. Ordinary detached asks use this finalizer after the caller leaves.
+func (h *handler) auditedRoundSummary(ctx context.Context, r core.AskRound, loc i18n.Locale) (string, error) {
+	text := roundSummary(r, loc)
+	if r.ConfirmedPlan {
+		return text, nil
+	}
+	seen := make(map[string]bool)
+	for _, t := range r.Tasks {
+		if t.PlanID == "" || seen[t.PlanID] {
+			continue
+		}
+		seen[t.PlanID] = true
+		audit, err := askengine.RenderPlanAudit(ctx, loc, h.store, t.PlanID)
+		if err != nil {
+			return "", err
+		}
+		if audit == "" {
+			continue
+		}
+		sess, err := h.sessions.Get(r.SessionID)
+		if err != nil {
+			return "", err
+		}
+		present := false
+		for _, turn := range sess.Turns {
+			if (turn.RoundID == r.ID || turn.OperationID == r.ID) && strings.Contains(turn.Text, audit) {
+				present = true
+				break
+			}
+		}
+		if !present {
+			text += "\n\n" + audit
+		}
+	}
+	return text, nil
 }

@@ -63,6 +63,9 @@ function jobAgent(job: RoundJob) {
 function JobSpeaker({ job, finished }: { job: RoundJob; finished?: boolean }) {
   const agent = jobAgent(job)
   const state = job.task?.state
+  const label = state === 'submitted' && job.task?.plan_meta?.needs
+    ? 'sessions.round.waitingForDependencies'
+    : state ? 'state.' + state : 'sessions.round.unknown'
   const report = finished ? currentRoundReport(job) : undefined
   const timestamp = report?.ts ?? (job.task ? Date.parse(job.task.updated_at) / 1000 : 0)
   const stamp = finished && Number.isFinite(timestamp) && clockTime(timestamp, locale())
@@ -71,7 +74,7 @@ function JobSpeaker({ job, finished }: { job: RoundJob; finished?: boolean }) {
       <span class="session-round-avatar" aria-hidden="true"><Icon name="bot" size={16} /></span>}
     {agent && <span class="msg-name">{agent.includes(':') ? agent : prettyAgent(agent)}</span>}
     <span class={`msg-cast-state${state ? ` is-${state}` : ''}`}>
-      <span class="msg-report-dot" aria-hidden="true" />{t(state ? `state.${state}` : 'sessions.round.unknown')}
+      <span class="msg-report-dot" aria-hidden="true" />{t(label)}
     </span>
     {stamp && <span class="session-round-meta">{stamp}</span>}
     {report?.duration_ms ? <span class="session-round-meta">{t('sessions.elapsed', { d: formatDuration(report.duration_ms) })}</span> : null}
@@ -239,7 +242,7 @@ export function SessionTaskRound({ round, reportSelection, onReport, onOpenTask,
       </div>
     </> : <>
       <RoundFold speaker={<PandaSpeaker ts={stamp} />} header={<>
-        <strong class="session-round-subject">{t('sessions.round.dispatched', { n: round.jobs.length })}</strong>
+        <strong class="session-round-subject">{t('sessions.round.total', { n: round.jobs.length })}</strong>
         {round.running >= 2 && <span class="session-round-parallel" data-testid="parallel-execution">{t('sessions.round.parallel')}</span>}
         {round.running > 0 && <span class="session-round-meta">{t('sessions.round.running', { n: round.running })}</span>}
         {round.waiting > 0 && <span class="session-round-meta">{t('sessions.round.queued', { n: round.waiting })}</span>}

@@ -65,7 +65,7 @@ func TestHooksFireOnLifecycleEdges(t *testing.T) {
 	if err := c.store.Accept(ctx, task.TaskID, "queue-node"); err != nil {
 		t.Fatal(err)
 	}
-	if !waitForFile(t, started) {
+	if !waitForLines(t, started, 1) {
 		t.Fatal("the started hook never fired")
 	}
 	if body, _ := os.ReadFile(started); !strings.Contains(string(body), "生成构建报告") {
@@ -75,7 +75,7 @@ func TestHooksFireOnLifecycleEdges(t *testing.T) {
 	if err := c.store.Complete(ctx, task.TaskID, "queue-node", map[string]any{"ok": true}); err != nil {
 		t.Fatal(err)
 	}
-	if !waitForFile(t, done) {
+	if !waitForLines(t, done, 1) {
 		t.Fatal("the done hook never fired")
 	}
 	if body, _ := os.ReadFile(done); !strings.Contains(string(body), task.TaskID) {

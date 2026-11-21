@@ -335,7 +335,7 @@ func TestTraceEventTypesCoverAgentActivity(t *testing.T) {
 	for _, typ := range []string{
 		"classify_result", "route_decision", "delegation_hop",
 		"exec_agent_start", "supervision_round", "tier2_triggered",
-		"plan_stage_changed", "artifact_transfer",
+		"plan_stage_changed", "plan_intervention", "plan_adjustment_read", "artifact_transfer",
 		"agent_event", "progress", "agent_usage", "agent_fallback",
 		"judge_start", "supervise", "result",
 	} {

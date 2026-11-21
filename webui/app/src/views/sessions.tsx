@@ -18,6 +18,7 @@ import {
   type Task,
 } from '../api/client'
 import { Icon } from '../components/icons'
+import { Markdown } from '../md/render'
 import { Dock, DOCK_MAX_WIDTH, DOCK_MIN_WIDTH, type DockEnv, type DockTab } from '../components/dock'
 import { DockBrowser, type BrowserArtifact, type BrowserPageRequest } from '../components/dock-browser'
 import { DockFiles } from '../components/dock-files'
@@ -2114,6 +2115,17 @@ export function SessionsView({
     return created.id
   }
 
+  const planSelected = armed === 'plan' || Boolean(controlState?.planning)
+  const awaitingPlanConfirmation = Boolean(controlState?.planning && controlState.proposal_version > controlState.confirmed_version)
+
+  function togglePlan() {
+    if (controlState?.planning) void setPlanning(false)
+    setArmed(planSelected ? null : 'plan')
+    setGoalEditor(null)
+    if (planArgument(input) !== null) removeModeCommand()
+    composer.current?.focus()
+  }
+
   async function setPlanning(planning: boolean) {
     try {
       const sid = await ensureControlSession()
@@ -2939,7 +2951,10 @@ export function SessionsView({
               />
               <PermissionPicker value={permission} onChange={pickPermission} />
               {(armed === 'goal' || goalEditor?.sid === activeId) && <button type="button" class="composer-goal-trigger" title={t('sessions.goal.hint')} onClick={() => { setGoalEditor(null); setArmed(null); if (goalDraft !== null) removeModeCommand() }}><Icon name="target" size={16} />{t('sessions.goal.label')}</button>}
-              {(armed === 'plan' || controlState?.planning) && <button type="button" class="composer-goal-trigger composer-plan-trigger" title={t(armed === 'plan' && !controlState?.planning ? 'sessions.plan.hint' : 'sessions.plan.exit')} onClick={() => { if (controlState?.planning) void setPlanning(false); setArmed(null); if (planArgument(input) !== null) removeModeCommand() }}><Icon name="lightbulb" size={16} />{t('sessions.plan.label')}</button>}
+              <button type="button" class="composer-goal-trigger composer-plan-trigger" aria-pressed={planSelected}
+                title={t(planSelected ? 'sessions.plan.exit' : 'sessions.plan.hint')} onClick={togglePlan}>
+                <Icon name="lightbulb" size={16} />{t('sessions.plan.label')}
+              </button>
               {/* The model switch, immediately left of Send — the row's right
                   edge is where you reach for before sending, and "which model"
                   is the one more thing that decision wants asked. WorkBuddy's
@@ -2974,9 +2989,12 @@ export function SessionsView({
               if (!activeId) return
               try { await api.controlConversation(activeId, { action: 'create', objective: legacyGoal.text }); const cached = JSON.parse(sessionStorage.getItem('openpanda.composerGoals') || '{}'); delete cached[activeId]; sessionStorage.setItem('openpanda.composerGoals', JSON.stringify(cached)); await refreshControl(activeId) } catch (error) { toastError(error) }
             }}>{t('sessions.goal.restore')}</button></section>}
-            {controlState?.planning && controlState.proposal && <section class="composer-proposal">
-              <details><summary>{t('sessions.plan.proposal')} · {controlState.proposal_version}</summary><pre>{controlState.proposal}</pre></details>
-              <button type="button" onClick={() => void confirmProposal()}>{t(controlState.goal?.paused_by_plan ? 'sessions.plan.implementGoal' : 'sessions.plan.implement')}</button>
+            {controlState?.proposal && <section class="composer-proposal">
+              <details key={activeId + ':' + controlState.proposal_version + ':' + awaitingPlanConfirmation} open={awaitingPlanConfirmation}>
+                <summary>{t('sessions.plan.proposal')} · {controlState.proposal_version}</summary>
+                <Markdown text={controlState.proposal} class="composer-plan-document" />
+              </details>
+              {awaitingPlanConfirmation && <button type="button" disabled={busy} onClick={() => void confirmProposal()}>{t(controlState.goal?.paused_by_plan ? 'sessions.plan.implementGoal' : 'sessions.plan.implement')}</button>}
             </section>}
             <div class="composer-head">
               <ComposerPet

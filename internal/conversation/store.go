@@ -75,6 +75,7 @@ func (s *Store) Get(ctx context.Context, sid string) (State, error) {
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return st, err
 	}
+	st.Proposal = ProposalBody(st.Proposal)
 	return st, nil
 }
 
@@ -149,6 +150,10 @@ func (s *Store) SetPlanning(ctx context.Context, sid string, enabled bool) error
 }
 
 func (s *Store) SaveProposal(ctx context.Context, sid, text string, expected ...int64) (int64, error) {
+	text = ProposalBody(text)
+	if text == "" || len(text) > 200000 {
+		return 0, fmt.Errorf("%w: complete proposal required, at most 200000 bytes", ErrInvalid)
+	}
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -197,7 +202,8 @@ func (s *Store) Confirm(ctx context.Context, sid string, version int64) (string,
 	if err != nil {
 		return "", err
 	}
-	if strings.TrimSpace(text) == "" {
+	text = ProposalBody(text)
+	if text == "" {
 		return "", ErrConflict
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO conversation_plan_runs(session_id,version,proposal,goal_id,goal_generation) VALUES(?,?,?,COALESCE((SELECT id FROM conversation_goals WHERE session_id=? AND status='paused' AND paused_by_plan=1),''),COALESCE((SELECT generation FROM conversation_goals WHERE session_id=? AND status='paused' AND paused_by_plan=1),0))`, sid, version, text, sid, sid); err != nil {

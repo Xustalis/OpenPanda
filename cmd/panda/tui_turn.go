@@ -302,6 +302,9 @@ func (m tuiModel) commit(out *askengine.Result) (tea.Model, tea.Cmd) {
 // committed block matches exactly what streamed).
 func resultBlock(out *askengine.Result, liveAnswer string, loc i18n.Locale) block {
 	b := buildResultBlock(out, liveAnswer, loc)
+	if review := proposalReview(loc, out, b.body); review != "" {
+		b.body = strings.TrimSpace(b.body + "\n\n" + review)
+	}
 	// Stamp the row id once here rather than at each of the five construction
 	// sites: every task block is addressable by id, and the rail's locate
 	// action reads exactly that.

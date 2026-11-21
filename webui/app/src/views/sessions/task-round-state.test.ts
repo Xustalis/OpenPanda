@@ -73,7 +73,7 @@ test('keeps saved Goal and Plan turns alongside the projected task round', () =>
     { ...round, k: 'plan-reply', role: 'assistant', kind: 'error', text: 'Implementation error', idempotency_key: 'plan:assistant:op-a' },
   ]
   const { hidden } = projectTaskRounds(messages, [row('a')])
-  assert.deepEqual([...hidden], ['aggregate'])
+  assert.deepEqual([...hidden], ['aggregate', 'plan-user'])
 })
 
 test('the collapsed document excerpts actual Markdown prose, not links, headings or code fences', () => {

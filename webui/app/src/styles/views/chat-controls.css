@@ -645,6 +645,9 @@
 /* Versioned proposals live in the composer without altering the goal bar. */
 .composer-proposal { display: flex; align-items: flex-start; gap: 12px; padding: 10px 14px; border-top: 1px solid var(--border); font-size: 12px; }
 .composer-proposal details { min-width: 0; flex: 1; }
-.composer-proposal pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
-.composer-proposal button { flex-shrink: 0; border-radius: 8px; padding: 6px 10px; }
+.composer-plan-trigger[aria-pressed="true"] { color: var(--text); background: var(--bg-active); }
+.composer-proposal summary { cursor: pointer; font-weight: 600; }
+.composer-plan-document { margin-top: 8px; max-height: min(32vh, 320px); overflow: auto; overflow-wrap: anywhere; }
+.composer-plan-document pre { overflow-x: auto; }
+.composer-proposal > button { flex-shrink: 0; border-radius: 8px; padding: 6px 10px; }
 @media (max-width: 480px) { .composer-proposal { flex-wrap: wrap; } }

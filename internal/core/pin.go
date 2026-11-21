@@ -344,7 +344,7 @@ func (c *Core) pinRefHint(ref string) string {
 // that cannot serve the task's requires/profile declines up front with the
 // missing ability named, instead of accepting and erroring mid-run.
 func (c *Core) routePinned(ctx context.Context, ref string, chain []string,
-	requires []string, resReq ledger.ResourceProfile) scheduler.Decision {
+	requires []string, resReq ledger.ResourceProfile, specJSON ...string) scheduler.Decision {
 	res := c.resolvePin(ctx, ref)
 	switch {
 	case res.self:
@@ -352,8 +352,12 @@ func (c *Core) routePinned(ctx context.Context, ref string, chain []string,
 		// contains this node is the normal origin-queued case, not a loop to
 		// refuse (revisiting via delegation is rejected upstream by
 		// AppendChain before this resolver runs).
-		if len(requires) > 0 {
-			if ok, why := c.localMatchReason(requires); !ok {
+		if len(requires) > 0 || len(specJSON) > 0 && specJSON[0] != "" {
+			var spec string
+			if len(specJSON) > 0 {
+				spec = specJSON[0]
+			}
+			if ok, why := c.localMatchReason(requires, spec); !ok {
 				// Name the failing check, not just the requirement: "cannot
 				// satisfy [agent:claude_code]" is true of a missing CLI, an
 				// unconfigured model and a dead relay alike, and the operator

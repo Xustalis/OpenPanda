@@ -17,6 +17,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/memory"
+	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 )
 
@@ -102,5 +103,25 @@ func TestWorkPath(t *testing.T) {
 	got.Store(e.WorkPath())
 	if got.Load() != "/tmp/panda-work" {
 		t.Fatalf("WorkPath = %v, want /tmp/panda-work", got.Load())
+	}
+}
+
+func TestSessionWorkDirUsesConfirmedProject(t *testing.T) {
+	e := newApprovalTestEngine(t, config.ApprovalModeOnRequest)
+	e.cfg.Storage.WorkPath = t.TempDir()
+	projectDir := t.TempDir()
+	if _, err := e.projStore.Create("project", projectDir, ""); err != nil {
+		t.Fatal(err)
+	}
+	sess := &sessions.Session{Project: "project"}
+	if got := e.SessionWorkDir(sess); got != projectDir {
+		t.Fatalf("session project source = %q, want %q", got, projectDir)
+	}
+	sess.Worktree = t.TempDir()
+	if got := e.SessionWorkDir(sess); got != sess.Worktree {
+		t.Fatalf("session worktree = %q, want %q", got, sess.Worktree)
+	}
+	if got := e.SessionWorkDir(&sessions.Session{}); got != e.WorkPath() {
+		t.Fatalf("default workspace = %q, want %q", got, e.WorkPath())
 	}
 }

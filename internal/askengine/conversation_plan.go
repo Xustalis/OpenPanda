@@ -4,22 +4,63 @@ package askengine
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/conversation"
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/util"
 )
 
 type proposalRevision struct {
-	mu         sync.Mutex
-	version    int64
-	generation int64
+	mu            sync.Mutex
+	version       int64
+	generation    int64
+	body          string
+	continuesGoal bool
+}
+
+// Render the reviewed graph for people. Dispatch reads the original version
+// from the store, including all its routing constraints and acceptance checks.
+func (e *Engine) proposalMarkdown(raw string) string {
+	if !strings.HasPrefix(strings.TrimSpace(raw), "{") {
+		return raw
+	}
+	var spec entry.PlanSpec
+	if json.Unmarshal([]byte(raw), &spec) != nil || entry.ValidatePlanSpec(&spec) != nil {
+		return raw
+	}
+	graph, err := e.compileClassifiedPlan(&spec, true, "")
+	if err != nil {
+		return raw
+	}
+	var doc strings.Builder
+	fmt.Fprintf(&doc, "# %s\n", spec.Goal)
+	for i, stage := range graph.Stages {
+		fmt.Fprintf(&doc, "\n## %d. %s\n", i+1, stage.Title)
+		if i < len(spec.Stages) {
+			fmt.Fprintf(&doc, "\n%s\n", strings.TrimSpace(spec.Stages[i].Intent))
+		}
+		if len(stage.Needs) > 0 {
+			fmt.Fprintf(&doc, "\n%s → %s\n", strings.Join(stage.Needs, ", "), stage.ID)
+		}
+		if len(stage.Requires) > 0 {
+			fmt.Fprintf(&doc, "\n%s\n", strings.Join(stage.Requires, ", "))
+		}
+		if i < len(spec.Stages) && spec.Stages[i].SuccessDefinition != "" {
+			fmt.Fprintf(&doc, "\n%s\n", spec.Stages[i].SuccessDefinition)
+		}
+	}
+	// Indentation keeps the exact contract visible even if it contains fences.
+	fmt.Fprintf(&doc, "\n    %s", strings.ReplaceAll(raw, "\n", "\n    "))
+	return doc.String()
 }
 
 func (e *Engine) saveProposal(ctx context.Context, scope AskScope, text string) (int64, error) {
@@ -32,19 +73,30 @@ func (e *Engine) saveProposal(ctx context.Context, scope AskScope, text string) 
 	v, err := e.Conversations(nil).store.SaveProposal(ctx, scope.SessionID, text, r.version, r.generation)
 	if err == nil {
 		r.version = v
+		r.body = e.proposalMarkdown(conversation.ProposalBody(text))
 	}
 	return v, err
 }
 
 func (e *Engine) registerProposalTool(reg *entry.Registry, scope AskScope) {
-	reg.Register(entry.Tool{Name: "propose_plan", Tier: 1, Description: "Save a complete, decision-ready implementation proposal. Include scope, concrete steps, risks and acceptance checks. This saves a version for explicit user confirmation and never executes the plan.", Schema: map[string]any{"type": "object", "properties": map[string]any{"proposal": map[string]any{"type": "string"}}, "required": []string{"proposal"}}, Run: func(ctx context.Context, args map[string]any) (string, error) {
-		text, _ := args["proposal"].(string)
-		if strings.TrimSpace(text) == "" || len(text) > 200000 {
-			return "", errors.New("complete proposal required, at most 200000 bytes")
-		}
-		version, err := e.saveProposal(ctx, scope, text)
-		return fmt.Sprintf("Proposal version %d saved. Wait for explicit user confirmation before implementation.", version), err
-	}})
+	reg.Register(entry.Tool{
+		Name: "propose_plan", Tier: 1,
+		Description: "Save the executable plan in Markdown. Include scope, steps, dependencies, risks and acceptance checks. The interface supplies the confirmation action. Put any message addressed to the user in the chat reply.",
+		Schema: map[string]any{"type": "object", "properties": map[string]any{
+			"implementation_markdown": map[string]any{"type": "string", "description": "The complete work instructions to show for review and send to the executor. Exclude requests for approval or follow-up choices. Ask outstanding questions in chat before saving."},
+		}, "required": []string{"implementation_markdown"}},
+		Run: func(ctx context.Context, args map[string]any) (string, error) {
+			text, ok := args["implementation_markdown"].(string)
+			if !ok { // Older tool-call transcripts used the proposal field.
+				text, _ = args["proposal"].(string)
+			}
+			version, err := e.saveProposal(ctx, scope, text)
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Proposal version %d saved. The client displays the proposal and its confirmation action.", version), nil
+		},
+	})
 }
 
 func (s *ConversationService) sweepPlans(ctx context.Context) {
@@ -106,7 +158,7 @@ func (s *ConversationService) sweepPlans(ctx context.Context) {
 				if !goalTaskSettled(t.State) || round.PendingRecovery[t.TaskID] {
 					settled = false
 				}
-				if t.State != "done" {
+				if t.State != core.StateDone && !round.Withdrawn[t.TaskID] {
 					success = false
 				}
 			}
@@ -125,23 +177,53 @@ func (s *ConversationService) sweepPlans(ctx context.Context) {
 				}
 				continue
 			}
+			turns, err := s.planDeliveryTurns(ctx, r.sid, r.round)
+			if err != nil {
+				continue
+			}
 			tx, err := s.store.DB.BeginTx(ctx, nil)
 			if err != nil {
 				continue
 			}
-			result, err := tx.ExecContext(ctx, "UPDATE conversation_plan_runs SET status='done' WHERE session_id=? AND version=? AND status='running'", r.sid, r.version)
-			if err == nil {
-				n, _ := result.RowsAffected()
-				if n == 1 && success {
-					_, err = tx.ExecContext(ctx, "UPDATE conversation_goals SET status=CASE WHEN token_budget IS NOT NULL AND tokens>=token_budget THEN 'budget_limited' ELSE 'active' END,paused_by_plan=0,blocked_streak=0,blocker='' WHERE id=? AND generation=? AND status='paused' AND paused_by_plan=1 AND NOT EXISTS(SELECT 1 FROM conversation_controls WHERE session_id=? AND planning=1)", r.goal, r.generation, r.sid)
+			runStatus := "done"
+			if !success {
+				runStatus = "failed"
+			}
+			result, err := tx.ExecContext(ctx, "UPDATE conversation_plan_runs SET status=? WHERE session_id=? AND version=? AND round_id=? AND status='running'", runStatus, r.sid, r.version, r.round)
+			if err != nil {
+				tx.Rollback()
+				continue
+			}
+			n, err := result.RowsAffected()
+			if err != nil || n != 1 {
+				tx.Rollback()
+				continue
+			}
+			if success && r.goal != "" {
+				_, err = tx.ExecContext(ctx, "UPDATE conversation_goals SET status=CASE WHEN token_budget IS NOT NULL AND tokens>=token_budget THEN 'budget_limited' ELSE 'active' END,paused_by_plan=0,blocked_streak=0,blocker='' WHERE id=? AND generation=? AND status='paused' AND paused_by_plan=1 AND NOT EXISTS(SELECT 1 FROM conversation_controls WHERE session_id=? AND planning=1)", r.goal, r.generation, r.sid)
+				if err != nil {
+					tx.Rollback()
+					continue
 				}
 			}
-			if err == nil {
-				_ = tx.Commit()
-			} else {
-				_ = tx.Rollback()
+			// The conditional update holds the writer lock against concurrent stop.
+			// A crash before commit replays the same transcript keys.
+			st := s.sessionStore()
+			appended := false
+			if len(turns) != 0 {
+				_, appended, err = st.PersistTurns(r.sid, turns...)
+				if err != nil {
+					tx.Rollback()
+					continue
+				}
 			}
-			if st := s.sessionStore(); st != nil {
+			if tx.Commit() != nil {
+				continue
+			}
+			if st != nil {
+				if appended {
+					_ = st.Checkpoint(ctx, r.sid)
+				}
 				status := "done"
 				if !success {
 					status = "error"
@@ -245,19 +327,22 @@ func (s *ConversationService) runPlan(sid, round, proposal string, version int64
 		_ = s.engine.TaskStore().CloseAskRound(context.WithoutCancel(ctx), round, "interrupted")
 		return
 	}
-	history := []entry.Turn{}
-	for _, t := range sess.Turns {
-		if !t.DisplayArchive {
-			history = append(history, entry.Turn{Role: t.Role, Content: t.Text})
+	// The reviewed version is self-contained. Only a continuation needs
+	// conversation from a previous attempt (including clarification answers).
+	// Planning replies and confirmation prompts are display-only here.
+	proposal = conversation.ProposalBody(proposal)
+	history, resuming := confirmedPlanHistory(sess, version, s.engine.ContextWindow())
+	prompt := fmt.Sprintf("Implement user-confirmed proposal version %d in the current session. Continue from existing task results and checkpoints, preserve the requirements and verify the result.\n\n%s", version, proposal)
+	_, _ = st.AppendTurn(sid, sessions.Turn{Role: "user", Text: prompt, RoundID: round, IdempotencyKey: "plan:user:" + round})
+	workDir := s.engine.SessionWorkDir(sess)
+	scope := AskScope{confirmedImplementation: true, SessionID: sid, RoundID: round, WorkDir: workDir, Project: sess.Project, Agents: sess.Team, PermissionMode: sess.PermissionMode, PersonalMemory: true}
+	if !resuming {
+		var spec entry.PlanSpec
+		if json.Unmarshal([]byte(proposal), &spec) == nil && entry.ValidatePlanSpec(&spec) == nil {
+			scope.reviewedPlan = &spec
 		}
 	}
-	prompt := fmt.Sprintf("Implement user-confirmed proposal version %d in the current session. Inspect the saved transcript and existing task results/checkpoints first; continue remaining work without repeating completed side effects. Preserve the original requirements and verify the result.\n\n%s", version, proposal)
-	_, _ = st.AppendTurn(sid, sessions.Turn{Role: "user", Text: prompt, RoundID: round, IdempotencyKey: "plan:user:" + round})
-	workDir := sess.Worktree
-	if workDir == "" {
-		workDir = s.engine.WorkPath()
-	}
-	out, err := s.engine.AskTurnsScoped(ctx, history, prompt, AskScope{SessionID: sid, RoundID: round, WorkDir: workDir, Project: sess.Project, Agents: sess.Team, PermissionMode: sess.PermissionMode, PersonalMemory: true}, false, StreamCallbacks{})
+	out, err := s.engine.AskTurnsScoped(ctx, history, prompt, scope, false, StreamCallbacks{})
 	finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer finishCancel()
 	if s.finishCancelledRound(ctx, finishCtx, st, sid, op) {
@@ -269,7 +354,21 @@ func (s *ConversationService) runPlan(sid, round, proposal string, version int64
 		turn.Text = out.Answer
 		turn.Kind = out.Kind
 		turn.Ref = out.TaskID
+		turn.Warning = out.Warning
+		if out.Kind == "plan" {
+			turn.Ref = out.PlanID
+			if turn.Text == "" && out.OK && out.PlanID != "" {
+				turn.Text = i18n.Tf(s.engine.Locale(), "cli.plan.started", "id", out.PlanID, "n", strconv.Itoa(len(out.PlanStages)), "goal", out.PlanGoal)
+			}
+		}
 		turn.Tokens = out.Tokens()
+		if out.ExitCode != 0 || out.Denied {
+			status = "stopped"
+			turn.Kind = "error"
+			if turn.Text == "" {
+				turn.Text = out.Stderr
+			}
+		}
 		if out.NeedsClarification {
 			status = "stopped"
 		}
@@ -286,10 +385,34 @@ func (s *ConversationService) runPlan(sid, round, proposal string, version int64
 		_, _ = s.store.DB.ExecContext(finishCtx, "UPDATE conversation_plan_runs SET status='waiting_input' WHERE session_id=? AND version=? AND round_id=? AND status='running'", sid, version, round)
 	}
 	_, _ = st.AppendTurn(sid, turn)
-	op.Status = "done"
-	if err != nil {
+	// A dispatch receipt closes this ask, while the durable plan operation
+	// remains running until sweepPlans observes all member tasks settling.
+	if status == "stopped" {
 		op.Status = "error"
+		if out != nil && out.NeedsClarification && err == nil {
+			op.Status = "done"
+		}
+		_, _ = st.FinishRunningOperation(sid, op)
 	}
-	_, _ = st.FinishRunningOperation(sid, op)
 	_ = s.engine.TaskStore().CloseAskRound(finishCtx, round, status)
+}
+
+// The plan:user turn is the durable boundary between planning discussion and
+// the implementation. Older sessions persisted the same version prefix.
+func confirmedPlanHistory(sess *sessions.Session, version int64, window int) ([]entry.Turn, bool) {
+	prefix := fmt.Sprintf("Implement user-confirmed proposal version %d in the current session.", version)
+	for i, t := range sess.Turns {
+		if !strings.HasPrefix(t.IdempotencyKey, "plan:user:") || !strings.HasPrefix(t.Text, prefix) {
+			continue
+		}
+		_, tail := sessions.SplitForBudget(sess.Turns[i+1:], sessions.ReplayBudget(window))
+		var history []entry.Turn
+		for _, t := range tail {
+			if !t.DisplayArchive && !strings.HasPrefix(t.IdempotencyKey, "plan:user:") && t.Text != "" {
+				history = append(history, entry.Turn{Role: t.Role, Content: t.Text})
+			}
+		}
+		return history, true
+	}
+	return nil, false
 }

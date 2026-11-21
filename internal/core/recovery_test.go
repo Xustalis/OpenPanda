@@ -33,7 +33,7 @@ func TestRecoveryNeverAssumesCrossNodeReplaySafety(t *testing.T) {
 		// A model id the credential's plan does not serve: the fix is the
 		// agent's configuration, so the row stops instead of spending the
 		// retry budget on the identical 400.
-		{bus.TaskResultPayload{ExitCode: 1, Stderr: `provider failure: {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.","code":"model_not_found"}}`}, "model_config", "stop"},
+		{bus.TaskResultPayload{ExitCode: 1, Stderr: `provider failure: {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.","code":"model_not_found"}}`}, "model_config", "human_review"},
 		// A 400 about the request itself is not the model's fault: the
 		// ordinary retry path stays, and so does its category.
 		{bus.TaskResultPayload{ExitCode: 1, Stderr: "400 invalid_request_error: messages: field required"}, "execution_failure", "bounded_same_node_retry"},

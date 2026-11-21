@@ -4,6 +4,7 @@ package commander
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -136,10 +137,18 @@ type ProbeVerdict struct {
 	Status int
 }
 
-// probeKey is the cache identity: everything that can change the verdict
-// except the credential value itself.
-func (s ProbeSpec) probeKey() string {
-	return s.Endpoint + "|" + s.APIType + "|" + s.Model + "|" + s.RejectionHint
+type probeIdentity struct {
+	endpoint, apiType, model, rejectionHint string
+	credential                              [sha256.Size]byte
+	definitive                              bool
+}
+
+// Agents at the same model endpoint may use different accounts, or a token
+// their CLI can refresh on rejection. Keep both distinctions in the cache
+// and in-flight request identity without retaining the credential itself.
+func (s ProbeSpec) probeKey() probeIdentity {
+	return probeIdentity{endpoint: s.Endpoint, apiType: s.APIType, model: s.Model, rejectionHint: s.RejectionHint,
+		credential: sha256.Sum256([]byte(s.APIKey)), definitive: s.KeyDefinitive}
 }
 
 type endpointVerdict struct {
@@ -151,9 +160,15 @@ type endpointVerdict struct {
 	checked  time.Time
 }
 
+type activeProbe struct {
+	done   chan struct{}
+	result ProbeVerdict
+}
+
 var (
-	endpointMu    sync.Mutex
-	endpointCache = map[string]endpointVerdict{}
+	endpointPending = map[probeIdentity]*activeProbe{}
+	endpointMu      sync.Mutex
+	endpointCache   = map[probeIdentity]endpointVerdict{}
 )
 
 // probeNow is a test seam over the clock so TTL behaviour is deterministic.
@@ -185,6 +200,13 @@ func modelProbe(spec ProbeSpec) ProbeVerdict {
 			return ProbeVerdict{OK: v.ok, Detail: v.detail, Rejected: v.rejected, Unknown: v.unknown, Status: v.status}
 		}
 	}
+	if call := endpointPending[key]; call != nil {
+		endpointMu.Unlock()
+		<-call.done
+		return call.result
+	}
+	call := &activeProbe{done: make(chan struct{})}
+	endpointPending[key] = call
 	endpointMu.Unlock()
 
 	v := probeModelOnce(spec)
@@ -195,6 +217,9 @@ func modelProbe(spec ProbeSpec) ProbeVerdict {
 	// that unknown no longer disqualifies the agent.
 	endpointMu.Lock()
 	endpointCache[key] = endpointVerdict{ok: v.OK, detail: v.Detail, rejected: v.Rejected, unknown: v.Unknown, status: v.Status, checked: probeNow()}
+	call.result = v
+	delete(endpointPending, key)
+	close(call.done)
 	endpointMu.Unlock()
 	return v
 }
@@ -432,7 +457,7 @@ func lastSegVersioned(p string) bool {
 // resetEndpointProbeCache clears cached verdicts. Test seam.
 func resetEndpointProbeCache() {
 	endpointMu.Lock()
-	endpointCache = map[string]endpointVerdict{}
+	clear(endpointCache)
 	endpointMu.Unlock()
 }
 

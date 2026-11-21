@@ -64,14 +64,14 @@ func TestRegressionConcurrentRecoveryUsageIsPerCall(t *testing.T) {
 	doneA := make(chan struct{})
 	go func() {
 		defer close(doneA)
-		c.superviseAgentFailure(ctx, client, a.TaskID, "recover A", commander.Result{Agent: "fake", ExitCode: 1, Stderr: "failed A"}, nil, "", 1, 2)
+		c.superviseAgentFailure(ctx, client, a, "recover A", commander.Result{Agent: "fake", ExitCode: 1, Stderr: "failed A"}, nil, "", 1, 2)
 	}()
 	select {
 	case <-startedA:
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
-	c.superviseAgentFailure(ctx, client, b.TaskID, "recover B", commander.Result{Agent: "fake", ExitCode: 1, Stderr: "failed B"}, nil, "", 1, 2)
+	c.superviseAgentFailure(ctx, client, b, "recover B", commander.Result{Agent: "fake", ExitCode: 1, Stderr: "failed B"}, nil, "", 1, 2)
 	unblock()
 	select {
 	case <-doneA:
@@ -167,7 +167,7 @@ func TestRegressionControlSerialRecoveryUsageIsPerCall(t *testing.T) {
 		if err := c.store.SetTokenBudget(ctx, task.TaskID, 30); err != nil {
 			t.Fatal(err)
 		}
-		c.superviseAgentFailure(ctx, client, task.TaskID, title, commander.Result{Agent: "fake", ExitCode: 1, Stderr: "failed"}, nil, "", 1, 2)
+		c.superviseAgentFailure(ctx, client, task, title, commander.Result{Agent: "fake", ExitCode: 1, Stderr: "failed"}, nil, "", 1, 2)
 		after, err := c.store.Get(ctx, task.TaskID)
 		if err != nil || after.TokenBudget != 10 {
 			t.Fatalf("serial control %s: budget=%d error=%v", title, after.TokenBudget, err)

@@ -382,17 +382,9 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		acceptanceChecks, acceptanceBaseline)
 }
 
-// taskSpec reads a task's persisted spec once for the routing decisions that
-// need it — the roster and the permission mode both live there, and two point
-// reads of the same row answered one question twice. A missing row or an
-// unreadable spec yields the zero value: no roster, auto permission.
-func (c *Core) taskSpec(ctx context.Context, taskID string) entry.TaskSpecDetail {
-	t, err := c.store.Get(ctx, taskID)
-	if err != nil || t.SpecJSON == "" {
-		return entry.TaskSpecDetail{}
-	}
+func routingTaskSpec(raw string) entry.TaskSpecDetail {
 	var spec entry.TaskSpecDetail
-	if err := json.Unmarshal([]byte(t.SpecJSON), &spec); err != nil {
+	if raw != "" && json.Unmarshal([]byte(raw), &spec) != nil {
 		return entry.TaskSpecDetail{}
 	}
 	return spec
@@ -503,6 +495,55 @@ func rosterIncludes(roster []string, name string) bool {
 	return false
 }
 
+// Use the entry classifier's task kind and declared scope as language-independent
+// features alongside the target text and the card's own specialty vocabulary.
+func agentTaskTraits(spec entry.TaskSpecDetail) []string {
+	traits := []string{string(spec.Kind), spec.Target}
+	switch spec.Kind {
+	case entry.TaskInvestigation:
+		traits = append(traits, "code_search")
+	case entry.TaskCodeQuestion:
+		traits = append(traits, "code_explanation", "code_search")
+	case entry.TaskOperations:
+		traits = append(traits, "shell_execution")
+	case entry.TaskEdit:
+		if len(spec.Paths) > 1 {
+			traits = append(traits, "multi_file_edits")
+		}
+	}
+	return traits
+}
+
+func taskRosterRouter(router *commander.Router, spec entry.TaskSpecDetail, required []string) (*commander.Router, error) {
+	if roster := spec.AllowAgents; len(roster) > 0 {
+		// "The roster wins" used to mean "rank the roster instead", which
+		// swapped the employee while leaving the task's own text intact. A task
+		// that names an agent is a task ABOUT that agent: three "test
+		// agent:<name>" tasks pinned to claude_code, codex and deepseek_harness
+		// ran on a [deepseek_harness, opencode] roster, all three executed on
+		// deepseek_harness, and each printed "<name> 调用成功" for an agent that
+		// never started — three green passes, two of them fiction. Refuse the
+		// mismatch instead: nothing runs, and the reason names both sides.
+		if err := rosterHonoursPins(router, roster, required); err != nil {
+			return nil, err
+		}
+		// A roster naming only agents this node does not carry cannot be
+		// staffed here. WithAgents degrades to the unrestricted card in that
+		// case (by design: the pick is mesh-wide and the task may have been
+		// meant for a peer), but this node has already been chosen to execute,
+		// so degrading means running on an agent the user explicitly did not
+		// pick. Say so instead — "grok was never tested" reads very differently
+		// once the reason is "grok_build is not installed on xin".
+		if len(router.RosterOnCard(roster)) == 0 {
+			return nil, fmt.Errorf(
+				"this thread's roster (%s) names no agent installed on this node; install one of them or clear the team",
+				strings.Join(roster, ", "))
+		}
+		router = router.WithAgents(roster)
+	}
+	return router, nil
+}
+
 // resolveRunPlan turns a task's requires into an executable plan: route
 // selection, the just-in-time usability and circuit-breaker gates, and the
 // failover/alternate pruning those gates imply. It is run()'s first phase —
@@ -521,48 +562,22 @@ func (c *Core) resolveRunPlanWithRouter(ctx context.Context, taskID string, requ
 	// hands must not quietly hand the work to someone else. The roster rides
 	// spec_json, so a task delegated to another node arrives with the same
 	// restriction instead of being re-opened to every agent there.
-	spec := c.taskSpec(ctx, taskID)
-	if roster := spec.AllowAgents; len(roster) > 0 {
-		// "The roster wins" used to mean "rank the roster instead", which
-		// swapped the employee while leaving the task's own text intact. A task
-		// that names an agent is a task ABOUT that agent: three "test
-		// agent:<name>" tasks pinned to claude_code, codex and deepseek_harness
-		// ran on a [deepseek_harness, opencode] roster, all three executed on
-		// deepseek_harness, and each printed "<name> 调用成功" for an agent that
-		// never started — three green passes, two of them fiction. Refuse the
-		// mismatch instead: nothing runs, and the reason names both sides.
-		if err := rosterHonoursPins(router, roster, required); err != nil {
-			return commander.Plan{}, nil, "", err
-		}
-		// A roster naming only agents this node does not carry cannot be
-		// staffed here. WithAgents degrades to the unrestricted card in that
-		// case (by design: the pick is mesh-wide and the task may have been
-		// meant for a peer), but this node has already been chosen to execute,
-		// so degrading means running on an agent the user explicitly did not
-		// pick. Say so instead — "grok was never tested" reads very differently
-		// once the reason is "grok_build is not installed on xin".
-		if len(router.RosterOnCard(roster)) == 0 {
-			return commander.Plan{}, nil, "", fmt.Errorf(
-				"this thread's roster (%s) names no agent installed on this node; install one of them or clear the team",
-				strings.Join(roster, ", "))
-		}
-		router = router.WithAgents(roster)
+	task, err := c.store.Get(ctx, taskID)
+	if err != nil {
+		return commander.Plan{}, nil, "", err
 	}
-	plan, err := router.Route(required)
+	spec := routingTaskSpec(task.SpecJSON)
+	if len(spec.Paths) == 0 {
+		spec.Paths = task.ScopePaths
+	}
+	router, err = taskRosterRouter(router, spec, required)
+	if err != nil {
+		return commander.Plan{}, nil, "", err
+	}
+	traits := append(agentTaskTraits(spec), task.Title, task.Intent)
+	plan, err := router.DispatchRoute(required, traits...)
 	if err != nil {
 		return commander.Plan{}, nil, "", fmt.Errorf("route: %w", err)
-	}
-	// Re-check dispatch readiness at execution time: a task can be accepted
-	// while its harnesses were healthy and run after the provider went dark
-	// (or after a queue park). Failing here — like a route miss — declines a
-	// delegated task so the parent re-routes it, and fails a local task fast
-	// with an actionable reason instead of parking it inside a dead adapter.
-	if plan.Kind == "agent" && !router.PlanUsable(plan) {
-		reason := router.PlanUnusableReason(plan)
-		if reason == "" {
-			reason = "cli/credentials/endpoint check failed"
-		}
-		return commander.Plan{}, nil, "", fmt.Errorf("route: no usable agent for %v on this node (%s)", required, reason)
 	}
 	// Circuit breaker (P2-27): refuse to run an agent that has been failing
 	// repeatedly, before the task leaves its dispatched state, so the parent
@@ -623,12 +638,11 @@ func (c *Core) resolveRunPlanWithRouter(ctx context.Context, taskID string, requ
 		// owns the minting adapter, promote it to primary so the checkpoint
 		// actually resumes; a candidate that is not on the route at all is
 		// not forced — a stale handle cannot resurrect a dead adapter.
-		if t, terr := c.store.Get(ctx, taskID); terr == nil &&
-			t.AgentSessionID != "" && t.AgentSessionAdapter != "" {
-			if cur, ok := router.Agent(plan.Agent); ok && cur.Adapter != t.AgentSessionAdapter {
+		if task.AgentSessionID != "" && task.AgentSessionAdapter != "" {
+			if cur, ok := router.Agent(plan.Agent); ok && cur.Adapter != task.AgentSessionAdapter {
 				for i, alt := range plan.Alternates {
 					ag, ok := router.Agent(alt)
-					if !ok || ag.Adapter != t.AgentSessionAdapter || !c.breaker.Allow("agent:"+alt) {
+					if !ok || ag.Adapter != task.AgentSessionAdapter || !c.breaker.Allow("agent:"+alt) {
 						continue
 					}
 					prev := plan.Agent
@@ -649,7 +663,7 @@ func (c *Core) resolveRunPlanWithRouter(ctx context.Context, taskID string, requ
 						"agent": alt, "adapter": ag.Adapter, "was": prev,
 					})
 					c.audit(ctx, taskID, "agent:session_affinity", alt, "promoted",
-						"checkpoint resume prefers minting adapter "+t.AgentSessionAdapter)
+						"checkpoint resume prefers minting adapter "+task.AgentSessionAdapter)
 					break
 				}
 			}
@@ -673,6 +687,9 @@ func (c *Core) resolveRunPlanWithRouter(ctx context.Context, taskID string, requ
 			breakerKey = "agent:" + p.Agent
 		}
 		plan = p
+	}
+	if plan.FallbackFrom != "" {
+		c.EvTrace(ctx, taskID, EvAgentFallback, map[string]any{"from": plan.FallbackFrom, "to": plan.Agent, "reason": plan.FallbackReason})
 	}
 	return plan, router, breakerKey, nil
 }
@@ -1584,8 +1601,8 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// User inject (steer.go): a message sent in "inject" mode leads this
 		// round's intent — ahead of the task spec and any folded notes — so
 		// the user's directive sets the course instead of reading as context.
-		if steer := c.takeSteer(execCtx, taskID, boardSeen); steer != "" {
-			intentSteers = append([]string{"[user directive]\n" + steer}, intentSteers...)
+		if steer, label := c.takeRoundSteer(execCtx, taskID, boardSeen); steer != "" {
+			intentSteers = append([]string{label + "\n" + steer}, intentSteers...)
 		}
 		// The agent can spawn children itself (a CLI `task add
 		// --parent-id $PANDA_TASK_ID`), which the episode's opening snapshot
@@ -2439,7 +2456,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			if plan.Kind == "agent" && supervisor != nil && ctx.Err() == nil && execCtx.Err() == nil &&
 				!tokenExhausted && !turnCapped && !overflowed && !commander.IsAuthorizationRefusal(res.Stderr) {
 				recoveryEvidence := evidence.render(scout.Cached(workDir).Test)
-				v := c.superviseAgentFailure(execCtx, supervisor, taskID, fullIntent(), res,
+				v := c.superviseAgentFailure(execCtx, supervisor, task, fullIntent(), res,
 					lastChanged, recoveryEvidence, round+1, maxRounds)
 				recovery = &v
 				tier := plan.Tier
@@ -2450,9 +2467,13 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				// the existing router and permissions. Executor refusal,
 				// special checkpoint recovery and irreversible operations
 				// retain their dedicated handling.
-				if v.Status == entry.VerdictContinue && round+1 < maxRounds && execCtx.Err() == nil &&
+				canRecover := v.Status == entry.VerdictContinue && round+1 < maxRounds && execCtx.Err() == nil &&
 					tier < defense.TierIrreversible &&
-					(scope.Empty() || (beforeOK && !filesTruncated && len(scope.DriftUnder(workDir, lastChanged)) == 0)) {
+					(scope.Empty() || (beforeOK && !filesTruncated && len(scope.DriftUnder(workDir, lastChanged)) == 0))
+				if canRecover {
+					v = c.applyReviewedPlanActions(execCtx, task, round+1, v)
+				}
+				if canRecover && v.Status == entry.VerdictContinue {
 					var safeAlternates []string
 					for _, alt := range plan.Alternates {
 						if ag, ok := router.Agent(alt); ok && ag.Tier < defense.TierIrreversible {
@@ -2689,7 +2710,8 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// scoped to. Using ctx here meant a dropped peer link aborted the judge
 		// mid-call, parking work for review that a live judge would have
 		// accepted (or rejected with a real verdict).
-		v, serr := entry.Supervise(execCtx, supervisor, fullIntent(), judgeResult, c.supervisionOptions(execCtx, taskID, supervisor))
+		options := c.planReviewOptions(execCtx, task, c.supervisionOptions(execCtx, taskID, supervisor))
+		v, serr := entry.Supervise(execCtx, supervisor, fullIntent(), judgeResult, options)
 		if serr != nil {
 			// Supervisor unreachable: Supervise parks the result for review rather
 			// than accepting it unverified (review P1-6). The work stops here and
@@ -2711,6 +2733,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// — Trace: supervision_round, part 2. The judge has spoken, so the
 		// round's badge can carry the verdict it actually produced — and the
 		// reviewing stage's stopwatch starts only now, not over the agent run.
+		verdict = c.applyReviewedPlanActions(execCtx, task, round+1, verdict)
 		v = verdict // trace and control flow must reflect deterministic corrections
 		emitRound(v.Status)
 		if err := c.store.RecordEvent(context.WithoutCancel(ctx), taskID, EvSupervise, map[string]any{
@@ -3124,7 +3147,7 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 
 	wCtx, cancel := c.storeWriteCtx(ctx)
 	defer cancel()
-	if err := c.store.CompleteAttempt(wCtx, taskID, c.nodeID, attemptID, map[string]any{
+	result := map[string]any{
 		"ok": true, "exit_code": res.ExitCode, "stdout": res.Stdout, "files_changed": filesChanged, "files_stat": filesStat,
 		// Who actually ran the work rides the row, not only the wire payload:
 		// a fallback can swap the agent, and `panda task show` (or the panel)
@@ -3135,7 +3158,19 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 		// can never be confused after the fact.
 		"verified": verificationStatus == contract.VerdictVerified, "verification": verificationStatus,
 		"objective_assessments": verdict.ObjectiveAssessments,
-	}); err != nil {
+	}
+	var completionErr error
+	if task.PlanID != "" && !task.Remote && task.Scheduled && objectiveIntermediate(task) {
+		var requeued bool
+		requeued, completionErr = c.store.completeReviewedStage(wCtx, task, c.nodeID, attemptID, result)
+		if requeued && completionErr == nil {
+			c.queueWake()
+			return bus.TaskResultPayload{TaskID: taskID, AttemptID: attemptID, State: StateQueued}, nil
+		}
+	} else {
+		completionErr = c.store.CompleteAttempt(wCtx, taskID, c.nodeID, attemptID, result)
+	}
+	if err := completionErr; err != nil {
 		if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 			return bus.TaskResultPayload{}, ErrCancelled
 		}

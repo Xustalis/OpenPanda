@@ -253,13 +253,33 @@ func (h *handler) getSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) recoverSessionOperation(ctx context.Context, sess *sessions.Session) (*sessions.Session, error) {
-	var status string
+	var status, planStatus string
 	if h.db != nil {
-		err := h.db.QueryRowContext(ctx, `SELECT CASE WHEN status='open' AND lease_until<? THEN 'interrupted' ELSE status END
- FROM ask_rounds WHERE session_id=? AND round_id=?`, time.Now().Unix(), sess.ID, sess.Operation.ID).Scan(&status)
+		err := h.db.QueryRowContext(ctx, `SELECT CASE WHEN a.status='open' AND a.lease_until<? THEN 'interrupted' ELSE a.status END,
+ COALESCE(p.status,'') FROM ask_rounds a LEFT JOIN conversation_plan_runs p ON p.session_id=a.session_id AND p.round_id=a.round_id
+ WHERE a.session_id=? AND a.round_id=?`, time.Now().Unix(), sess.ID, sess.Operation.ID).Scan(&status, &planStatus)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
+	}
+	// Dispatch can close while its plan is still executing. The controller
+	// stores its final outcome before updating the session file.
+	if planStatus != "" {
+		op := *sess.Operation
+		switch planStatus {
+		case "done", "waiting_input":
+			op.Status = core.StateDone
+		case "failed":
+			op.Status = "error"
+		case "cancelled":
+			op.Status = core.StateCancelled
+		default:
+			return sess, nil
+		}
+		if _, err := h.sessions.FinishRunningOperation(sess.ID, op); err != nil {
+			return nil, err
+		}
+		return h.sessions.Get(sess.ID)
 	}
 	if status == "open" {
 		return sess, nil
@@ -1691,18 +1711,7 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	// their worktree, non-repo ones in the shared work path. Pinning a
 	// non-empty workDir for both keeps the memory wall (§17.2) intact —
 	// personal memory never enters a session prompt.
-	workDir := sess.Worktree
-	if workDir == "" && sess.Project != "" && h.projectStore != nil {
-		// UsableWorkDir: a row naming $HOME predates the breadth rule and would
-		// otherwise pin this turn's work dir to a path the executor refuses, so
-		// every ask in the thread fails on a rule the user never invoked.
-		if p, err := h.projectStore.Get(sess.Project); err == nil {
-			workDir = p.UsableWorkDir()
-		}
-	}
-	if workDir == "" {
-		workDir = eng.WorkPath()
-	}
+	workDir := eng.SessionWorkDir(sess)
 	// Run under the panel lifetime, not the HTTP connection. Only the matching
 	// operation ID can cancel this generation through the explicit stop API.
 	baseCtx := h.serviceCtx

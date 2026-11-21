@@ -98,6 +98,9 @@ func TestCircuitBreakerHalfOpenAbandonedTrialReopens(t *testing.T) {
 	// Past the cooldown with no verdict, the abandoned trial re-opens the
 	// circuit instead of leaving it wedged.
 	time.Sleep(25 * time.Millisecond)
+	if b.Blocked("agent:claude") || len(b.BlockedKeys()) != 0 {
+		t.Fatal("an expired trial must reach Allow to reopen the circuit")
+	}
 	if b.Allow("agent:claude") {
 		t.Fatalf("stale half-open trial must re-open the circuit, not admit another")
 	}

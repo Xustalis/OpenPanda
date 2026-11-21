@@ -122,7 +122,7 @@ func ScopeHash(scope ExecutionScope) (string, error) {
 		return "", err
 	}
 	h := sha256.Sum256(b)
-	return hex.EncodeToString(h[:]), nil
+	return "sha256:" + hex.EncodeToString(h[:]), nil
 }
 
 // SignConsent never exports the device seed. Only the local consent service
@@ -137,7 +137,7 @@ func (s *DeviceStore) SignConsent(ctx context.Context, p ConsentPayload) (Signed
 	if err != nil || !expires.After(s.now()) || issued.After(s.now().Add(30*time.Second)) || !expires.After(issued) || expires.Sub(issued) > 10*time.Minute {
 		return out, errors.New("consent expired or outside allowed lifetime")
 	}
-	if p.AccountID == "" || p.ExecutionID == "" || p.DeliveryID == "" || p.Nonce == "" || p.InputRevision == "" || p.AssignmentRevision == "" || p.DeliveryRevision == 0 || len(p.ScopeHash) != 64 {
+	if p.AccountID == "" || p.ExecutionID == "" || p.DeliveryID == "" || p.Nonce == "" || p.InputRevision == "" || p.AssignmentRevision == "" || p.DeliveryRevision == 0 || len(strings.TrimPrefix(p.ScopeHash, "sha256:")) != 64 {
 		return out, errors.New("incomplete consent")
 	}
 	scope := "execution:report"

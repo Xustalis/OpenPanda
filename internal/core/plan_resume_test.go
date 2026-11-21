@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/plan"
+	"strings"
 	"testing"
 )
 
@@ -86,7 +87,7 @@ func TestPlanSweepDoesNotCancelRecoveringDependency(t *testing.T) {
 		t.Fatal(err)
 	}
 	child, _ = c.store.Get(ctx, next.TaskID)
-	if child.State != StateCancelled {
+	if child.State != StateFailed {
 		t.Fatalf("terminal failure did not propagate: %s", child.State)
 	}
 }
@@ -116,5 +117,26 @@ func TestReviewStageEventDoesNotClaimCompletion(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("review event missing")
+	}
+}
+
+func TestPlanStopPreservesFailedDependencies(t *testing.T) {
+	ctx := context.Background()
+	c, parent, next := resumePlanFixture(t)
+	if err := c.store.ForceFail(ctx, parent.TaskID, "agent unavailable"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.AdvancePlan(ctx, parent.PlanID); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := c.store.CancelCascade(ctx, parent.TaskID)
+	if err != nil || len(ids) != 0 {
+		t.Fatalf("cancelled=%v err=%v", ids, err)
+	}
+	for taskID, reason := range map[string]string{parent.TaskID: "agent unavailable", next.TaskID: "dependency work did not complete"} {
+		row, err := c.store.Get(ctx, taskID)
+		if err != nil || row.State != StateFailed || !strings.Contains(row.ResultJSON, reason) {
+			t.Fatalf("state=%s result=%s err=%v", row.State, row.ResultJSON, err)
+		}
 	}
 }

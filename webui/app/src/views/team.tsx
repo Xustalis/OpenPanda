@@ -8,6 +8,7 @@ import { t } from '../i18n'
 import { Icon } from '../components/icons'
 import { basicScopes, SpaceConnectForm } from './space-connect-form'
 import { PrivateResearch, SpacePolicy, WorkResults, RemoteTaskForm } from './workflow'
+import { TaskBoard, TaskFacts, spaceKey, type Directory, type Member } from './work-board'
 import { useWorkRead } from './work-read'
 
 /** Business intentions and their execution history share one source with CLI. */
@@ -22,12 +23,20 @@ export function TeamView({ tab = 'mine', taskKey, connection = 'local' }: {
   const list = useWorkRead(() => api.workTasks(), [], tick + signal)
   const detail = useWorkRead(() => taskKey ? api.workTask(taskKey, connection) : Promise.resolve(null), [taskKey, connection], tick + signal)
   const history = useWorkRead(() => taskKey ? api.workHistory(taskKey, connection) : Promise.resolve([]), [taskKey, connection], tick + signal)
-  const grants = useWorkRead(() => taskKey && connection !== 'local' ? api.workConnections() : Promise.resolve([]), [taskKey, connection], tick + signal)
+  const grants = useWorkRead(() => api.workConnections(), [], tick + signal)
+  const readable = (grants.data || []).filter(c => c.state === 'connected' && c.scopes?.includes('members:read'))
+    .flatMap(c => (c.spaces || []).filter(s => s.scopes?.includes('members:read')).map(s => ({ id: c.connectionId, account: c.accountId, epoch: c.authEpoch, synced: c.syncedAt, space: s.spaceId, workspace: s.workspaceId })))
+  const directories = useWorkRead(async () => {
+    const entries = await Promise.all(readable.map(async r => {
+      const members = await api.workMembers(r.id, r.space).catch(() => null)
+      return [spaceKey(r.id, r.workspace, r.space), members] as const
+    }))
+    return new Map(entries)
+  }, [readable], tick)
   const reviews = useWorkRead(() => tab === 'review' ? api.tasks({ state: 'review', brief: true }) : Promise.resolve([]), [tab], tick + signal)
   const [editing, setEditing] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [query, setQuery] = useState('')
   // Keep the same key after a lost response. A changed payload gets a new key.
   const pending = useRef<{ signature: string; key: string } | null>(null)
   useEffect(() => { setEditing(false); setError(''); pending.current = null }, [taskKey, connection])
@@ -41,10 +50,10 @@ export function TeamView({ tab = 'mine', taskKey, connection = 'local' }: {
   }
   const current = detail.data
   const grant = grants.data?.find(c => c.connectionId === connection && c.state === 'connected')
-  const space = grant?.spaces.find(s => s.spaceId === current?.snapshot.key.spaceId && s.workspaceId === current?.snapshot.key.workspaceId)
-  const supported = (feature: string, scopes: string[]) => !!grant?.capabilities?.capabilities.includes(feature) && scopes.every(scope => grant.scopes.includes(scope) && space?.scopes.includes(scope))
+  const space = grant?.spaces?.find(s => s.spaceId === current?.snapshot.key.spaceId && s.workspaceId === current?.snapshot.key.workspaceId)
+  const supported = (feature: string, scopes: string[]) => !!grant?.capabilities?.capabilities?.includes(feature) && scopes.every(scope => grant.scopes.includes(scope) && space?.scopes.includes(scope))
   const canEdit = !!current?.snapshot.permissions.edit && (!!current.local || supported('taskWrite', ['tasks:read', 'tasks:write']))
-  const canRequest = !!current && !current.local && current.snapshot.permissions.execute && supported('executions', ['tasks:read', 'execution:read', 'execution:claim', 'execution:report'])
+  const canRequest = !!current && !current.local && current.snapshot.permissions.execute && supported('executions', ['tasks:read', 'execution:read', 'execution:claim', 'execution:report']) && supported('deliveries', ['delivery:write'])
   const tasks = list.data || []
   const mine = tasks.filter(task => task.connectionId === 'local' || (task.snapshot.assigneeAccountIds || []).includes(task.accountId))
   const open = (task: WorkTask) => navigate({ view: 'work', key: workTaskKey(task), connection: task.connectionId })
@@ -61,7 +70,7 @@ export function TeamView({ tab = 'mine', taskKey, connection = 'local' }: {
     {taskKey ? <>
       {!current && !failure && <p>{t('common.loading')}</p>}
       {current && <>
-        <TaskFacts task={current} />
+        <TaskFacts task={current} directory={directories.data} />
         <div class="work-actions">
           {canEdit && <button class="btn" disabled={busy} onClick={() => setEditing(!editing)}>{t('work.edit')}</button>}
           {current.local && current.snapshot.permissions.execute && <button class="btn primary" disabled={busy} onClick={() => mutate(`run:${taskKey}`, async key => { const result = await api.runWork(taskKey, key); if (result.warning) setError(result.warning) })}>{t('work.run')}</button>}
@@ -83,16 +92,12 @@ export function TeamView({ tab = 'mine', taskKey, connection = 'local' }: {
         </article>)}</div>
       </>}
     </> : tab === 'mine' ? <>
-      <div class="work-toolbar"><input aria-label={t('work.search')} placeholder={t('work.search')} value={query} onInput={e => setQuery(e.currentTarget.value)} /><button class="btn primary" onClick={() => setEditing(!editing)} disabled={busy}>{editing ? t('common.cancel') : t('work.add')}</button></div>
+      <div class="work-toolbar"><button class="btn primary" onClick={() => setEditing(!editing)} disabled={busy}>{editing ? t('common.cancel') : t('work.add')}</button></div>
       {editing && <WorkForm busy={busy} onSave={body => mutate(JSON.stringify(body), async key => { const task = await api.createWork(body, key); open(task) })} />}
       {!list.data && !list.error && <p>{t('common.loading')}</p>}
-      {mine.length === 0 && list.data && <p class="hint">{t('work.empty')}</p>}
-      <div class="work-grid">{mine.filter(v => `${v.snapshot.title} ${v.snapshot.description}`.toLowerCase().includes(query.toLowerCase())).map(task => <article class="card work-card" key={`${task.connectionId}:${workTaskKey(task)}`}>
-        <button class="work-title" onClick={() => open(task)}>{task.snapshot.title}</button><TaskFacts task={task} />
-      </article>)}</div>
+      <TaskBoard tasks={mine} directory={directories.data} open={open} ready={!!list.data} />
     </> : tab === 'spaces' ? <>
-      <ConnectionManager tick={tick + signal} reload={reload} />
-      {tasks.some(v => v.connectionId !== 'local') && <div class="work-grid">{tasks.filter(v => v.connectionId !== 'local').map(task => <article class="card" key={`${task.connectionId}:${workTaskKey(task)}`}><button class="work-title" onClick={() => open(task)}>{task.snapshot.title}</button><TaskFacts task={task} /></article>)}</div>}
+      <ConnectionManager connections={grants.data} directory={directories.data} tasks={tasks} ready={!!list.data} open={open} tick={tick + signal} reload={reload} />
     </> : <>
       <p class="hint">{t('work.reviewHint')}</p>
       <WorkResults tick={tick + signal} reload={reload} />
@@ -103,8 +108,11 @@ export function TeamView({ tab = 'mine', taskKey, connection = 'local' }: {
   </section>
 }
 
-function ConnectionManager({ tick, reload }: { tick: number; reload(): void }) {
-  const connections = useWorkRead(() => api.workConnections(), [], tick)
+function ConnectionManager({ connections, directory, tasks, ready, open, tick, reload }: {
+  connections: WorkConnection[] | null; directory: Directory | null; tasks: WorkTask[]; ready: boolean; open(task: WorkTask): void; tick: number; reload(): void
+}) {
+  const [editor, setEditor] = useState<WorkConnection | 'new' | null>(null)
+  const [selected, setSelected] = useState('')
   const [scopes, setScopes] = useState(basicScopes)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -118,62 +126,71 @@ function ConnectionManager({ tick, reload }: { tick: number; reload(): void }) {
     catch (e) { setError(e instanceof Error ? e.message : String(e)) }
     finally { setBusy(false) }
   }
-  const connect = (url: string, id?: string) => perform(async () => {
+  const connect = (url: string, id?: string, requestedScopes = scopes) => perform(async () => {
     if (!id && pending.current?.root !== url) pending.current = { root: url, id: crypto.randomUUID() }
-    const result = await api.connectWork({ rootUrl: url, connectionId: id || pending.current!.id, scopes }).catch(e => {
+    const result = await api.connectWork({ rootUrl: url, connectionId: id || pending.current!.id, scopes: requestedScopes }).catch(e => {
       if (e instanceof ApiError && e.status === 501) throw new Error(t('work.bindUnavailable'))
       throw e
     })
-    grantList.current = connections.data
+    setEditor(null)
+    grantList.current = connections
     setGrant({ id: result.connection.connectionId, auth: result.authorization })
     pending.current = null
   })
   useEffect(() => {
-    if (grant && connections.data !== grantList.current && connections.data?.some(c => c.connectionId === grant.id && c.state !== 'authorizing')) setGrant(null)
-  }, [connections.data, grant])
+    if (grant && connections !== grantList.current && connections?.some(c => c.connectionId === grant.id && c.state !== 'authorizing')) setGrant(null)
+  }, [connections, grant])
+  const spaces = (connections || []).filter(c => c.state === 'connected').flatMap(c => (c.spaces || []).map(space => ({
+    connection: c, space, key: spaceKey(c.connectionId, space.workspaceId, space.spaceId),
+  })))
+  const active = spaces.find(s => s.key === selected) || spaces[0]
+  const showForm = !grant && connections !== null && (connections.length === 0 || editor !== null)
+  const edit = (c: WorkConnection | 'new') => {
+    setScopes(c === 'new' || !c.scopes?.length ? basicScopes : [...c.scopes])
+    setEditor(c)
+  }
   return <div class="work-connections">
-    {!grant && <SpaceConnectForm scopes={scopes} setScopes={setScopes} busy={busy} connect={connect} />}
-    {(error || connections.error) && <p role="alert" class="work-error">{error || connections.error}</p>}
+    {!connections && <p class="hint">{t('common.loading')}</p>}
+    {!!connections?.length && <header class="board-head"><h2>{t('work.spaces')} <span class="space-count">{spaces.length}</span></h2>
+      {!grant && <button class="btn" disabled={busy} onClick={() => editor ? setEditor(null) : edit('new')}>{t(editor ? 'common.cancel' : 'work.addAccount')}</button>}</header>}
+    {showForm && <SpaceConnectForm key={editor && editor !== 'new' ? editor.connectionId : 'new'} existingRoot={editor && editor !== 'new' ? editor.rootUrl : undefined} scopes={scopes} setScopes={setScopes} busy={busy} connect={url => connect(url, editor && editor !== 'new' ? editor.connectionId : undefined)} />}
+    {error && <p role="alert" class="work-error">{error}</p>}
     {grant && <div class="card" role="status">
       <p>{t('work.authorizationCode')} <strong>{grant.auth.userCode}</strong></p>
       <a class="btn primary" href={grant.auth.verificationUriComplete || grant.auth.verificationUri} target="_blank" rel="noopener noreferrer">{t('work.signInTSync')}<Icon name="external" size={15} /></a>
       <p class="hint">{t('work.authorizationExpires')} {new Date(grant.auth.expiresAt * 1000).toLocaleString()}</p>
     </div>}
-    {!!connections.data?.length && <div class="space-list-head"><h2>{t('work.spaces')}</h2><span class="space-count">{connections.data.length}</span></div>}
-    {!connections.data && !connections.error && <p class="hint">{t('common.loading')}</p>}
-    <div class="work-grid">{connections.data?.map(c => <article class="card" key={c.connectionId}>
-      <strong>{c.spaces?.map(s => s.name).filter(Boolean).join(' · ') || c.rootUrl}</strong>
-      <p>{t(`work.connection.${c.state}`)}{c.accountId ? ` · ${c.accountId}` : ''}</p>
-      <p class="hint">{t('work.lastSync')} {c.syncedAt ? new Date(c.syncedAt).toLocaleString() : t('work.noSync')}</p>
-      {c.lastError && <p class="work-error" role="status">{c.lastError}</p>}
+    {connections?.map(c => <article class="account-bar" key={c.connectionId}>
+      <div><strong>{c.rootUrl}</strong><span class="space-state" data-state={c.state}>{t('work.connection.' + c.state, c.state)}</span>
+        <p class="hint">{t('work.lastSync')} · {c.syncedAt ? new Date(c.syncedAt).toLocaleString() : t('work.noSync')}</p>
+        {c.state === 'connected' && c.scopes?.every(scope => basicScopes.includes(scope)) && <p class="hint">{t('work.readOnlySummary')}</p>}
+        {c.lastError && <p class="work-error" role="status">{t('work.error.' + c.lastError, c.lastError)}</p>}</div>
       <div class="work-actions">
-        <button class="btn" disabled={busy} onClick={() => void connect(c.rootUrl, c.connectionId)}>{t(c.state === 'authorizing' ? 'work.resumeAuthorization' : 'work.reconnect')}</button>
-        {['connected', 'authorizing', 'unsupported'].includes(c.state) && <button class="btn" disabled={busy} onClick={() => void perform(() => api.syncWorkConnection(c.connectionId))}>{t('work.sync')}</button>}
+        {['connected', 'authorizing', 'unsupported'].includes(c.state) && <button class="btn" disabled={busy} onClick={() => void perform(() => api.syncWorkConnection(c.connectionId))}><Icon name="refresh" size={14} />{t('work.sync')}</button>}
+        <button class="btn" disabled={busy || !!grant} onClick={() => c.state === 'authorizing' ? void connect(c.rootUrl, c.connectionId, c.scopes) : edit(c)}>{t(c.state === 'authorizing' ? 'work.resumeAuthorization' : c.state === 'connected' ? 'work.manageAccess' : 'work.reconnect')}</button>
         {c.state !== 'disconnected' && <button class="btn" disabled={busy} onClick={() => void perform(() => api.disconnectWork(c.connectionId))}>{t('work.disconnect')}</button>}
-      </div>
-      {c.state === 'connected' && c.scopes.includes('members:read') && c.spaces?.filter(space => space.scopes.includes('members:read')).map(space => <MemberDirectory key={space.spaceId} connection={c} space={space.spaceId} name={space.name} tick={tick} />)}
-      {c.state === 'connected' && c.spaces?.map(space => <SpacePolicy key={space.spaceId} connection={c} space={space.spaceId} name={space.name} tick={tick} reload={reload} />)}
-    </article>)}</div>
+      </div></article>)}
+    {active && <><nav class="space-switcher" aria-label={t('work.spaces')}>{spaces.map(s => <button key={s.key} aria-pressed={s.key === active.key} onClick={() => setSelected(s.key)}><Icon name="folder" size={16} />{s.space.name}</button>)}</nav>
+      <SpaceView key={active.key + active.connection.authEpoch} connection={active.connection} space={active.space} members={directory?.get(active.key)} tasks={tasks.filter(v => v.connectionId === active.connection.connectionId && v.snapshot.key.workspaceId === active.space.workspaceId && v.snapshot.key.spaceId === active.space.spaceId)} directory={directory} ready={ready} open={open} tick={tick} reload={reload} />
+    </>}
   </div>
 }
 
-function MemberDirectory({ connection, space, name, tick }: { connection: WorkConnection; space: string; name: string; tick: number }) {
-  const [open, setOpen] = useState(false)
-  const members = useWorkRead(() => open ? api.workMembers(connection.connectionId, space) : Promise.resolve([]), [connection.connectionId, space, open], tick)
-  return <details onToggle={e => setOpen(e.currentTarget.open)}>
-    <summary>{name} · {t('work.members')}</summary>
-    {members.error ? <p class="hint">{t('work.membersUnavailable')}</p> : <ul>{members.data?.map(m => <li key={m.accountId}>{m.name || m.accountId} · {m.role}</li>)}</ul>}
-  </details>
-}
-
-function TaskFacts({ task }: { task: WorkTask }) {
-  const s = task.snapshot
-  return <dl class="work-facts">
-    <div><dt>{t('work.source')}</dt><dd>{s.sourceRef.provider} · {s.spaceName}{s.projectName ? ` / ${s.projectName}` : ''}</dd></div>
-    <div><dt>{t('work.status')}</dt><dd>{task.local ? t(`todos.status.${s.status}`) : s.status}</dd></div>
-    <div><dt>{t('work.owner')}</dt><dd>{task.local ? t('work.me') : (s.assigneeAccountIds || []).join(', ') || t('work.unassigned')}</dd></div>
-    <div><dt>{t('work.due')}</dt><dd>{s.dueAt?.value || t('work.noDue')}</dd></div>
-  </dl>
+function SpaceView({ connection, space, members, tasks, directory, ready, open, tick, reload }: {
+  connection: WorkConnection; space: WorkConnection['spaces'][number]; members?: Member[] | null; directory: Directory | null; tasks: WorkTask[]; ready: boolean; open(task: WorkTask): void; tick: number; reload(): void
+}) {
+  const [creating, setCreating] = useState(false)
+  const canCreate = connection.capabilities?.capabilities?.includes('taskWrite') && connection.scopes?.includes('tasks:write') && space.scopes?.includes('tasks:write')
+  return <section class="space-content"><div class="board-head"><h2>{space.name}</h2>
+    {canCreate && <button class="btn primary" onClick={() => setCreating(!creating)}>{t(creating ? 'common.cancel' : 'work.addRemote')}</button>}</div>
+    {creating && canCreate && <RemoteTaskForm connection={connection.connectionId} space={space.spaceId} onSaved={() => { setCreating(false); reload() }} />}
+    <div class="space-settings">
+      {connection.scopes?.includes('members:read') && space.scopes?.includes('members:read') && <details><summary>{t('work.members')} {members && <span class="space-count">{members.length}</span>}</summary>
+        {members ? <ul class="board-members">{members.map(m => <li key={m.accountId}><Icon name="user" size={15} /><strong>{m.name || t('work.unknownMember')}</strong><small>{t('work.role.' + m.role, m.role)}</small></li>)}</ul> : <p class="hint">{t(members === null ? 'work.membersUnavailable' : 'common.loading')}</p>}</details>}
+      <SpacePolicy connection={connection} space={space.spaceId} tick={tick} reload={reload} />
+    </div>
+    <TaskBoard tasks={tasks} directory={directory} open={open} ready={ready} />
+  </section>
 }
 
 function WorkForm({ task, busy, onSave }: { task?: WorkTask; busy: boolean; onSave(body: WorkInput): void }) {

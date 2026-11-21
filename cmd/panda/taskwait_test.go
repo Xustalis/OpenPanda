@@ -201,7 +201,7 @@ func TestWaitTaskSettlesWhenRecoveryDeclinesTheRetry(t *testing.T) {
 		settles  bool
 	}{
 		{"adapter unavailable", core.RecoveryStop, true},
-		{"authorization parks for review", core.RecoveryHumanReview, true},
+		{"waiting for review to be recorded", core.RecoveryHumanReview, false},
 		{"bounded retry is coming", core.RecoveryBoundedRetry, false},
 		{"session resume is coming", core.RecoverySessionResume, false},
 	} {
@@ -295,7 +295,7 @@ func TestAwaitingRetryRule(t *testing.T) {
 		want   bool
 	}{
 		{"stop", with(taskEvent(core.EvRecoveryAssessment, assessmentStop)), false},
-		{"human review", with(taskEvent(core.EvRecoveryAssessment, assessmentReview)), false},
+		{"waiting for review to be recorded", with(taskEvent(core.EvRecoveryAssessment, assessmentReview)), true},
 		{"bounded retry", with(taskEvent(core.EvRecoveryAssessment, assessmentRetry)), true},
 		{"session resume", with(taskEvent(core.EvRecoveryAssessment, assessmentResume)), true},
 		{"unreadable assessment keeps waiting", with(taskEvent(core.EvRecoveryAssessment, assessmentUnknown)), true},

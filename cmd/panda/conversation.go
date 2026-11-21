@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 )
@@ -144,19 +145,21 @@ func (r *repl) conversationBadge() string {
 	return r.controlBadge
 }
 
-func (r *repl) printProposalConfirmation() {
-	eng := r.engine.Load()
-	if eng == nil || r.sessID() == "" {
-		return
+// proposalReview belongs only to the terminal presentation. The confirmation
+// command never becomes part of the stored assistant turn or executable body.
+func proposalReview(loc i18n.Locale, out *askengine.Result, shown string) string {
+	if out.ProposalVersion == 0 || out.ProposalBody == "" {
+		return ""
 	}
-	state, err := eng.Conversations(r.sessionsSt).State(context.Background(), r.sessID())
-	if err == nil && state.Planning && state.Proposal != "" {
-		key := "conversation.confirm"
-		if state.Goal != nil && state.Goal.PausedByPlan {
-			key = "conversation.confirmGoal"
-		}
-		r.outln(fmt.Sprintf("%s /plan confirm %d", i18n.T(r.loc, key), state.ProposalVersion))
+	key := "conversation.confirm"
+	if out.ProposalContinuesGoal {
+		key = "conversation.confirmGoal"
 	}
+	hint := fmt.Sprintf("%s /plan confirm %d", i18n.T(loc, key), out.ProposalVersion)
+	if strings.Contains(shown, out.ProposalBody) {
+		return hint
+	}
+	return out.ProposalBody + "\n\n" + hint
 }
 
 func autonomousTurn(turn sessions.Turn) bool {

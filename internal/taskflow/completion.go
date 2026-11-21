@@ -33,7 +33,7 @@ func (m *managedExecution) queueAction(ctx context.Context, f flowRun, c Connect
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	v := tsync.FinalAction{ActionID: a.ID, EventID: event, RequestID: f.ID, ExecutionID: f.ExecutionID, Fence: m.record.Fence, DeliveryID: a.DeliveryID, DeliveryRevision: a.Revision, Status: status, Fingerprint: a.Fingerprint, ConsentProof: a.Proof,
-		Verification: tsync.Verification{Status: "pending", Method: "file-publication", Summary: "Awaiting verified file receipt.", EvidenceHashes: []string{}}}
+		Verification: tsync.Verification{Status: "unknown", Method: "file-publication", Summary: "Awaiting verified file receipt.", EvidenceHashes: []string{}}}
 	if receipt != nil {
 		v.ReceiptHash = &receipt.SHA256
 		v.Verification = tsync.Verification{Status: "passed", Method: receipt.Method, Summary: "Published content and action provenance verified.", EvidenceHashes: []string{receipt.SHA256}}
@@ -85,7 +85,7 @@ func (m *managedExecution) queueAction(ctx context.Context, f flowRun, c Connect
 // reconcileLocalReceipts observes local evidence even when policy or cloud
 // authority has expired. It cannot enqueue an action or advance a remote run.
 func (s *Service) reconcileLocalReceipts(ctx context.Context) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT action_id FROM final_actions WHERE state IN ('dispatching','unknown') ORDER BY updated_at LIMIT 64`)
+	rows, err := s.db.QueryContext(ctx, `SELECT action_id FROM final_actions WHERE state='unknown' OR (state='dispatching' AND NOT EXISTS (SELECT 1 FROM task_flow_runs f WHERE f.request_id=final_actions.request_id AND f.lease_owner!='' AND f.deadline>?)) ORDER BY updated_at LIMIT 64`, s.now().UnixMilli())
 	if err != nil {
 		return err
 	}
@@ -220,10 +220,6 @@ func (m *managedExecution) finishPrepared(ctx context.Context) error {
 			return err
 		}
 		a.State = "verified"
-		if err = m.queueAction(ctx, f, c, a, "succeeded", &receipt, ""); err != nil {
-			return err
-		}
-		a.State = "verified"
 	}
 	if a.State == "dispatching" || a.State == "unknown" {
 		if err = m.queueAction(ctx, f, c, a, "unknown", nil, "unknown"); err != nil {
@@ -238,10 +234,6 @@ func (m *managedExecution) finishPrepared(ctx context.Context) error {
 		}
 		a.State = "unknown"
 		if err = s.saveReceipt(a, receipt, "reconciled"); err != nil {
-			return err
-		}
-		a.State = "verified"
-		if err = m.queueAction(ctx, f, c, a, "reconciled", &receipt, ""); err != nil {
 			return err
 		}
 		a.State = "verified"

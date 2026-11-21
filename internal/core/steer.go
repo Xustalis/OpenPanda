@@ -347,21 +347,23 @@ func isUserSender(sender string) bool {
 // seen-set is the round loop's board cursor: a note the loop already folded
 // (or delivered as a directive) never re-fires.
 func (c *Core) takeSteer(ctx context.Context, taskID string, seen msgSeen) string {
+	body, _ := c.takeRoundSteer(ctx, taskID, seen)
+	return body
+}
+
+func (c *Core) takeRoundSteer(ctx context.Context, taskID string, seen msgSeen) (string, string) {
 	if c == nil || c.store == nil {
-		return ""
+		return "", ""
 	}
 	msgs, err := c.store.TaskMessages(ctx, "task:"+taskID)
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	for _, m := range msgs {
-		if !isUserSender(m.Sender) || m.Grade != MsgGradeSteer {
+		if !pendingRoundSteer(m, taskID, seen) {
 			continue
 		}
 		k := msgSlotKey(m)
-		if seen[k] >= m.SenderSeq {
-			continue
-		}
 		seen[k] = m.SenderSeq
 		// Write the delivery back to the row. The in-memory seen-set is the
 		// round loop's own cursor and nothing else can read it, so a console in
@@ -372,12 +374,23 @@ func (c *Core) takeSteer(ctx context.Context, taskID string, seen msgSeen) strin
 		if err := c.store.MarkTaskMessageConsumed(ctx, m.Scope, m.Sender, m.SenderSeq); err != nil && c.logger != nil {
 			c.logger.Debug("mark steer consumed", "task", taskID, "err", err)
 		}
+		if strings.HasPrefix(m.Sender, planSenderPrefix) {
+			c.EvTrace(ctx, taskID, EvPlanAdjustmentRead, map[string]any{"decision_id": strings.TrimPrefix(m.Sender, planSenderPrefix), "instruction": m.Body})
+			return strings.TrimSpace(m.Body), "[Panda plan adjustment]"
+		}
 		c.EvTrace(ctx, taskID, EvUserMsgConsumed, map[string]any{
 			"mode": "inject", "seq": m.SenderSeq, "text": m.Body,
 		})
-		return strings.TrimSpace(m.Body)
+		return strings.TrimSpace(m.Body), "[user directive]"
 	}
-	return ""
+	return "", ""
+}
+
+func pendingRoundSteer(m TaskMessage, taskID string, seen msgSeen) bool {
+	if m.Grade != MsgGradeSteer || seen[msgSlotKey(m)] >= m.SenderSeq {
+		return false
+	}
+	return isUserSender(m.Sender) || (m.Rcpt == taskID && strings.HasPrefix(m.Sender, planSenderPrefix) && m.ConsumedAt == 0)
 }
 
 // steerUnseen reports whether an undelivered steer note is waiting — the
@@ -392,7 +405,7 @@ func (c *Core) steerUnseen(ctx context.Context, taskID string, seen msgSeen) boo
 		return false
 	}
 	for _, m := range msgs {
-		if isUserSender(m.Sender) && m.Grade == MsgGradeSteer && seen[msgSlotKey(m)] < m.SenderSeq {
+		if pendingRoundSteer(m, taskID, seen) {
 			return true
 		}
 	}

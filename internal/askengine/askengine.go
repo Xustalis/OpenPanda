@@ -50,6 +50,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/scout"
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/self"
+	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 	"github.com/Xustalis/OpenPanda/internal/taskflow"
@@ -860,8 +861,11 @@ func (e *Engine) localeNow() (i18n.Locale, bool) {
 
 // Result is the outcome of one Ask call.
 type Result struct {
-	PlanProposal  bool
-	EmptyResponse bool
+	PlanProposal          bool
+	ProposalBody          string
+	ProposalVersion       int64
+	ProposalContinuesGoal bool
+	EmptyResponse         bool
 	// Kind is "answer", "task" or "plan" — the final converged intent.
 	Kind string
 	// Answer carries the model's text reply when Kind == "answer".
@@ -2074,8 +2078,10 @@ func (e *Engine) Project() (string, string) {
 // threaded through every classified and tool-call task path instead of mutating
 // the Engine's ambient project or the scheduler Core's default directory.
 type AskScope struct {
-	planRevision  *proposalRevision
-	goalObjective string
+	confirmedImplementation bool
+	reviewedPlan            *entry.PlanSpec
+	planRevision            *proposalRevision
+	goalObjective           string
 	// RoundID names a persisted dispatch boundary, independently of approval SessionID.
 	RoundID string
 	Project string
@@ -2291,7 +2297,7 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 		}
 		if state.Planning {
 			scope.Mode = "plan"
-			scope.planRevision = &proposalRevision{version: state.ProposalVersion, generation: state.ModeGeneration}
+			scope.planRevision = &proposalRevision{version: state.ProposalVersion, generation: state.ModeGeneration, continuesGoal: state.Goal != nil && state.Goal.PausedByPlan}
 		}
 		if scope.PermissionMode == "" {
 			if st := e.Conversations(nil).sessionStore(); st != nil {
@@ -2364,9 +2370,18 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 		defer func() {
 			if err == nil && res != nil && res.PlanProposal && strings.TrimSpace(res.Answer) != "" && scope.SessionID != "" {
 				_, saveErr := e.saveProposal(context.WithoutCancel(ctx), scope, res.Answer)
+				res.Answer = e.proposalMarkdown(res.Answer)
 				if saveErr != nil {
 					err = saveErr
 				}
+			}
+			if err == nil && res != nil && scope.planRevision != nil {
+				r := scope.planRevision
+				r.mu.Lock()
+				if r.body != "" {
+					res.ProposalBody, res.ProposalVersion, res.ProposalContinuesGoal = r.body, r.version, r.continuesGoal
+				}
+				r.mu.Unlock()
 			}
 		}()
 	}
@@ -2398,6 +2413,16 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 		if pr, err := e.projStore.GetFold(project); err == nil {
 			scope.WorkDir = pr.UsableWorkDir()
 		}
+	}
+	if scope.reviewedPlan != nil && scope.Mode != "plan" {
+		if guard, ok := ctx.Value(conversationGuardKey{}).(func(context.Context) error); ok {
+			if err := guard(ctx); err != nil {
+				return nil, err
+			}
+		}
+		ctx = core.WithAskRound(ctx, scope.RoundID)
+		cb.progress(Progress{Kind: ProgressPlan, Name: scope.reviewedPlan.Goal})
+		return e.startClassifiedPlan(ctx, scope.reviewedPlan, scope, authorize, cb)
 	}
 	workDir := scope.WorkDir
 	// Broad reviews require a harness; narrow code questions need actual
@@ -2747,7 +2772,7 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// this ask — from a clarify round or the deterministic plan card below.
 	// One approval per ask is the contract; a fan-out of several tasks from
 	// the same plan must not re-ask for each.
-	confirmedPlan := false
+	confirmedPlan := scope.confirmedImplementation
 	// budgetAdvisory rides every exit: a dispatch the budget turned away is a
 	// decision the user must be able to see, not a task that quietly never
 	// existed.
@@ -2869,6 +2894,7 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 		// cannot finish the small piece of work the user asked for.
 		reg = reg.Copy()
 		e.registerGoalTools(reg, scope)
+		e.registerTeamSearch(reg, scope, scopeProj)
 		if scope.Mode == "plan" {
 			e.registerProposalTool(reg, scope)
 		}
@@ -2879,7 +2905,7 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 		reg.Register(e.taskBudgetTool(budget, effectiveLocale))
 		registerWorkspaceTools(reg, workDir)
 		reg.EnableDiscovery(func(name string) bool {
-			return name == entry.ToolNameTaskSubmit || name == "task_budget" || name == "skill_search" || name == "skill_show" || strings.HasPrefix(name, "workspace_") || strings.HasSuffix(name, "_goal") || name == "propose_plan"
+			return name == entry.ToolNameTaskSubmit || name == "tsync_task_search" || name == "task_budget" || name == "skill_search" || name == "skill_show" || strings.HasPrefix(name, "workspace_") || strings.HasSuffix(name, "_goal") || name == "propose_plan"
 		})
 	}
 
@@ -3488,6 +3514,22 @@ func (e *Engine) WorkPath() string {
 	return e.cfg.Storage.WorkPath
 }
 
+// SessionWorkDir resolves the same source tree for interactive turns and
+// background continuations of a confirmed plan or goal.
+func (e *Engine) SessionWorkDir(sess *sessions.Session) string {
+	if sess.Worktree != "" {
+		return sess.Worktree
+	}
+	if sess.Project != "" && e.projStore != nil {
+		if p, err := e.projStore.Get(sess.Project); err == nil {
+			if dir := p.UsableWorkDir(); dir != "" {
+				return dir
+			}
+		}
+	}
+	return e.WorkPath()
+}
+
 // CardPath returns the capabilities.yaml the engine's scheduler was built
 // from — the file /card edits and reloads.
 func (e *Engine) CardPath() string { return e.cardPathNow() }
@@ -3640,6 +3682,20 @@ func (e *Engine) PlanStages(ctx context.Context, planID string) ([]core.Task, er
 	return sched.TaskStore().PlanStages(ctx, planID)
 }
 
+// compileClassifiedPlan produces the complete dispatch graph, including its
+// integration stage, for both proposal review and task creation.
+func (e *Engine) compileClassifiedPlan(spec *entry.PlanSpec, confirmed bool, node string) (plan.Plan, error) {
+	compile := plan.FromSpec
+	if confirmed {
+		compile = plan.FromConfirmedSpec
+	}
+	p, err := compile(*spec)
+	if err != nil {
+		return plan.Plan{}, err
+	}
+	return plan.WithSynthesis(p, strings.TrimSpace(spec.FinalStage), i18n.T(e.Locale(), "ask.plan.synthesisTitle"), node)
+}
+
 // startClassifiedPlan turns a model-emitted plan into a running pipeline. It is
 // the other half of the plan entry point: `panda plan run` covers the pipeline
 // you keep as a file, this covers the one you ask for in a sentence — which is
@@ -3650,6 +3706,10 @@ func (e *Engine) PlanStages(ctx context.Context, planID string) ([]core.Task, er
 // additionally carry explicit owner consent for this request's whole plan;
 // it still passes through the existing approval policy before rows are created.
 func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, scope AskScope, authorize bool, cb StreamCallbacks) (*Result, error) {
+	p, err := e.compileClassifiedPlan(spec, scope.Mode == "plan" || scope.confirmedImplementation, scope.Node)
+	if err != nil {
+		return &Result{Kind: "answer", Answer: i18n.Tf(e.Locale(), "ask.plan.invalid", "err", err.Error()), ExitCode: 1}, nil
+	}
 	if scope.Mode == "plan" {
 		text, err := json.MarshalIndent(spec, "", "  ")
 		return &Result{Kind: "answer", Answer: string(text), PlanProposal: true}, err
@@ -3657,16 +3717,6 @@ func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, 
 	sched := e.sched.Load()
 	if sched == nil {
 		return nil, fmt.Errorf("plan output requires a capability card (scheduler initialization failed)")
-	}
-	p, err := plan.FromSpec(*spec)
-	if err == nil {
-		p, err = plan.WithSynthesis(p, strings.TrimSpace(spec.FinalStage), i18n.T(e.Locale(), "ask.plan.synthesisTitle"), scope.Node)
-	}
-	if err != nil {
-		// A plan the model got wrong has created nothing, so the useful answer is
-		// the defect itself rather than a failed run: the user (or the next turn)
-		// can see that the stages did not hang together.
-		return &Result{Kind: "answer", Answer: i18n.Tf(e.Locale(), "ask.plan.invalid", "err", err.Error())}, nil
 	}
 	q := core.DefaultQueueSpec()
 	project, projectDir := e.scopeProject(scope)
@@ -3713,7 +3763,7 @@ func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, 
 		if permission != defense.ModePlan && terminal {
 			detail.Acceptance, err = planDeliveryChecks(detail.Acceptance, scope.Acceptance)
 			if err != nil {
-				return &Result{Kind: "answer", Answer: i18n.Tf(e.Locale(), "ask.plan.invalid", "err", err.Error())}, nil
+				return &Result{Kind: "answer", Answer: i18n.Tf(e.Locale(), "ask.plan.invalid", "err", err.Error()), ExitCode: 1}, nil
 			}
 		}
 		body, err := json.Marshal(detail)

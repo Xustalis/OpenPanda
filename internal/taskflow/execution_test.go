@@ -22,10 +22,10 @@ import (
 func automationTest(t *testing.T, assigned bool) (*Service, *executionRuntime, Connection, Policy, tsync.Task) {
 	t.Helper()
 	s, source := newSyncTest(t)
-	scopes := []string{"tasks:read", "members:read", "execution:read", "execution:claim", "execution:report"}
+	scopes := []string{"tasks:read", "members:read", "execution:read", "execution:claim", "execution:report", "delivery:write"}
 	source.account.Scopes = slices.Clone(scopes)
 	source.spaces[0].Scopes = slices.Clone(scopes)
-	source.caps.Capabilities = append(source.caps.Capabilities, "executions")
+	source.caps.Capabilities = append(source.caps.Capabilities, "executions", "deliveries", "finalActions")
 	body := "Write a draft about solar energy"
 	wire := tsync.Task{Key: taskFor("s", "t").Key, Title: "solar energy", Body: &body, BodyAvailable: true, Status: "todo", Versions: tsync.Versions{Task: "r1", Input: "i1", Assignment: "a1", Generation: 1}, ApprovalMode: taskproviders.BeforeSubmit}
 	wire.Permissions.Read, wire.Permissions.Claim = true, true

@@ -264,3 +264,37 @@ func TestRoundSummaryRetriesTranscriptFailure(t *testing.T) {
 		t.Fatal("round not retried exactly once")
 	}
 }
+
+func TestDetachedRoundSummaryIncludesLocalizedPlanAudit(t *testing.T) {
+	f := newSummaryDeliveryFixture(t, false)
+	ctx := context.Background()
+	if err := f.h.store.BeginAskRound(ctx, "detached", f.sessionID, "zh-CN"); err != nil {
+		t.Fatal(err)
+	}
+	a := addRoundTask(t, f, "detached", "inspect")
+	b := addRoundTask(t, f, "detached", "implement")
+	for _, task := range []core.Task{a, b} {
+		if _, err := f.db.Exec("UPDATE tasks SET plan_id='graph', stage_id=title WHERE task_id=?", task.TaskID); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.h.store.Cancel(ctx, task.TaskID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.h.store.RecordEvent(ctx, a.TaskID, core.EvPlanIntervention, map[string]string{"decision_id": "d", "kind": "adjust", "target_stage": "implement", "outcome": "queued", "reason": "revised schema"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.h.store.RecordEvent(ctx, b.TaskID, core.EvPlanAdjustmentRead, map[string]string{"decision_id": "d"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.h.store.CloseAskRound(ctx, "detached", "closed"); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		f.h.finalizeAskRounds(ctx)
+	}
+	turns := roundTurns(t, f)
+	if len(turns) != 1 || !strings.Contains(turns[0].Text, "计划审计") || !strings.Contains(turns[0].Text, "已读 #") || !strings.Contains(turns[0].Text, "revised schema") {
+		t.Fatalf("missing detached audit: %+v", turns)
+	}
+}
