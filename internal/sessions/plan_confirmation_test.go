@@ -25,11 +25,22 @@ func TestLegacyPlanConfirmationLoadsAsReceipt(t *testing.T) {
 		t.Fatalf("expected two turns, got %d", len(got.Turns))
 	}
 	receipt := got.Turns[0]
-	if receipt.Text != "/plan confirm 7" || receipt.Kind != planConfirmationKind || receipt.Ref != "7" ||
+	// The text is the instruction the model keeps replaying; only the label is
+	// new. Rewriting it to "/plan confirm 7" would drop the requirements from
+	// every later turn's history.
+	if receipt.Text != internal || receipt.Kind != planConfirmationKind || receipt.Ref != "7" ||
 		receipt.RoundID != "old-round" || receipt.IdempotencyKey != "plan:user:old-round" || receipt.TS != 100 {
 		t.Fatalf("unexpected confirmation: %+v", receipt)
 	}
 	if got.Turns[1].Text != internal || got.Turns[1].Kind != "" {
 		t.Fatalf("ordinary user message changed: %+v", got.Turns[1])
+	}
+}
+
+func TestPlanConfirmationKeepsInstructionForLaterTurns(t *testing.T) {
+	instruction := "Implement user-confirmed proposal version 3 in the current session.\n\nShip it."
+	turn := PlanConfirmationTurn("round-3", 3, instruction)
+	if turn.Text != instruction || turn.Kind != planConfirmationKind || turn.Ref != "3" {
+		t.Fatalf("confirmation turn lost the instruction: %+v", turn)
 	}
 }

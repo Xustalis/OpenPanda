@@ -853,7 +853,9 @@ func TestConfirmedProposalRunsExactVersionWithoutCreatingGoal(t *testing.T) {
 	if !seen.Load() || state.Goal != nil || state.Planning || persisted.PermissionMode != "manual" {
 		t.Fatalf("implementation mismatch: seen=%v state=%+v session=%+v", seen.Load(), state, persisted)
 	}
-	if len(persisted.Turns) != 2 || persisted.Turns[0].Kind != "plan_confirmation" || persisted.Turns[0].Text != fmt.Sprintf("/plan confirm %d", version) {
+	if len(persisted.Turns) != 2 || persisted.Turns[0].Kind != "plan_confirmation" ||
+		!strings.Contains(persisted.Turns[0].Text, "EXACT-CONFIRMED-PROPOSAL") ||
+		!strings.Contains(persisted.Turns[0].Text, fmt.Sprintf("version %d", version)) {
 		t.Fatalf("expected a confirmation in the transcript: %+v", persisted.Turns)
 	}
 }

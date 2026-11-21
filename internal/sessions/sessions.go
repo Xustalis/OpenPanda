@@ -148,17 +148,28 @@ const (
 	planConfirmationKind = "plan_confirmation"
 )
 
-// PlanConfirmationTurn records the user's confirmation in the transcript.
-func PlanConfirmationTurn(round string, version int64) Turn {
+// PlanConfirmationTurn records the user's confirmation in the transcript. The
+// text stays the implementation instruction: later turns replay the transcript
+// as the model's history, and a receipt-only body ("/plan confirm 2") would
+// strip the requirements the implementation has to keep honouring. Kind and
+// Ref are what let the console draw it as a confirmation instead of a message
+// the user typed.
+func PlanConfirmationTurn(round string, version int64, instruction string) Turn {
 	return Turn{
-		Role: "user", Text: fmt.Sprintf("/plan confirm %d", version),
+		Role: "user", Text: instruction,
 		Kind: planConfirmationKind, Ref: strconv.FormatInt(version, 10),
 		RoundID: round, IdempotencyKey: planConfirmationKey + round,
 	}
 }
 
+// normalizePlanConfirmation labels transcripts written before the kind existed.
+// It deliberately leaves Text alone: the old text was already the instruction,
+// and the model still needs it on every later turn.
 func (t *Turn) normalizePlanConfirmation() {
 	if t.Role != "user" || !strings.HasPrefix(t.IdempotencyKey, planConfirmationKey) {
+		return
+	}
+	if t.Kind == planConfirmationKind && t.Ref != "" {
 		return
 	}
 	rest, ok := strings.CutPrefix(t.Text, "Implement user-confirmed proposal version ")
@@ -170,8 +181,7 @@ func (t *Turn) normalizePlanConfirmation() {
 	if err != nil || version <= 0 {
 		return
 	}
-	receipt := PlanConfirmationTurn(t.RoundID, version)
-	t.Text, t.Kind, t.Ref = receipt.Text, receipt.Kind, receipt.Ref
+	t.Kind, t.Ref = planConfirmationKind, strconv.FormatInt(version, 10)
 }
 
 // Session is one chat thread. Worktree/Branch are empty when the work path is

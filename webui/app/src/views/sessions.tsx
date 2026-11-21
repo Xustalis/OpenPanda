@@ -899,10 +899,11 @@ export function SessionsView({
     setPlanReview(null)
     setGoalEditor(null)
     setBudgetGoal(null)
-    // The first send can give the new conversation its ID during submission.
-    if (activeId && inflight.current && inflightSid.current === activeId) return
     const el = composer.current
     const text = el ? editorTextOf(el) : ''
+    // Stash the thread we are leaving before deciding whether to restore the
+    // next one: switching into a thread that is still streaming must not cost
+    // the draft typed in the thread being left.
     if (previous && el && (text || armed || pending.length)) {
       drafts.current.set(previous, {
         text,
@@ -911,12 +912,20 @@ export function SessionsView({
         attachments: pending,
       })
     }
+    // The first send can give the new conversation its ID during submission;
+    // that render is the same editor, not a thread switch, so there is
+    // nothing to restore.
+    if (activeId && inflight.current && inflightSid.current === activeId) return
     const next = activeId ? drafts.current.get(activeId) : undefined
     if (activeId) drafts.current.delete(activeId)
     clearPending()
     setShot(null)
-    if (el && next) {
-      el.replaceChildren(...next.nodes)
+    if (el) {
+      // A thread with no saved draft must still clear the surface: the editor
+      // is contenteditable, so setInput('') alone leaves the previous thread's
+      // words on screen — and the next keystroke reads them back into state.
+      if (next) el.replaceChildren(...next.nodes)
+      else el.replaceChildren()
       autoGrow(el)
     }
     setInput(next?.text ?? '')
