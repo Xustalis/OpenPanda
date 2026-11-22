@@ -15,7 +15,6 @@ beforeEach(() => {
     setItem: (key: string, value: string) => values.set(key, value),
   } })
   Object.defineProperty(globalThis, 'location', { configurable: true, value: { hash: '' } })
-  setTeamFeatureEnabled(false)
 })
 afterEach(() => {
   setTeamFeatureEnabled(false)
