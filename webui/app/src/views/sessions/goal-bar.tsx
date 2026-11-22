@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api, type SessionOperation, type ConversationState, type ServerGoal } from '../../api/client'
+import { completionKey, onCompletionAcknowledged } from './goal-dismissal'
 import { busSubscribeChange } from '../../hooks'
 import { Icon } from '../../components/icons'
 import { t } from '../../i18n'
@@ -25,6 +26,8 @@ function present(goal?: ServerGoal): ComposerGoal | undefined {
   }
 }
 
+function dismissalStorageKey(sid: string): string { return `openpanda.dismissedGoal:${sid}` }
+
 export function legacyGoalFor(sid: string): ComposerGoal | undefined {
   try {
     const goal = JSON.parse(sessionStorage.getItem('openpanda.composerGoals') || '{}')[sid]
@@ -34,6 +37,7 @@ export function legacyGoalFor(sid: string): ComposerGoal | undefined {
 
 export function useComposerGoals(sessionId: string | null, operation: SessionOperation | undefined, stopping: boolean) {
   const [states, setStates] = useState<Record<string, ConversationState>>({})
+  const [dismissed, setDismissed] = useState<Record<string, string>>({})
   const [failedSession, setFailedSession] = useState('')
   const current = useRef(states)
   const nextRequest = useRef(0)
@@ -71,7 +75,29 @@ export function useComposerGoals(sessionId: string | null, operation: SessionOpe
     void poll()
     return () => { alive = false; unsubscribe(); window.clearTimeout(timer) }
   }, [sessionId, operation?.id, stopping])
-  return { failed: failedSession === sessionId, goal: present(states[sessionId ?? '']?.goal), state: states[sessionId ?? ''], refresh, apply, goalFor: (sid: string) => present(current.current[sid]?.goal) }
+  const sid = sessionId ?? ''
+  const state = states[sid]
+  const goal = present(state?.goal)
+  const completed = completionKey(state?.goal)
+  let dismissedKey = dismissed[sid]
+  if (completed && !dismissedKey) {
+    try { dismissedKey = sessionStorage.getItem(dismissalStorageKey(sid)) ?? '' } catch { /* Storage is optional. */ }
+  }
+  return {
+    goal,
+    completionDismissed: Boolean(completed && completed === dismissedKey),
+    failed: failedSession === sessionId,
+    apply,
+    state,
+    refresh,
+    goalFor: (id: string) => present(current.current[id]?.goal),
+    onMessageAccepted(id: string) {
+      return onCompletionAcknowledged(() => current.current[id]?.goal, key => {
+        setDismissed(previous => ({ ...previous, [id]: key }))
+        try { sessionStorage.setItem(dismissalStorageKey(id), key) } catch { /* Storage is optional. */ }
+      })
+    },
+  }
 }
 
 type GoalAction = 'pause' | 'resume' | 'stop' | 'clear'

@@ -523,7 +523,7 @@ export function SessionsView({
   const busy = threadBusy(localBusy, activeId, session, liveIds.length)
   const goalAction = useRef<string | null>(null)
   const [pendingGoalAction, setPendingGoalAction] = useState<string | null>(null)
-  const { goal, failed: controlFailed, state: controlState, refresh: refreshControl, apply: applyControl, goalFor } = useComposerGoals(activeId, session?.operation, Boolean(pendingGoalAction))
+  const { goal, completionDismissed, onMessageAccepted, failed: controlFailed, state: controlState, refresh: refreshControl, apply: applyControl, goalFor } = useComposerGoals(activeId, session?.operation, Boolean(pendingGoalAction))
   const legacyGoal = activeId && !goal ? legacyGoalFor(activeId) : undefined
   const [goalDrafts, setGoalDrafts] = useState<Record<string, string>>({})
   const [savingGoal, setSavingGoal] = useState(false)
@@ -1407,6 +1407,7 @@ export function SessionsView({
   async function sendIntoRunningTurn(text: string, tray: PendingAttachment[]) {
     const sid = activeId
     if (!sid || (!text && tray.length === 0)) return
+    const acknowledgeGoal = onMessageAccepted(sid)
     try {
       // Upload before the note so a failed upload leaves the draft intact.
       let mentions: string[] = []
@@ -1419,6 +1420,7 @@ export function SessionsView({
       // note as an attachment, the same shape an uploaded file's mention takes.
       const refs = tray.flatMap((p) => (p.ref ? [p.ref] : []))
       const r = await api.sendSessionMessage(sid, text, false, [...mentions, ...refs])
+      acknowledgeGoal?.()
       // Only clear once the server accepted it: a refused note is still the
       // user's text, and losing it to an optimistic clear costs more than the
       // round trip.
@@ -1670,6 +1672,9 @@ export function SessionsView({
       void sendIntoRunningTurn(raw, tray)
       return
     }
+    // Snapshot the completion at send time so a goal that finishes during
+    // this turn (or an automatic continuation) keeps its completion readout.
+    const acknowledgeGoal = fromComposer && activeId ? onMessageAccepted(activeId) : undefined
     // Claim the slot before the async file expansion — a second Enter during
     // the /api/fs/read round-trips must not start a parallel ask.
     const ctrl = new AbortController()
@@ -1921,6 +1926,7 @@ export function SessionsView({
             queuedTurn.current = text
           },
           onOperation: (operationID) => {
+            if (operationID) acknowledgeGoal?.()
             if (inflight.current === ctrl && inflightSid.current === sid) {
               inflightOperation.current = operationID
               if (live()) setMsgs(ms => ms.map(m => m.k === userKey || m.k === replyKey ? { ...m, operation_id: operationID } : m))
@@ -3146,7 +3152,7 @@ export function SessionsView({
                 project={session?.project || (newChatPage ? contextProject : activeProject)}
               />
               <PermissionPicker value={permission} onChange={pickPermission} />
-              <button class="composer-goal-trigger" type="button" aria-expanded={dockShown && dockTab === 'goal'} aria-controls="goal-panel" onClick={showGoalPanel}><Icon name="target" size={16} />{t('sessions.goal.label')}{shownGoal && !dockShown && <span class="goal-trigger-phase">{t(shownGoal.waitingFor === 'input' && goalActive(shownGoal) ? 'goal.waitInput' : 'sessions.goal.state.' + shownGoal.phase)}</span>}</button>
+              <button class="composer-goal-trigger" type="button" aria-expanded={dockShown && dockTab === 'goal'} aria-controls="goal-panel" onClick={showGoalPanel}><Icon name="target" size={16} />{t('sessions.goal.label')}{shownGoal && !completionDismissed && !dockShown && <span class="goal-trigger-phase">{t(shownGoal.waitingFor === 'input' && goalActive(shownGoal) ? 'goal.waitInput' : 'sessions.goal.state.' + shownGoal.phase)}</span>}</button>
               {(armed === 'plan' || controlState?.planning) && <button type="button" class="composer-goal-trigger composer-plan-trigger" aria-pressed={armed === 'plan'} title={t(armed === 'plan' && !controlState?.planning ? 'sessions.plan.hint' : 'sessions.plan.exit')} onClick={() => { if (controlState?.planning) void exitPlanning(); setArmed(null); if (planArgument(input) !== null) removeModeCommand() }}><Icon name="lightbulb" size={16} />{t('sessions.plan.label')}</button>}
               {/* The model switch, immediately left of Send — the row's right
                   edge is where you reach for before sending, and "which model"
