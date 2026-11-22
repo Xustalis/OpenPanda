@@ -918,7 +918,12 @@ export function SessionsView({
     // The pane belongs to the thread that produced the proposal; switching
     // threads takes the column back instead of showing another session's plan.
     setReviewVersion(null)
-    setDockTab((current) => current === 'plan' ? '' : current)
+    if (dockTab === 'goal') {
+      setDockOpen(false)
+      setDockTab('')
+    } else {
+      setDockTab(current => current === 'plan' ? '' : current)
+    }
     setEditingGoal('')
     const el = composer.current
     const text = el ? editorTextOf(el) : ''
@@ -1826,7 +1831,7 @@ export function SessionsView({
           if (draft && draft.mode === armed && draft.text.trim() === typed && draft.attachments === pending) drafts.current.delete(sid)
         }
         if (sidebarObjective !== undefined) setGoalDrafts(previous => { const next = { ...previous }; delete next[sid]; return next })
-        if (fromComposer && live()) showGoalPanel()
+        if (live() && (fromComposer || sidebarObjective !== undefined)) showGoalPanel()
         await refreshControl(sid)
         return
       }
@@ -2272,6 +2277,7 @@ export function SessionsView({
         } catch { /* Browser storage is optional. */ }
         if (activeIdRef.current === sid) {
           setEditingGoal('')
+          if (dockTab === 'goal') { setDockOpen(false); setDockTab('') }
           toast(t('goal.cleared'))
         }
       }
@@ -3152,7 +3158,12 @@ export function SessionsView({
                 project={session?.project || (newChatPage ? contextProject : activeProject)}
               />
               <PermissionPicker value={permission} onChange={pickPermission} />
-              <button class="composer-goal-trigger" type="button" aria-expanded={dockShown && dockTab === 'goal'} aria-controls="goal-panel" onClick={showGoalPanel}><Icon name="target" size={16} />{t('sessions.goal.label')}{shownGoal && !completionDismissed && !dockShown && <span class="goal-trigger-phase">{t(shownGoal.waitingFor === 'input' && goalActive(shownGoal) ? 'goal.waitInput' : 'sessions.goal.state.' + shownGoal.phase)}</span>}</button>
+              {shownGoal && !completionDismissed && (
+                <button class="composer-goal-trigger" type="button" aria-expanded={dockShown && dockTab === 'goal'} aria-controls="goal-panel" onClick={showGoalPanel}>
+                  <Icon name="target" size={16} />{t('sessions.goal.label')}
+                  {!dockShown && <span class="goal-trigger-phase">{t(shownGoal.waitingFor === 'input' && goalActive(shownGoal) ? 'goal.waitInput' : 'sessions.goal.state.' + shownGoal.phase)}</span>}
+                </button>
+              )}
               {(armed === 'plan' || controlState?.planning) && <button type="button" class="composer-goal-trigger composer-plan-trigger" aria-pressed={armed === 'plan'} title={t(armed === 'plan' && !controlState?.planning ? 'sessions.plan.hint' : 'sessions.plan.exit')} onClick={() => { if (controlState?.planning) void exitPlanning(); setArmed(null); if (planArgument(input) !== null) removeModeCommand() }}><Icon name="lightbulb" size={16} />{t('sessions.plan.label')}</button>}
               {/* The model switch, immediately left of Send — the row's right
                   edge is where you reach for before sending, and "which model"
