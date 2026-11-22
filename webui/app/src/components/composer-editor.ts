@@ -66,17 +66,10 @@ export function editorCaretOffset(el: HTMLElement): number {
   const head = el.ownerDocument.createRange()
   head.selectNodeContents(el)
   head.setEnd(range.startContainer, range.startOffset)
-  let len = head.toString().length
-  for (const pill of el.querySelectorAll('.attach-pill')) {
-    if (head.intersectsNode(pill)) len -= (pill.textContent ?? '').length
-  }
-  for (const n of el.querySelectorAll('br, div, p')) {
-    if (head.intersectsNode(n)) len += 1
-  }
-  return len
+  return editorTextOf(head.cloneContents()).length
 }
 
-export function editorTextOf(el: HTMLElement): string {
+export function editorTextOf(el: HTMLElement | DocumentFragment): string {
   let out = ''
   for (const child of el.childNodes) out += editorText(child)
   return out
@@ -100,6 +93,41 @@ export function editorTextWalker(el: HTMLElement): TreeWalker {
       return NodeFilter.FILTER_ACCEPT
     },
   })
+}
+
+/** Remove just the command characters. Walking text nodes independently keeps
+ * attachment pills and markup between those characters intact. */
+export function removeEditorToken(el: HTMLElement, start: number, end: number): void {
+  const walker = editorTextWalker(el)
+  const caret = el.ownerDocument.createRange()
+  let offset = 0
+  let anchored = false
+  let node: Node | null
+  while (offset < end && (node = walker.nextNode())) {
+    if (node.nodeType !== Node.TEXT_NODE) { offset++; continue }
+    const text = node as Text
+    const visible = text.data.replace(/\u200b/g, '').length
+    if (offset + visible > start) {
+      let from = 0
+      let to = 0
+      let index = offset
+      for (const char of text.data.split('')) {
+        if (index >= end) break
+        if (index < start) from++
+        to++
+        if (char !== '\u200b') index++
+      }
+      text.deleteData(from, to - from)
+      if (!anchored) { caret.setStart(text, from); caret.collapse(true); anchored = true }
+    }
+    offset += visible
+  }
+  if (anchored) {
+    el.focus()
+    const selection = el.ownerDocument.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(caret)
+  }
 }
 
 /** Plain text into the editor at the caret, without the HTML a paste would

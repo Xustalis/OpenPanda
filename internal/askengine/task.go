@@ -51,7 +51,7 @@ func waitForPeers(ctx context.Context, db *sql.DB, timeout time.Duration) {
 // receives one actionable natural-language instruction (design doc §7.3: the
 // refined intent is the spec from the same call — no separate refinement step
 // in MVP).
-func toTaskInput(spec *entry.TaskSpec, loc ...i18n.Locale) core.TaskInput {
+func toTaskInput(spec *entry.TaskSpec, request string, loc ...i18n.Locale) core.TaskInput {
 	targetLoc := i18n.Locale("")
 	if len(loc) > 0 && loc[0] != "" {
 		targetLoc = loc[0]
@@ -90,6 +90,12 @@ func toTaskInput(spec *entry.TaskSpec, loc ...i18n.Locale) core.TaskInput {
 	}
 	if spec.Spec.SuccessDefinition != "" {
 		intent.WriteString("\n" + i18n.Tf(targetLoc, "prompt.task.success_definition", "def", spec.Spec.SuccessDefinition))
+	}
+
+	// Preserve the original wording across retries and peer dispatch when the
+	// model distilled the target. A verbatim target already carries it.
+	if request != "" && request != spec.Spec.Target {
+		intent.WriteString("\n\n" + i18n.T(targetLoc, "prompt.task.user_raw_request") + "\n" + request)
 	}
 
 	// spec_json is marshalled from the Detail — execution overrides the model

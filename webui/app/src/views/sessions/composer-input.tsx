@@ -68,6 +68,7 @@ export function ComposerInput({
               role="option"
               aria-selected={i === completeIdx}
               class={`complete-item${i === completeIdx ? ' active' : ''}`}
+              onMouseDown={e => e.preventDefault()}
               onMouseMove={() => setCompleteCursor(i)}
               onClick={() => acceptCompletion(c)}
             >
@@ -188,7 +189,7 @@ export function ComposerInput({
             // While the menu is open the navigation keys belong to it:
             // Tab/Enter accept, arrows move, Escape hides it until the
             // input changes again.
-            if ((e.key === 'Tab' || e.key === 'Enter') && !e.isComposing && e.keyCode !== 229) {
+            if ((e.key === 'Tab' || e.key === 'Enter') && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
               e.preventDefault()
               const cmd = completeShown[completeIdx]
               if (cmd) acceptCompletion(cmd)

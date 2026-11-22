@@ -110,3 +110,15 @@
 @media (prefers-reduced-motion: reduce) {
   .memory-entry.fresh { animation: none; }
 }
+
+.memory-context { background: var(--section-surface); border-color: var(--section-edge); }
+.memory-context-mark { color: var(--section-ink); }
+/* The empty graph explains what will appear here. */
+#memory-panel[aria-labelledby='memory-tab-graph']:has(> .memory-placeholder) > .memory-context { display: none; }
+.memory-placeholder { background: var(--section-surface); box-shadow: var(--section-shadow); }
+.memory-placeholder > svg { width: 40px; height: 40px; padding: 9px; opacity: 1; color: var(--section-ink); background: var(--section-wash); border-radius: 12px; }
+@media (max-width: 640px) {
+  .memory-tabs.segmented { display: flex; flex-wrap: nowrap; overflow-x: auto; width: 100%; }
+  .memory-tabs .seg { flex: none; }
+  .memory-tabs .seg:nth-child(n) { margin-inline-start: 0; }
+}

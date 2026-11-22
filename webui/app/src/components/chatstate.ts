@@ -23,29 +23,23 @@ export function patchStreaming<T extends { role?: string; streaming?: boolean; k
   return msgs.map((m, i) => (i === idx ? fn(m) : m))
 }
 
-/** The composer's `/` completion query: the input opens the menu only when
- *  its first token starts with a slash and is still being typed. Returns the
- *  first token without the slash (possibly ""), or null when completion is
- *  not active. */
-export function slashQuery(input: string): string | null {
-  if (!input.startsWith('/')) return null
-  const token = input.split(/\s/, 1)[0]?.slice(1) ?? ''
-  return token
+/** Locate the command being typed at the caret. A CJK phrase does not need
+ * a separating space. Slashes inside paths and addresses belong to the text. */
+export function slashAtCaret(input: string, caret: number) {
+  const before = input.slice(0, caret)
+  const match = /(?:^|[\s(（，。！？、；：]|[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}])\/([\p{L}\p{N}_:-]*)$/u.exec(before)
+  if (!match) return null
+  const query = match[1] ?? ''
+  const start = before.length - query.length - 1
+  const after = input.slice(caret)
+  if (/^[./\\]/.test(after) || /^[\w-]+[./\\]/.test(after)) return null
+  return { start, end: caret, query }
 }
 
 /** A plan prompt is distinct from the /plans navigation command. */
 export function planArgument(input: string): string | null {
   const match = /^\/plan(?:\s+([\s\S]*))?$/i.exec(input.trim())
   return match ? (match[1] ?? '').trim() : null
-}
-
-/** Whether the composer is past the command's name: the `/` menu picks a verb,
- *  so once whitespace follows the token what comes next is that verb's
- *  argument (prose, a path) and the menu has no business covering it. The bare
- *  token is the opposite case — hiding the menu there left `/plan` and `/goal`
- *  unpickable at the exact keystroke that completes them. */
-export function slashArgStarted(input: string): boolean {
-  return slashQuery(input) !== null && /\s/.test(input)
 }
 
 /** The words a `/` query is matched against, one entry per word so the menu
@@ -137,18 +131,27 @@ export function mergeTailTurn<T extends TurnLike>(
 /** Install persisted rows by identity, not by tail position. A task finalizer
  * may append a report before the ask refetch returns; that report must become
  * a new row, never replace the dispatch/user bubble carrying live metadata. */
-export function reconcileTranscript<T extends TurnLike & { k: string; operation_id?: string }>(
+export function reconcileTranscript<T extends TurnLike & { k: string; operation_id?: string; idempotency_key?: string }>(
   local: T[], stored: T[], retainOperation?: string,
 ): T[] {
   const used = new Set<string>()
+  const reserved = new Set(local.map(m => m.k))
   const reconciled = stored.map(turn => {
     const match = local.find(m => !used.has(m.k) && m.role === turn.role && (
-      turn.operation_id
-        ? m.operation_id === turn.operation_id && (m.ref || '') === (turn.ref || '') &&
-          (m.kind || 'answer') === (turn.kind || 'answer')
-        : m.text === turn.text && (m.ref || '') === (turn.ref || '')
+      m.idempotency_key && turn.idempotency_key
+        ? m.idempotency_key === turn.idempotency_key
+        : m.operation_id === turn.operation_id && (m.ref || '') === (turn.ref || '') &&
+          (m.kind || 'answer') === (turn.kind || 'answer') && (turn.operation_id || m.text === turn.text)
     ))
-    if (!match) return turn
+    if (!match) {
+      // An inserted row can be assigned the old position of a later row.
+      // Keep that later row's DOM identity available to its actual owner.
+      let key = turn.k
+      let suffix = 0
+      while (reserved.has(key)) key = turn.k + '-' + ++suffix
+      reserved.add(key)
+      return key === turn.k ? turn : { ...turn, k: key }
+    }
     used.add(match.k)
     return { ...match, ...turn, k: match.k }
   })

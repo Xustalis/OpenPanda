@@ -15,6 +15,7 @@ interface ToastItem {
   id: number
   kind: ToastKind
   message: string
+  leaving?: boolean
 }
 
 let nextId = 1
@@ -37,6 +38,14 @@ export function ToastHost({ placement = 'bottom-right' }: { placement?: 'bottom-
   const [items, setItems] = useState<ToastItem[]>([])
   const hostRef = useRef<HTMLDivElement>(null)
   const homeRef = useRef<HTMLDivElement>(null)
+
+  function dismiss(id: number) {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setItems(cur => cur.filter(item => item.id !== id))
+    } else {
+      setItems(cur => cur.map(item => item.id === id ? { ...item, leaving: true } : item))
+    }
+  }
 
   // Settings is a modal <dialog>, which lives in the browser's top layer —
   // above every z-index, so a fixed host with z-index: 120 paints underneath
@@ -83,9 +92,7 @@ export function ToastHost({ placement = 'bottom-right' }: { placement?: 'bottom-
       setItems((cur) => [...cur, item])
       raise()
       if (item.kind !== 'error') {
-        setTimeout(() => {
-          setItems((cur) => cur.filter((i) => i.id !== item.id))
-        }, 3500)
+        setTimeout(() => dismiss(item.id), 3500)
       }
     }
     return () => {
@@ -107,13 +114,16 @@ export function ToastHost({ placement = 'bottom-right' }: { placement?: 'bottom-
         aria-live="polite"
       >
         {items.map((item) => (
-          <div key={item.id} class={`toast toast-${item.kind}`}>
+          <div key={item.id} class={`toast toast-${item.kind}${item.leaving ? ' leaving' : ''}`}
+            onAnimationEnd={e => {
+              if (e.animationName === 'toast-out') setItems(cur => cur.filter(i => i.id !== item.id))
+            }}>
             <span class="toast-msg">{item.message}</span>
             {item.kind === 'error' && (
               <button
                 class="toast-close"
                 aria-label={t('common.close')}
-                onClick={() => setItems((cur) => cur.filter((i) => i.id !== item.id))}
+                onClick={() => dismiss(item.id)}
               >
                 ×
               </button>

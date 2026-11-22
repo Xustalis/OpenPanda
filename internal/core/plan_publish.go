@@ -74,11 +74,11 @@ func (s *TaskStore) insertPlanStageTx(ctx context.Context, tx *sql.Tx, t *Task) 
 	_, err := tx.ExecContext(ctx, `INSERT INTO tasks
    (task_id,parent_id,project,title,state,owner_node,attempt_id,state_version,chain_json,remote,created_at,updated_at,
     intent,spec_json,context_type,context_hash,resource_json,requires_json,authorized,token_budget,
-    priority,session_id,resource_keys_json,scheduled,plan_id,stage_id,needs_json,input_artifacts_json)
-    VALUES (?,'',?,?,?,?,?,0,?,0,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?)`,
+    priority,session_id,resource_keys_json,scheduled,plan_id,stage_id,needs_json,input_artifacts_json,complexity)
+    VALUES (?,'',?,?,?,?,?,0,?,0,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?)`,
 		t.TaskID, t.Project, t.Title, StateSubmitted, t.OwnerNode, t.AttemptID, string(chain), now, now,
 		t.Intent, t.SpecJSON, t.ContextType, t.ContextHash, t.ResourceJSON, string(requires), t.Authorized, t.TokenBudget,
-		t.Priority, t.SessionID, string(keys), t.PlanID, t.StageID, string(needs), string(inputs))
+		t.Priority, t.SessionID, string(keys), t.PlanID, t.StageID, string(needs), string(inputs), t.Complexity)
 	return err
 }
 

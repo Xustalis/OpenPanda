@@ -62,7 +62,7 @@ export function ControlView({
           and the description repeated what the tabs and the columns say. */}
       <header class="control-head">
         <Icon name="list-checks" size={16} class="control-head-icon" />
-        <span class="control-title">{t('nav.control')}</span>
+        <h1 class="control-title">{t('nav.control')}</h1>
         <div class="segmented control-tabs" role="tablist" aria-label={t('nav.control')}>
           {TABS.map((k) => {
             const selected = k === tab
@@ -96,7 +96,6 @@ export function ControlView({
         ) : (
           <QueueView
             mode={tab === 'plans' ? 'plans' : 'board'}
-            onModeChange={(mode) => onSelectTab(mode === 'plans' ? 'plans' : 'queue')}
             project={project}
             focusReview={focusReview}
             onOpen={onOpen}

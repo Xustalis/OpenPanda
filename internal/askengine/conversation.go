@@ -63,6 +63,28 @@ func (s *ConversationService) sessionStore() *sessions.Store {
 func (s *ConversationService) State(ctx context.Context, sid string) (conversation.State, error) {
 	state, err := s.store.Get(ctx, sid)
 	state.Proposal = s.engine.proposalMarkdown(state.Proposal)
+	// A confirmed proposal runs as a background round with no response stream
+	// of its own. Its phase is the only thing the console can show between
+	// "confirmed" and the first transcript line, and the console already polls
+	// this state once a second — so it rides here rather than on an event
+	// stream that nothing would subscribe to.
+	if err != nil || (state.Implementation != nil && state.Implementation.Round == "") {
+		return state, err
+	}
+	st := s.sessionStore()
+	if st == nil {
+		return state, nil
+	}
+	if sess, gerr := st.Get(sid); gerr == nil && sess.Operation != nil && (state.Implementation == nil || sess.Operation.ID == state.Implementation.Round) &&
+		sess.Operation.Status == "running" && sess.Operation.Plan != nil {
+		plan := *sess.Operation.Plan
+		state.Implementation = &conversation.Implementation{
+			Round:  plan.Round,
+			Phase:  plan.Phase,
+			Detail: plan.Detail,
+			TaskID: plan.TaskID,
+		}
+	}
 	return state, err
 }
 
@@ -400,6 +422,34 @@ func (s *ConversationService) finishCancelledRound(ctx, finishCtx context.Contex
 	return true
 }
 
+// The conversation transcript can contain only a dispatch acknowledgement.
+// Give the next round the settled task receipts before it chooses more work.
+func (s *ConversationService) goalReceipts(ctx context.Context, g *conversation.Goal) string {
+	rows, err := s.store.DB.QueryContext(ctx, `WITH RECURSIVE members(id) AS (
+ SELECT m.task_id FROM conversation_goal_rounds r JOIN ask_round_tasks m ON m.round_id=r.round_id
+ WHERE r.goal_id=? AND r.generation=? AND r.settled=1
+ UNION SELECT t.task_id FROM tasks t JOIN members m ON t.parent_id=m.id)
+ SELECT t.task_id,t.state,substr(t.title,1,150),substr(CASE WHEN json_valid(t.result_json) THEN
+ COALESCE(NULLIF(json_extract(t.result_json,'$.verdict_reason'),''),NULLIF(json_extract(t.result_json,'$.stderr'),''),json_extract(t.result_json,'$.stdout'),'') ELSE '' END,1,600)
+ FROM tasks t JOIN members m ON t.task_id=m.id ORDER BY t.updated_at DESC LIMIT 8`, g.ID, g.Generation)
+	if err != nil {
+		return ""
+	}
+	defer rows.Close()
+	var receipts strings.Builder
+	for rows.Next() {
+		var id, state, title, summary string
+		if rows.Scan(&id, &state, &title, &summary) != nil {
+			return ""
+		}
+		fmt.Fprintf(&receipts, "\n- %s [%s] %s: %s", id, state, title, summary)
+	}
+	if receipts.Len() == 0 {
+		return ""
+	}
+	return "\nRecent task results for this objective (reported evidence). Check the existing deliverables before dispatching more work:" + receipts.String()
+}
+
 func (s *ConversationService) run(g *conversation.Goal) {
 	ctx, cancel := context.WithCancel(s.ctx)
 	s.mu.Lock()
@@ -447,7 +497,7 @@ func (s *ConversationService) run(g *conversation.Goal) {
 	history = append(history, s.engine.historyTurns(ctx, sess, sess.SummaryTurns)...)
 	history = append(history, entry.Turn{Role: "user", Content: "[Autonomous goal runtime] Original full objective: " + g.Objective + "\nContinue until the COMPLETE objective is verified. A task result or answer does not complete the goal. Call update_goal status=complete with a concrete audit only when every requirement is met. Report the same concrete blocker in three consecutive rounds before blocking. Never change the objective, budget or paused state. Ask for missing input instead of inventing it."})
 	workDir := s.engine.SessionWorkDir(sess)
-	prompt := "Continue the active goal. Inspect previous results and checkpoints, perform remaining authorized work, and verify the complete objective."
+	prompt := "Continue the active goal. Inspect previous results and checkpoints, perform remaining authorized work, and verify the complete objective." + s.goalReceipts(ctx, g)
 	// Publishing a goal is not an ask: the composer files no user turn, so the
 	// thread used to open with a reply to a message nobody could see. The first
 	// round is the user's own task — file it as that bubble and hand it to the
@@ -473,6 +523,21 @@ func (s *ConversationService) run(g *conversation.Goal) {
 		turn.Model = out.EntryModel
 		_ = s.store.Finish(finishCtx, g.RoundID, out.Tokens())
 	}
+	// A provider can disconnect on the optional prose turn after update_goal
+	// already committed its audit. Preserve the successful audit in that case.
+	// Settle still waits for the task tree and owns the final status transition.
+	if askErr != nil || out == nil || out.EmptyResponse {
+		var audit string
+		if s.store.DB.QueryRowContext(finishCtx, "SELECT reason FROM conversation_goals WHERE id=? AND generation=? AND round_id=? AND status='active' AND completion_requested=1", g.ID, g.Generation, g.RoundID).Scan(&audit) == nil {
+			askErr = nil
+			turn.Kind, turn.Text = "answer", audit
+			if out == nil {
+				out = &Result{}
+			}
+			out.Answer, out.EmptyResponse = audit, false
+		}
+	}
+
 	if askErr != nil && !strings.Contains(askErr.Error(), "empty model output") {
 		turn.Kind = "error"
 		turn.Text = askErr.Error()

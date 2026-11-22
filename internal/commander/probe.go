@@ -520,6 +520,12 @@ type AgentCheck struct {
 func (r *Router) CheckAgent(name string, ag ledger.Agent) AgentCheck {
 	chk := AgentCheck{}
 	chk.Usable, chk.Reason = r.agentUsable(name, ag)
+	if !chk.Usable && r.canRescueEndpoint(name, ag, chk.Reason) {
+		forced := *r
+		forced.injectionModel = config.InjectionModelAlways
+		r = &forced
+		chk.Usable, chk.Reason = true, ""
+	}
 	k, _ := agents.Lookup(name, ag.Adapter)
 	spec := r.agentTarget(name, ag)
 	switch {

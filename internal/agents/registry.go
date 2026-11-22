@@ -419,6 +419,7 @@ var known = []Known{
 			APIKey:  "DEEPSEEK_API_KEY",
 			Model:   "DEEPSEEK_MODEL",
 		},
+		Capabilities:        Capabilities{SupportsRestricted: true},
 		DefaultCapabilities: []string{"coding", "shell", "file_edit", "deepseek"},
 		DefaultBestAt:       []string{"code_generation", "code_explanation"},
 		DefaultCostTier:     "low",

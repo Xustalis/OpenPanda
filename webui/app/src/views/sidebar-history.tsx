@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import type { ComponentChildren } from 'preact'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api, type Session } from '../api/client'
 import { busSubscribeChange } from '../hooks'
@@ -9,6 +10,19 @@ import { groupSessions, pruneSelection, sortSessions, threadMark, threadMarkKey 
 import { Icon } from '../components/icons'
 import { toastError, toast } from '../components/toast'
 import { confirmDialog } from '../components/confirm'
+
+function HistoryDisclosure({ open, rows }: { open: boolean; rows(): ComponentChildren }) {
+  const [retained, setRetained] = useState(open)
+  useEffect(() => {
+    if (open) { setRetained(true); return }
+    // Keep the rows only while folding. Large closed groups stay unmounted.
+    const timer = window.setTimeout(() => setRetained(false), 240)
+    return () => window.clearTimeout(timer)
+  }, [open])
+  return <div class="history-disclosure" data-open={open} inert={!open}>
+    <div>{(open || retained) && rows()}</div>
+  </div>
+}
 
 /** Which run of each thread the reader has already looked at — session id to
  *  threadMarkKey. Persisted, because "read" has to survive a reload: a mark
@@ -67,9 +81,11 @@ function writeSeen(map: Record<string, string>) {
 export function SidebarHistory({
   activeId,
   onOpenSession,
+  workspace,
   onNewChat,
 }: {
   activeId: string | null
+  workspace?: string | null
   onOpenSession(id: string): void
   /** Start a blank thread in one directory. The header's "+" is the same
    *  action as 新建对话 with one thing already answered — where it runs — so
@@ -79,8 +95,6 @@ export function SidebarHistory({
 }) {
   const [sessions, setSessions] = useState<Session[]>([])
   const [loadError, setLoadError] = useState('')
-  // Folded directories, by group key ('' is the unassigned bucket). Absent
-  // means open — a directory nobody has touched reads as it always did.
   const [folded, setFolded] = useState<Record<string, boolean>>({})
   // The open directory menu, pinned to the viewport: the nav column scrolls
   // and clips, so a popover positioned inside the row would be cut off the
@@ -135,6 +149,9 @@ export function SidebarHistory({
 
   const ordered = useMemo(() => sortSessions(sessions), [sessions])
   const grouped = useMemo(() => groupSessions(ordered), [ordered])
+
+  const activeSession = sessions.find((s) => s.id === activeId)
+  const currentGroup = activeSession ? activeSession.project || '' : workspace || grouped[0]?.[0]
 
   // A session deleted elsewhere must not linger as a ghost checkbox.
   useEffect(() => {
@@ -295,6 +312,7 @@ export function SidebarHistory({
   function enterSelectMode(gid: string) {
     setMenu(null)
     setSelected(new Set())
+    setFolded((f) => ({ ...f, [gid]: false }))
     setEditGid(gid)
   }
 
@@ -345,11 +363,12 @@ export function SidebarHistory({
   return (
     <div class="sidebar-history">
       {loadError && <p class="thread-empty">{loadError}</p>}
+      {grouped.length > 0 && <h2 class="history-label">{t('sessions.threads')}</h2>}
       <div class="thread-list">
         {ordered.length === 0 && !loadError && <p class="thread-empty">{t('sessions.railEmpty')}</p>}
         {grouped.map(([projectName, items]) => {
           const gid = projectName || '__none__'
-          const open = !folded[gid]
+          const open = !(folded[gid] ?? (currentGroup !== projectName))
           const editing = editGid === gid
           const groupSel = items.filter((s) => selected.has(s.id)).length
           return (
@@ -364,8 +383,10 @@ export function SidebarHistory({
                   {/* 13 to the header's 13.5px: the open glyph's silhouette stops
                       at y=18.5 instead of 20, so it needs a px more than the
                       closed folder did to sit level with the text. */}
-                  <Icon name="folder-open" size={13} />
+                  <Icon name={open ? 'folder-open' : 'folder-closed'} size={14} />
                   <span class="thread-group-name">{projectName || t('sessions.noProject')}</span>
+                  <span class="history-count">{items.length}</span>
+                  <Icon name="chevron-right" class="history-caret" size={12} />
                 </button>
                 {/* The trigger is the mode's own switch: "…" opens the menu,
                     the same spot turns into a cross while this directory is
@@ -438,8 +459,7 @@ export function SidebarHistory({
                   </button>
                 </div>
               )}
-              {open &&
-                items.map((s) => {
+              <HistoryDisclosure open={open} rows={() => items.map((s) => {
                   const mark = seen ? threadMark(s, seen) : ''
                   return (
                   <div
@@ -500,7 +520,7 @@ export function SidebarHistory({
                       />
                     )}
                     <div class="thread-item-main">
-                      <span class="thread-title">
+                      <span class="thread-title" title={s.title || t('sessions.untitled')}>
                         {s.pinned && (
                           <span class="thread-pinned-mark" title={t('sessions.pinned')}>
                             <Icon name="pin" size={11} />
@@ -544,7 +564,7 @@ export function SidebarHistory({
                     )}
                   </div>
                   )
-                })}
+                })} />
             </div>
           )
         })}

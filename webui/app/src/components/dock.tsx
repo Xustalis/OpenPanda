@@ -54,10 +54,13 @@ import { Icon, type IconName } from './icons'
 import { contextShare, contextUsage, type ContextAgentView } from './session-rail-stats'
 
 /** What the column can show. The first three are the thread's tools, reached
- *  from the left group in the head; the last four are the places a tab opens.
- *  All seven own a pane in the body — none of them is a floating layer over it.
- *  `''` means it is open but nothing is picked, the "start from here" state. */
-export type DockTab = 'export' | 'node' | 'orch' | 'files' | 'changes' | 'browser' | 'side' | 'report' | ''
+ *  from the left group in the head; the last five are the places a tab opens.
+ *  `report` and `plan` are documents a round produced, so they have no tab of
+ *  their own — a card above the composer puts them here and the overview takes
+ *  the column back. All of them own a pane in the body — none is a floating
+ *  layer over it. `''` means it is open but nothing is picked, the "start from
+ *  here" state. */
+export type DockTab = 'goal' | 'export' | 'node' | 'orch' | 'files' | 'changes' | 'browser' | 'side' | 'report' | 'plan' | ''
 
 /** Narrower than this and a line of code wraps on every scroll; wider and the
  *  transcript stops being the page. Exported so the state that owns the width
@@ -241,6 +244,7 @@ export function Dock(props: DockProps) {
           directory, and both are invisible everywhere else in the pane. */}
       {((env && (env.machine || env.path || env.branch)) || tokens > 0) && (
         <section class="dock-facts">
+          <p class="dock-section-title"><Icon name="terminal" size={15} />{t('dock.environment')}</p>
           {env?.machine && <p class="dock-facts-title">{env.machine}</p>}
           {env?.path && (
             <div class="dock-facts-row">
@@ -339,34 +343,13 @@ export function Dock(props: DockProps) {
 
       <section class="dock-acts">
         <p class="dock-acts-label">{t('dock.start')}</p>
-        <button type="button" class="dock-start-row" onClick={() => onTab('files')}>
-          <Icon name="folder" size={16} />
-          <span class="dock-start-text">
-            <span class="dock-start-name">{t('dock.files')}</span>
-            <span class="dock-start-hint">{t('dock.filesHint')}</span>
+        {tabs.map(({ key, icon, label }) => <button key={key} type="button" data-tool={key} class="dock-start-row" onClick={() => onTab(key)}>
+          <span class="dock-action-icon"><Icon name={icon} size={18} /></span>
+          <span class="dock-start-text"><span class="dock-start-name">{label}</span>
+            <span class="dock-start-hint">{key === 'changes' ? changeHint : t('dock.' + key + 'Hint')}</span>
           </span>
-        </button>
-        <button type="button" class="dock-start-row" onClick={() => onTab('changes')}>
-          <Icon name="file-diff" size={16} />
-          <span class="dock-start-text">
-            <span class="dock-start-name">{t('dock.changes')}</span>
-            <span class="dock-start-hint">{changeHint}</span>
-          </span>
-        </button>
-        <button type="button" class="dock-start-row" onClick={() => onTab('browser')}>
-          <Icon name="globe" size={16} />
-          <span class="dock-start-text">
-            <span class="dock-start-name">{t('dock.browser')}</span>
-            <span class="dock-start-hint">{t('dock.browserHint')}</span>
-          </span>
-        </button>
-        <button type="button" class="dock-start-row" onClick={() => onTab('side')}>
-          <Icon name="message" size={16} />
-          <span class="dock-start-text">
-            <span class="dock-start-name">{t('dock.side')}</span>
-            <span class="dock-start-hint">{t('dock.sideHint')}</span>
-          </span>
-        </button>
+          <Icon name="chevron-right" size={14} />
+        </button>)}
       </section>
     </div>
   ) : null
@@ -397,7 +380,7 @@ export function Dock(props: DockProps) {
             "start fresh" disappeared exactly where there was nothing fresh to
             lose. Every pane has an answer for it now (the caller owns which
             one), and a Dock without an `onNew` opens a side conversation. */}
-        {open && (
+        {open && tab !== 'goal' && (
           <button
             type="button"
             class="icon-btn dock-new"
@@ -417,7 +400,7 @@ export function Dock(props: DockProps) {
             pane is showing — there is nothing behind it then — rather than
             coming and going, which would slide the four places sideways on
             every tab click. */}
-        {open && (
+        {open && tab !== 'goal' && (
           <button
             type="button"
             class="icon-btn dock-home"
@@ -430,11 +413,25 @@ export function Dock(props: DockProps) {
           </button>
         )}
 
-        {/* The four places share one segmented well: files, the thread's
-            changes, the page being read, and the conversation beside this
-            one. Keeping them together makes the lit tab read as "where you
-            are" rather than as one of seven equally weighted glyphs. */}
-        {open && (
+        {open && <span class="dock-caption">{tab === 'goal' && <Icon name="target" size={18} />}{t(tab === 'goal' ? 'sessions.goal.label' : 'dock.label')}</span>}
+        {/* The thread-only tools sit at the far end, next to the fold: export,
+            node pick and orchestration are reached for far less often than a
+            place, and they vary with the thread (the export one only exists
+            once there is a transcript). The hairline is the group boundary. */}
+        {open && tab !== 'goal' && props.tools && <div class="dock-tools">{props.tools}</div>}
+
+        <button
+          type="button"
+          class="icon-btn dock-fold"
+          title={open ? t('dock.collapse') : t('dock.expand')}
+          aria-label={open ? t('dock.collapse') : t('dock.expand')}
+          aria-expanded={open}
+          onClick={onToggle}
+        >
+          <Icon name="panel-right" size={17} />
+        </button>
+      </header>
+        {open && tab !== 'goal' && showBody && (
           <nav class="dock-tabs" aria-label={t('dock.label')}>
             {tabs.map(({ key, icon, label }) => {
               const n = props.badges?.[key] ?? 0
@@ -448,31 +445,13 @@ export function Dock(props: DockProps) {
                   aria-pressed={tab === key}
                   onClick={() => pick(key)}
                 >
-                  <Icon name={icon} size={18} />
+                  <Icon name={icon} size={15} /><span>{label}</span>
                   {n > 0 && <span class="dock-badge mono">{n > 99 ? '99+' : n}</span>}
                 </button>
               )
             })}
           </nav>
         )}
-
-        {/* The thread-only tools sit at the far end, next to the fold: export,
-            node pick and orchestration are reached for far less often than a
-            place, and they vary with the thread (the export one only exists
-            once there is a transcript). The hairline is the group boundary. */}
-        {open && props.tools && <div class="dock-tools">{props.tools}</div>}
-
-        <button
-          type="button"
-          class="icon-btn dock-fold"
-          title={open ? t('dock.collapse') : t('dock.expand')}
-          aria-label={open ? t('dock.collapse') : t('dock.expand')}
-          aria-expanded={open}
-          onClick={onToggle}
-        >
-          <Icon name="panel-right" size={17} />
-        </button>
-      </header>
 
       <div class="dock-body" data-tab={tab} hidden={!open || !showBody}>
         {props.children}

@@ -54,12 +54,16 @@ export function TaskBoard({ tasks, directory, open, ready }: { tasks: WorkTask[]
     return [s.title, s.description, s.projectName, s.spaceName].some(value => value?.toLocaleLowerCase().includes(needle))
   })
   return <section class="task-board">
-    <div class="board-head"><h2>{t('work.taskList')}</h2><span class="space-count">{visible.length} / {tasks.length}</span></div>
-    <div class="board-tools"><label class="board-search"><Icon name="search" size={16} /><input type="search" aria-label={t('work.search')} placeholder={t('work.search')} value={query} onInput={e => setQuery(e.currentTarget.value)} /></label>
+    <div class="board-head"><h2>{t('work.taskList')}</h2>{tasks.length > 0 && <span class="space-count">{visible.length === tasks.length ? tasks.length : visible.length + ' / ' + tasks.length}</span>}</div>
+    {tasks.length > 0 && <div class="board-tools"><label class="board-search"><Icon name="search" size={16} /><input type="search" aria-label={t('work.search')} placeholder={t('work.search')} value={query} onInput={e => setQuery(e.currentTarget.value)} /></label>
       <select aria-label={t('work.status')} value={status} onChange={e => setStatus(e.currentTarget.value)}><option value="">{t('work.allStatuses')}</option>{[...new Set([...tasks.map(v => v.snapshot.status), ...(status ? [status] : [])])].sort().map(s => <option key={s} value={s}>{statusLabel(s)}</option>)}</select>
       <select aria-label={t('work.owner')} value={owner} onChange={e => setOwner(e.currentTarget.value)}><option value="">{t('work.allOwners')}</option><option value="me">{t('work.me')}</option><option value="unassigned">{t('work.unassigned')}</option></select>
-    </div>
-    {ready && !visible.length && <p class="board-empty">{t('work.noMatches')}</p>}
+    </div>}
+    {!ready && !tasks.length && <p role="status" class="hint">{t('common.loading')}</p>}
+    {ready && !visible.length && <div class="board-empty"><Icon name={tasks.length ? 'search' : 'list-checks'} size={24} />
+      <strong>{t(tasks.length ? 'work.noMatches' : 'work.emptyList')}</strong>
+      {tasks.length > 0 && <button type="button" class="btn small" onClick={() => { setQuery(''); setStatus(''); setOwner('') }}>{t('queue.resetFilters')}</button>}
+    </div>}
     <div class="work-grid">{visible.map(task => <article class="card board-task" key={task.connectionId + ':' + workTaskKey(task)}>
       <button class="work-title" onClick={() => open(task)}>{task.snapshot.title}<Icon name="chevron-right" size={16} /></button><TaskFacts task={task} directory={directory} />
     </article>)}</div>

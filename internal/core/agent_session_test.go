@@ -494,3 +494,47 @@ func TestAgentIncrementalContinuationAndRecovery(t *testing.T) {
 		})
 	}
 }
+
+func TestScheduledShutdownResumesInterruptedAgent(t *testing.T) {
+	ctx := context.Background()
+	lifetime, stop := context.WithCancel(ctx)
+	defer stop()
+	c := newSuperviseCore(t, "restart-node", 1)
+	const checkpoint = "session-at-shutdown"
+	runs := 0
+	c.router.SetAdapterRunner(func(runCtx context.Context, _, _, _ string) commander.AgentResult {
+		runs++
+		if runs == 1 {
+			stop()
+			return commander.AgentResult{ExitCode: 1, SessionID: checkpoint, Result: "adapter session ended: EOF"}
+		}
+		if got := commander.ResumeID(runCtx); got != checkpoint {
+			t.Fatalf("resumed %q, want %q", got, checkpoint)
+		}
+		return commander.AgentResult{OK: true, Result: "finished", SessionID: checkpoint}
+	})
+	task, err := c.Enqueue(ctx, TaskInput{Title: "resume after shutdown", Intent: "finish the document", Requires: []string{"code:modify"}}, DefaultQueueSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(life context.Context) {
+		t.Helper()
+		if err := c.store.ClaimLocal(ctx, task.TaskID, c.nodeID); err != nil {
+			t.Fatal(err)
+		}
+		c.runScheduled(life, task.TaskID)
+	}
+	run(lifetime)
+	pending, err := c.store.Get(ctx, task.TaskID)
+	if err != nil || pending.State != StateRunning || pending.AgentSessionID != checkpoint {
+		t.Fatalf("shutdown state=%s checkpoint=%q err=%v", pending.State, pending.AgentSessionID, err)
+	}
+	if n, err := c.store.Recover(ctx, c.nodeID); err != nil || n != 1 {
+		t.Fatalf("recovered %d, err=%v", n, err)
+	}
+	run(ctx)
+	final, err := c.store.Get(ctx, task.TaskID)
+	if err != nil || final.State != StateDone || runs != 2 {
+		t.Fatalf("final state=%s runs=%d err=%v", final.State, runs, err)
+	}
+}

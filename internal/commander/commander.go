@@ -323,7 +323,8 @@ type Plan struct {
 	// Alternates lists the remaining matching agents in score order. When
 	// the primary agent's CLI is unavailable at execution time, execAgent
 	// falls back through this chain.
-	Alternates []string
+	Alternates       []string
+	injectAfterProbe map[string]string // native endpoint failed, injected endpoint passed
 	// When availability displaces the top-ranked agent, retain the decision for the task trace.
 	FallbackFrom   string
 	FallbackReason string
@@ -490,10 +491,17 @@ func (r *Router) resolveAgentName(req string) (string, ledger.Agent, bool) {
 // team is an instruction, so the smallest roster of one employee must run the
 // work rather than fail to route.
 func (r *Router) RankAgents(required []string) []AgentCandidate {
-	return r.rankAgents(required, nil)
+	return r.rankAgents(required, TaskRouting{})
 }
 
-func (r *Router) rankAgents(required, traits []string) []AgentCandidate {
+// TaskRouting describes the work separately from hard capability requirements.
+type TaskRouting struct {
+	Traits         []string
+	Effort         []string
+	PreferredAgent string
+}
+
+func (r *Router) rankAgents(required []string, task TaskRouting) []AgentCandidate {
 	for _, req := range required {
 		if name, ag, ok := r.resolveAgentName(req); ok && r.agentAllowed(name) {
 			return []AgentCandidate{{Name: name, Agent: ag, Score: 1 + r.bonus(name)}}
@@ -508,12 +516,16 @@ func (r *Router) rankAgents(required, traits []string) []AgentCandidate {
 		}
 	}
 	var features []string
-	for _, list := range [][]string{abilities, traits} {
+	for _, list := range [][]string{abilities, task.Traits} {
 		for _, feature := range list {
 			if value := normalizedTrait(feature); value != "" {
 				features = append(features, " "+value+" ")
 			}
 		}
+	}
+	var effort []string
+	for _, tag := range task.Effort {
+		effort = append(effort, " "+normalizedTrait(tag)+" ")
 	}
 	var out []AgentCandidate
 	for name, ag := range r.card.Agents {
@@ -542,7 +554,10 @@ func (r *Router) rankAgents(required, traits []string) []AgentCandidate {
 		if taskTraitMatches(ag.BestAt, features) {
 			score *= 1.5
 		}
-		if taskTraitMatches(ag.NotFor, features) {
+		if taskTraitMatches(ag.BestAt, effort) {
+			score *= 2.25
+		}
+		if taskTraitMatches(ag.NotFor, features) || taskTraitMatches(ag.NotFor, effort) {
 			score *= 0.5
 		}
 		// An agent the node's breaker holds open keeps its capability rank but
@@ -633,10 +648,10 @@ func (r *Router) MatchManual(required []string) (ledger.ManualAbility, bool) {
 // to run `git status` and report the task done without the agent ever
 // starting.
 func (r *Router) Route(required []string) (Plan, error) {
-	return r.route(required, nil)
+	return r.route(required, TaskRouting{})
 }
 
-func (r *Router) route(required, traits []string) (Plan, error) {
+func (r *Router) route(required []string, task TaskRouting) (Plan, error) {
 	agentPinned := false
 	for _, req := range required {
 		if strings.HasPrefix(req, "agent:") {
@@ -689,7 +704,17 @@ func (r *Router) route(required, traits []string) (Plan, error) {
 		// A bare CLI alias elsewhere in requires must not override the explicit pin.
 		required = []string{"agent:" + target}
 	}
-	cands := r.rankAgents(required, traits)
+	cands := r.rankAgents(required, task)
+	if !agentPinned && task.PreferredAgent != "" {
+		preferred, _, _ := r.resolveAgentName(strings.TrimPrefix(task.PreferredAgent, "agent:"))
+		for i, candidate := range cands {
+			if candidate.Name == preferred {
+				copy(cands[1:i+1], cands[:i])
+				cands[0] = candidate
+				break
+			}
+		}
+	}
 	if len(cands) > 0 {
 		top := cands[0]
 		// Agent plans carry a tier like native ones, and an undeclared tier now
@@ -729,19 +754,32 @@ func (r *Router) route(required, traits []string) (Plan, error) {
 // DispatchRoute chooses a primary and fallback chain from the agents that
 // can receive this task now. Route is the static card lookup used for previews.
 func (r *Router) DispatchRoute(required []string, traits ...string) (Plan, error) {
-	p, err := r.route(required, traits)
+	return r.DispatchTaskRoute(required, TaskRouting{Traits: traits})
+}
+
+func (r *Router) DispatchTaskRoute(required []string, task TaskRouting) (Plan, error) {
+	p, err := r.route(required, task)
 	if err != nil || p.Kind != "agent" {
 		return p, err
 	}
 	candidates := append([]string{p.Agent}, p.Alternates...)
 	reasons := make([]string, len(candidates))
+	rescue := make([]string, len(candidates))
+	injected := make([]bool, len(candidates))
 	probe := func(i int) {
 		name := candidates[i]
 		if r.agentBlocked != nil && r.agentBlocked(name) {
 			reasons[i] = "circuit open"
 			return
 		}
-		_, reasons[i] = r.dispatchReadiness(name, r.card.Agents[name])
+		ag := r.card.Agents[name]
+		_, reasons[i] = r.dispatchReadiness(name, ag)
+		if reasons[i] == "" {
+			injected[i] = r.InjectionDecision(name, ag.Adapter).Kind == InjectionKindAuto
+		} else if r.canRescueEndpoint(name, ag, reasons[i]) {
+			rescue[i], reasons[i] = reasons[i], ""
+			injected[i] = true
+		}
 	}
 	if len(candidates) > 1 && r.probeAgent == nil {
 		// Each endpoint has its own deadline. Don't sum the timeouts of a
@@ -757,25 +795,62 @@ func (r *Router) DispatchRoute(required []string, traits ...string) (Plan, error
 		}
 	}
 	ready := make([]string, 0, len(candidates))
+	var deferred []string
 	for i, name := range candidates {
-		if reasons[i] == "" {
+		if injected[i] {
+			deferred = append(deferred, name)
+			if rescue[i] != "" {
+				if p.injectAfterProbe == nil {
+					p.injectAfterProbe = map[string]string{}
+				}
+				p.injectAfterProbe[name] = rescue[i]
+			}
+		} else if reasons[i] == "" {
 			ready = append(ready, name)
 		} else {
 			reasons[i] = name + ": " + reasons[i]
 		}
 	}
+	ready = append(ready, deferred...)
 	if len(ready) == 0 {
 		return Plan{}, fmt.Errorf("no usable agent for %v (%s)", required, strings.Join(reasons, "; "))
 	}
 	name := ready[0]
 	if p.Agent != name {
 		p.FallbackFrom, p.FallbackReason = p.Agent, reasons[0]
+		if p.FallbackReason == "" {
+			p.FallbackReason = "trying a native provider before model injection"
+		}
 	}
 	ag := r.card.Agents[name]
 	p.Agent, p.Ability, p.Adapter, p.Tier = name, name, ag.Adapter, max(ag.Tier, defense.TierReversible)
 	p.Alternates = ready[1:]
 	return p, nil
 }
+
+// A transport refusal on a native endpoint need not rule out the installed CLI.
+// Verify the endpoint and key the alternative invocation would actually use.
+func (r *Router) canRescueEndpoint(name string, ag ledger.Agent, reason string) bool {
+	if !strings.HasPrefix(reason, "model endpoint unreachable:") && !strings.HasPrefix(reason, "model credentials/quota rejected by ") {
+		return false
+	}
+	if !r.canInjectRescue(name, ag.Adapter) || r.InjectionDecision(name, ag.Adapter).Inject {
+		return false
+	}
+	forced := *r
+	forced.injectionModel = config.InjectionModelAlways
+	spec := forced.agentTarget(name, ag)
+	v := r.endpointProbe(spec)
+	return v.Unknown || (v.OK && v.Status != 404 && v.Status != 405)
+}
+
+func (r *Router) canInjectRescue(name, adapter string) bool {
+	m := r.injectionModelFor(name, adapter)
+	return r.injectionModel != config.InjectionModelNever && modelConfigured(m) && m.APIKey != "" && injectionBlocker(name, adapter, m) == "" && security.CheckModelEndpoint(effectiveBaseURLFor(name, adapter, m), m.AllowPlaintext) == nil
+}
+
+// A nonempty cause asks the adapter to start directly on the rescue provider.
+type forcedRescueKey struct{}
 
 // Execute runs the plan and returns a formatted result. authorized is the
 // user's explicit consent to run Tier-2 (irreversible) commands; a Tier-2
@@ -909,7 +984,13 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 	}
 	var unavailable []string
 	var lastExecRes *Result
-	for i, name := range attempts {
+	rescueCauses := make(map[string]string)
+	for name, cause := range plan.injectAfterProbe {
+		rescueCauses[name] = cause
+	}
+	for i := 0; i < len(attempts); i++ {
+		name := attempts[i]
+		cause := rescueCauses[name]
 		if ctx.Err() != nil {
 			if lastExecRes != nil {
 				return *lastExecRes
@@ -933,7 +1014,12 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 				name+" ("+defense.ErrNotAuthorized.Error()+": adapter has no restricted mode; authorize the task to run it)")
 			continue
 		}
-		if ok, reason := r.dispatchReadiness(name, ag); !ok {
+		if cause != "" {
+			if ModelCredsWithheld(ctx) || !r.canInjectRescue(name, ag.Adapter) || (r.agentBlocked != nil && r.agentBlocked(name)) {
+				unavailable = append(unavailable, name+" (model rescue unavailable)")
+				continue
+			}
+		} else if ok, reason := r.dispatchReadiness(name, ag); !ok {
 			unavailable = append(unavailable, name+" ("+reason+")")
 			continue
 		}
@@ -974,6 +1060,10 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 		// check belongs at the final router boundary: forwarded and resumed
 		// tasks can carry untrusted spec_json independently of askengine.
 		runCtx := WithAgentName(ctx, name)
+		runCtx = withInjectionRescue(runCtx, len(attempts) == 1)
+		if cause != "" {
+			runCtx = context.WithValue(runCtx, forcedRescueKey{}, cause)
+		}
 		runCtx = withNodeConfigPath(runCtx, r.selfConfigPath)
 		policy, _ := ctx.Value(toolsPolicyKey{}).(string)
 		if r.toolsPolicy != config.ToolsPolicyExtended || policy != config.ToolsPolicyMinimal {
@@ -1027,8 +1117,8 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 				retry := runAdapter(runCtx, ag.Adapter, runPrompt, cwd)
 				if retry.OK {
 					retry.Result = "[retried once after transient provider error] " + retry.Result
-					ar = retry
 				}
+				ar = retry
 			}
 		}
 		cleanupMCP()
@@ -1100,14 +1190,28 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 		// that never got off the ground — the CLI is missing, the credential
 		// was rejected, the provider account is empty — may fall through to
 		// the next candidate.
-		if !agentFallbackEligible(ar) {
+		providerFailure := providerRescueEligible(ag.Adapter, ar)
+		if !agentFallbackEligible(ar) && !providerFailure {
 			return res
 		}
+		res.NoProviderWork = ar.SessionID == "" && !ar.WorkObserved && ar.Tokens == 0 && (providerFailure || ar.ExitCode == 127)
 		// This run never got off the ground. Remember it so a supervisor
 		// retry or the next task does not hand the same locked-out CLI
 		// another 2.5-minute attempt.
 		r.markAgentDispatchFailure(name, describeAgentFailure(ar))
-		unavailable = append(unavailable, fmt.Sprintf("%s (exec failed: %s)", name, describeAgentFailure(ar)))
+		reason := describeAgentFailure(ar)
+		if len(attempts) > 1 && providerFailure && !ar.Injected && cause == "" && !ModelCredsWithheld(ctx) && r.canInjectRescue(name, ag.Adapter) {
+			// Every candidate gets one native attempt before a compatible one
+			// can be revisited with the node's model. The shared deadline holds.
+			attempts = append(attempts, name)
+			rescueCauses[name] = reason
+		}
+		if i == len(attempts)-1 && ar.SessionID == "" && providerFailure && !ar.Injected && !ModelCredsWithheld(ctx) && r.injectionModel != config.InjectionModelNever {
+			if why := injectionBlocker(name, ag.Adapter, r.injectionModelFor(name, ag.Adapter)); why != "" {
+				res.Stderr += "\npanda model injection unavailable: " + why
+			}
+		}
+		unavailable = append(unavailable, fmt.Sprintf("%s (exec failed: %s)", name, reason))
 		// If this was the last attempt, return the failure result
 		if i == len(attempts)-1 {
 			return res
@@ -1229,13 +1333,15 @@ func describeAgentFailure(ar AgentResult) string {
 
 // Result is the normalized execution result (design doc P0-33).
 type Result struct {
-	OK         bool
-	ExitCode   int
-	Stdout     string
-	Stderr     string
-	Tokens     int
-	Cost       float64
-	NeedManual bool
+	// NoProviderWork is local dispatch evidence used before handing off to a peer.
+	NoProviderWork bool `json:"-"`
+	OK             bool
+	ExitCode       int
+	Stdout         string
+	Stderr         string
+	Tokens         int
+	Cost           float64
+	NeedManual     bool
 	// ResumeRejected is computed at the adapter boundary, never trusted from
 	// adapter-authored JSON. It permits one full-input cold recovery.
 	ResumeRejected bool
@@ -1304,6 +1410,8 @@ type AgentResult struct {
 	SessionDead bool `json:"session_dead,omitempty"`
 	// WorkObserved is trusted Go-side tool activity, never adapter-authored.
 	WorkObserved bool `json:"-"`
+	// OpenCode can mint an empty session before its provider accepts a fresh run.
+	ProviderStartupFailure bool `json:"provider_startup_failure,omitempty"`
 	// RescueError is set by the router, not by the adapter.
 	RescueError string `json:"-"`
 }
@@ -1347,8 +1455,7 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 	// the env, and the failure-time retry below all have to read the same
 	// resolved config rather than r.model.
 	injModel := r.injectionModelFor(name, adapter)
-	canRescue := r.injectionModel != config.InjectionModelNever && !ModelCredsWithheld(ctx) &&
-		modelConfigured(injModel) && injModel.APIKey != "" && supportsModelInjection(name, adapter, injModel)
+	canRescue := !ModelCredsWithheld(ctx) && injectionRescueAllowed(ctx) && r.canInjectRescue(name, adapter)
 	if ModelCredsWithheld(ctx) && dec.Inject {
 		// Trust-zone cred withholding: the task's admission tier is
 		// sub-mesh, and this node's model credentials do not serve its
@@ -1362,10 +1469,14 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 	}
 	recovery, _ := ctx.Value(recoveryModelKey{}).(recoveryModelRequest)
 	resumeAdapter := ResumeAdapter(ctx)
-	resumingWithInjection := canRescue && !dec.Inject && adapter == "claude_code.py" &&
+	resumingWithInjection := r.canInjectRescue(name, adapter) && !ModelCredsWithheld(ctx) && !dec.Inject && adapter == "claude_code.py" &&
 		recovery.agent == name && recovery.sessionID != "" && recovery.sessionID == ResumeID(ctx) &&
 		(resumeAdapter == "" || resumeAdapter == adapter)
-	if resumingWithInjection {
+	forcedCause, _ := ctx.Value(forcedRescueKey{}).(string)
+	if forcedCause != "" && (ModelCredsWithheld(ctx) || !r.canInjectRescue(name, adapter)) {
+		return AgentResult{ExitCode: 1, Result: "model rescue unavailable"}
+	}
+	if resumingWithInjection || forcedCause != "" {
 		dec.Inject = true
 		dec.Model = effectiveModelNameFor(name, adapter, injModel)
 	}
@@ -1415,10 +1526,13 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 		credEnv = adapterCredentialEnv(name, adapter)
 	}
 	env = mergeAdapterEnv(credEnv, env)
-	if resumingWithInjection {
+	if resumingWithInjection || forcedCause != "" {
 		DropAgentSession(ctx, name, adapter)
 	}
 	res := r.runProcess(ctx, adapter, prompt, cwd, env)
+	if forcedCause != "" {
+		return injectedRescueResult(res, forcedCause, dec.Model, "")
+	}
 	if resumingWithInjection {
 		return injectedRescueResult(res, recovery.cause, dec.Model, recovery.sessionID)
 	}
@@ -1484,7 +1598,10 @@ func providerRescueEligible(adapter string, res AgentResult) bool {
 	// Claude emits a session id before its first provider response. Its
 	// api_retry failure envelope can precede any work. Tool activity, token
 	// usage and all ordinary checkpoints still forbid a full replay.
-	if adapter == "claude_code.py" && claudeProviderFailure(res) {
+	if adapter == "opencode.py" && res.ProviderStartupFailure && res.Cost == 0 &&
+		(res.Usage == nil || *res.Usage == (UsageDetail{})) && strings.HasPrefix(res.Result, "provider failure: ") {
+		res.SessionID = ""
+	} else if adapter == "claude_code.py" && claudeProviderFailure(res) {
 		res.SessionID = ""
 	}
 	text := res.Result + " " + res.Stderr
@@ -1555,6 +1672,9 @@ func isProviderFailureOrAuth(text string) bool {
 // IsAuthenticationSetupRequired recognizes a short CLI login diagnostic.
 func IsAuthenticationSetupRequired(s string) bool {
 	s = strings.ToLower(strings.TrimSpace(s))
+	if strings.TrimSuffix(strings.TrimPrefix(s, "provider failure: "), ".") == "reconnect opencode console to continue" {
+		return true
+	}
 	if len(s) > 512 {
 		return false
 	}
@@ -1792,7 +1912,7 @@ func (r *Router) dispatchReadiness(name string, ag ledger.Agent) (bool, string) 
 // "configured but cannot connect" case — a provider outage, a broken egress
 // route, a dead relay host — before the task blocks inside the adapter.
 func (r *Router) AgentDispatchable(name string, ag ledger.Agent) bool {
-	ok, _ := r.agentUsable(name, ag)
+	ok, _ := r.AgentUsableReason(name, ag)
 	return ok
 }
 
@@ -1800,7 +1920,11 @@ func (r *Router) AgentDispatchable(name string, ag ledger.Agent) bool {
 // attached — the diagnostic form (doctor, debug logs). An empty reason means
 // usable.
 func (r *Router) AgentUsableReason(name string, ag ledger.Agent) (bool, string) {
-	return r.agentUsable(name, ag)
+	ok, reason := r.agentUsable(name, ag)
+	if !ok && r.canRescueEndpoint(name, ag, reason) {
+		return true, ""
+	}
+	return ok, reason
 }
 
 // agentUsable is the canonical dispatchability check, carrying the first
@@ -1921,6 +2045,9 @@ func (r *Router) agentTarget(name string, ag ledger.Agent) ProbeSpec {
 		}
 	}
 	if dec := r.InjectionDecision(name, ag.Adapter); dec.Inject {
+		if ag.Adapter == "codex.py" {
+			apiType = config.APITypeResponses
+		}
 		ep := dec.BaseURL
 		if ep == "" {
 			ep = effectiveBaseURL(injModel)

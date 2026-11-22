@@ -74,6 +74,8 @@ func TestParseOlderThan(t *testing.T) {
 }
 
 func TestReplSessionRmBatch(t *testing.T) {
+	// Session creation also probes the current directory for a Git repository.
+	t.Chdir(t.TempDir())
 	r, _ := newOpsTestRepl(t)
 	var ids []string
 	for _, title := range []string{"one", "two", "three"} {

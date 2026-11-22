@@ -7,6 +7,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/taskproviders"
 	"github.com/Xustalis/OpenPanda/internal/taskproviders/tsync"
@@ -122,5 +123,64 @@ func TestExplicitRequestRejectsUnassignedAndStaleTask(t *testing.T) {
 				t.Fatal(n)
 			}
 		})
+	}
+}
+
+func TestFirstDraftIsScopedAtomicAndReplayable(t *testing.T) {
+	s, e, src := requestService(t)
+	ctx := context.Background()
+	now := s.now()
+	s.now = func() time.Time { return now }
+	key := src.task.Key
+	consent := DraftConsent{AccountID: "a", AuthEpoch: "1", TaskRevision: src.task.TaskRevision}
+	c, err := s.Get(ctx, "c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	consent.AccountID = c.AccountID
+	id, _ := util.UUIDv7()
+	if _, err = s.RequestFirstDraft(ctx, "c", key, id, consent); !errors.Is(err, taskproviders.ErrConflict) {
+		t.Fatalf("existing policy: %v", err)
+	}
+	if _, err = s.db.Exec("DELETE FROM task_policies"); err != nil {
+		t.Fatal(err)
+	}
+	invalid := consent
+	invalid.TaskRevision = "stale"
+	if _, err = s.RequestFirstDraft(ctx, "c", key, id, invalid); err == nil {
+		t.Fatal("stale consent accepted")
+	}
+	// A changed cached version fails after the provisional policy insert.
+	if _, err = s.db.Exec("UPDATE task_snapshots SET snapshot_json=json_set(snapshot_json,'$.taskRevision','stale')"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.RequestFirstDraft(ctx, "c", key, id, consent); err == nil {
+		t.Fatal("stale snapshot accepted")
+	}
+	if n := scalar(t, s.db, "SELECT count(*) FROM task_policies"); n != "0" {
+		t.Fatal("partial policy persisted")
+	}
+	if _, err = s.db.Exec("UPDATE task_snapshots SET snapshot_json=json_set(snapshot_json,'$.taskRevision',?)", consent.TaskRevision); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			run, err := s.RequestFirstDraft(ctx, "c", key, id, consent)
+			if err != nil || run.RequestID != id {
+				t.Errorf("replay: %+v %v", run, err)
+			}
+		})
+	}
+	wg.Wait()
+	if err = e.discover(ctx, "owner"); err != nil {
+		t.Fatal(err)
+	}
+	p, found, err := s.LookupPolicy(ctx, "c", key.SpaceID)
+	if err != nil || !found || len(p.TaskIDs) != 1 || p.TaskIDs[0] != key.TaskID || !p.Execute || p.FinalAction || p.Research || p.ExpiresAt != s.now().Add(24*time.Hour).UnixMilli() {
+		t.Fatalf("policy: %+v %v", p, err)
+	}
+	if n := scalar(t, s.db, "SELECT count(*) FROM task_flow_runs"); n != "1" {
+		t.Fatalf("runs: %s", n)
 	}
 }

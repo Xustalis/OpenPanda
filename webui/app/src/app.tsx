@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { PandaLockup } from './brand/panda'
+import { PandaLockup, PandaMark } from './brand/panda'
 import { api, clearToken, currentToken, displayVersion, isHeaderSafeToken, onUnauthorized, setToken, type UpdateStatus } from './api/client'
 import { onLocaleChange, t } from './i18n'
 import { useAsync, useChangeSignal, useTeamFeature } from './hooks'
@@ -10,6 +10,8 @@ import { isTeamRoute, navigate, parseHash, type Route } from './nav'
 import { onTeamFeatureChange } from './features'
 import { lazy, Suspense } from 'preact/compat'
 import { SessionsView } from './views/sessions'
+import { installClickFeedback } from './components/click-feedback'
+import { NavigationMarker } from './components/navigation-marker'
 import { SidebarHistory } from './views/sidebar-history'
 import { OnboardingBanner } from './views/onboarding'
 
@@ -44,6 +46,7 @@ const ROUTE_CHUNKS: Array<() => Promise<unknown>> = [
 import { ToastHost } from './components/toast'
 import { Icon } from './components/icons'
 import { ConfirmHost } from './components/confirm'
+import { chordOf, shortcutFor, shortcutKeys, useBindings } from './shortcuts'
 import { PaletteHost, openPalette } from './components/palette'
 import { NotificationBell, openNotifications } from './components/notifications'
 import { PairRequestHost } from './components/pair-request-host'
@@ -97,8 +100,10 @@ function useRoute(): Route {
 }
 
 export function App() {
+  useEffect(installClickFeedback, [])
   useLocaleRerender()
   useWarmRouteChunks()
+  const bindings = useBindings()
   const route = useRoute()
   const teamEnabled = useTeamFeature()
   // currentToken, not getToken: a one-shot link (?token=…) is consumed at
@@ -160,6 +165,33 @@ export function App() {
   }, [route, authed])
 
 
+  useEffect(() => {
+    if (!authed) return
+    const handleShortcut = (event: KeyboardEvent) => {
+      if (document.querySelector('dialog[open], [aria-modal=true]')) return
+      if (event.target instanceof HTMLElement && (event.target.isContentEditable || event.target.closest('input, textarea, select, [role="textbox"]'))) return
+      const actions = {
+        guide: () => navigate({ view: 'settings', tab: 'shortcuts' }),
+        plans: () => navigate({ view: 'control', tab: 'plans' }),
+        projects: () => navigate({ view: 'control', tab: 'projects' }),
+        memory: () => navigate({ view: 'memory' }),
+        settings: () => navigate({ view: 'settings' }),
+        chat: () => navigate({ view: 'sessions', id: null }),
+        workspace: () => navigate({ view: 'workspace' }),
+        control: () => navigate({ view: 'control' }),
+        notifications: openNotifications,
+      }
+      const id = shortcutFor(event, bindings)
+      if (id && Object.hasOwn(actions, id)) {
+        event.preventDefault()
+        setMenuOpen(false)
+        actions[id as keyof typeof actions]()
+      }
+    }
+    window.addEventListener('keydown', handleShortcut)
+    return () => window.removeEventListener('keydown', handleShortcut)
+  }, [authed, bindings])
+
   if (!authed) {
     return (
       <TokenGate
@@ -211,7 +243,7 @@ export function App() {
             head the heaviest thing in a column whose whole job is to be quiet
             enough to scan. */}
         <div class="sidebar-head">
-          <div class="sidebar-workspace">
+          <div class="sidebar-workspace"><span class="sidebar-brand-mark"><PandaMark size={23} /></span>
             <span class="sidebar-workspace-name">
               Open<b>Panda</b>
             </span>
@@ -224,7 +256,7 @@ export function App() {
             <button
               type="button"
               class="icon-btn"
-              title={`${t('palette.trigger')} ${modKeyLabel()}K`}
+              title={`${t('palette.trigger')} ${shortcutKeys(chordOf('search', bindings)).join(' ')}`}
               aria-label={t('palette.trigger')}
               onClick={() => {
                 setMenuOpen(false)
@@ -246,26 +278,8 @@ export function App() {
           </div>
         </div>
         <div class="sidebar-panel" id="sidebar-panel">
-        {/* The quick block: every destination the rail has, in one list.
-            It used to be 新对话 and 工作空间 over a `<nav>` of sectioned rows;
-            the sections are gone (each heading labelled the single row under
-            it), so what is left is four rows at one altitude, and the history
-            below them.
-            新对话 is an action, not a destination — but it reads as a nav row
-            (same 15px label, same hover wash) instead of a filled button, so
-            the head above it stays the only chrome in the column. It navigates
-            without minting a thread: the thread comes into being when the first
-            message leaves the composer, titled after it, so clicking twice
-            cannot litter the history with empty untitled sessions.
-            It also carries no working directory. The composer's pick starts
-            empty here — a blank sheet, not last project you visited — and the
-            history's per-directory "+" is the shortcut that fills it in.
-            The two after it are the machines and the work: 工作空间 is the
-            fleet as a map, and 队列·任务·项目 is the boards that work lands on.
-            That last one is the page that used to be 总控 — it is named after
-            its three tabs now, because "control room" was a metaphor you had
-            to learn and the tabs are what the row actually opens. */}
         <div class="nav-quick">
+          <NavigationMarker active={active} />
           <button
             type="button"
             class="nav-item nav-new-chat"
@@ -273,6 +287,7 @@ export function App() {
           >
             <Icon name="square-pen" />
             <span class="nav-label">{t('sessions.new')}</span>
+            {chordOf('chat', bindings) && <kbd class="nav-key">{shortcutKeys(chordOf('chat', bindings)).join(' ')}</kbd>}
           </button>
           <a
             href="#/workspace"
@@ -301,7 +316,7 @@ export function App() {
           </div>
           {teamEnabled && (
             <a
-              href="#/team"
+              href="#/team?tab=mine"
               class={`nav-item${active === 'team' ? ' active' : ''}`}
               aria-current={active === 'team' ? 'page' : undefined}
               title={`${t('nav.team')} · ${t('team.experimental')}`}
@@ -332,6 +347,7 @@ export function App() {
               scrolls with the nav, so a long history never pushes the
               destinations out of reach. */}
           <SidebarHistory
+            workspace={route.view === 'sessions' ? route.ws || route.project : undefined}
             activeId={route.view === 'sessions' ? route.id : null}
             onOpenSession={(id) => navigate({ view: 'sessions', id: id || null })}
             onNewChat={(ws) => navigate({ view: 'sessions', id: null, ws })}
@@ -530,17 +546,7 @@ function useReviewCount(): number {
   return n
 }
 
-/** The modifier the palette actually listens for, spelled the way the user's
- *  keyboard spells it: ⌘ on Apple hardware, Ctrl everywhere else. */
-function modKeyLabel(): string {
-  // Prefer the modern UA-CH hint; `navigator.platform` is deprecated but
-  // remains the fallback on browsers without userAgentData.
-  const ua = navigator as Navigator & { userAgentData?: { platform?: string } }
-  const p = (ua.userAgentData?.platform ?? navigator.platform ?? '').toLowerCase()
-  // UA-CH reports "macOS"/"iOS", navigator.platform the legacy "MacIntel"/
-  // "iPhone" spellings — normalize case and match both generations.
-  return /mac|iphone|ipad|ipod|ios/.test(p) ? '⌘' : 'Ctrl '
-}
+
 
 /** First-run screen: ask for the panel token, validate it against /api/tasks. */
 function TokenGate(props: {

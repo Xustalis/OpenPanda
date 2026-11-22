@@ -7,7 +7,7 @@ import { Icon } from '../../components/icons'
 import { t } from '../../i18n'
 
 export type GoalPhase = 'ready' | 'running' | 'review' | 'paused' | 'finished' | 'interrupted' | 'cancelled' | 'blocked' | 'usage_limited' | 'budget_limited'
-export interface ComposerGoal { id: string; text: string; phase: GoalPhase; round?: string; tokens?: number; tokenBudget?: number; reason?: string }
+export interface ComposerGoal { id: string; text: string; phase: GoalPhase; round?: string; rounds?: number; waitingFor?: string; tokens?: number; tokenBudget?: number; reason?: string }
 export function goalActive(goal?: ComposerGoal): boolean { return goal?.phase === 'running' || goal?.phase === 'review' }
 export function goalNeedsMoreBudget(goal: ComposerGoal): boolean {
   return goal.tokenBudget != null && (goal.tokens ?? 0) >= goal.tokenBudget
@@ -18,7 +18,7 @@ function present(goal?: ServerGoal): ComposerGoal | undefined {
     id: goal.id,
     text: goal.objective,
     phase: goal.status === 'active' ? 'running' : goal.status === 'complete' ? 'finished' : goal.status,
-    round: goal.round_id,
+    round: goal.round_id, rounds: goal.rounds, waitingFor: goal.waiting_for,
     tokens: goal.tokens,
     tokenBudget: goal.token_budget,
     reason: goal.reason,
@@ -34,17 +34,21 @@ export function legacyGoalFor(sid: string): ComposerGoal | undefined {
 
 export function useComposerGoals(sessionId: string | null, operation: SessionOperation | undefined, stopping: boolean) {
   const [states, setStates] = useState<Record<string, ConversationState>>({})
+  const [failedSession, setFailedSession] = useState('')
   const current = useRef(states)
   const nextRequest = useRef(0)
   const appliedRequests = useRef(new Map<string, number>())
-  async function refresh(sid: string) {
-    const request = ++nextRequest.current
-    const state = await api.conversationState(sid)
+  function apply(sid: string, state: ConversationState, request = ++nextRequest.current) {
     if (request > (appliedRequests.current.get(sid) ?? 0)) {
       appliedRequests.current.set(sid, request)
       current.current = { ...current.current, [sid]: state }
       setStates(current.current)
     }
+  }
+  async function refresh(sid: string) {
+    const request = ++nextRequest.current
+    const state = await api.conversationState(sid)
+    apply(sid, state, request)
     return state
   }
   useEffect(() => {
@@ -55,7 +59,10 @@ export function useComposerGoals(sessionId: string | null, operation: SessionOpe
     async function poll() {
       try {
         await refresh(sid)
-      } catch { /* Reconnect without starting a round. */ }
+        if (alive) setFailedSession('')
+      } catch {
+        if (alive) setFailedSession(sid)
+      }
       if (alive) timer = window.setTimeout(poll, 1000)
     }
     const unsubscribe = busSubscribeChange(ev => {
@@ -64,49 +71,48 @@ export function useComposerGoals(sessionId: string | null, operation: SessionOpe
     void poll()
     return () => { alive = false; unsubscribe(); window.clearTimeout(timer) }
   }, [sessionId, operation?.id, stopping])
-  return { goal: present(states[sessionId ?? '']?.goal), state: states[sessionId ?? ''], refresh, goalFor: (sid: string) => present(current.current[sid]?.goal) }
+  return { failed: failedSession === sessionId, goal: present(states[sessionId ?? '']?.goal), state: states[sessionId ?? ''], refresh, apply, goalFor: (sid: string) => present(current.current[sid]?.goal) }
 }
 
-export function GoalBar({ goal, pending, onStart, onPause, onCancel, onStop, onEdit }: {
-  goal: ComposerGoal
-  pending: boolean
-  onStart(): void
-  onPause(): void
-  onCancel(): void
-  onStop(): void
-  onEdit(): void
+type GoalAction = 'pause' | 'resume' | 'stop' | 'clear'
+export function GoalPane({ goal, draft, editing, onDraft, onEdit, onCancelEdit, pending, canStart, reviewId, onReply, onCreate, onSave, onControl }: {
+  goal?: ComposerGoal; draft?: string; editing: boolean; pending: boolean; canStart: boolean; reviewId?: string
+  onReply(): void; onDraft(text: string): void; onEdit(): void; onCancelEdit(): void
+  onCreate(text: string): Promise<void>; onSave(text: string): Promise<void>; onControl(action: GoalAction, budget?: number): Promise<boolean>
 }) {
+  const editor = useRef<HTMLTextAreaElement>(null)
+  const [limit,setLimit] = useState('')
+  const writing = !goal || editing
+  useEffect(() => { if (writing && !pending) editor.current?.focus() }, [writing, pending])
+  const text = draft ?? goal?.text ?? ''
+  if (writing) return <form class="goal-form" onSubmit={event => {
+    event.preventDefault()
+    if (!pending && text.trim() && (goal || canStart)) void (goal ? onSave(text.trim()) : onCreate(text.trim()))
+  }}>
+    <label for="goal-objective">{t(goal ? 'sessions.goal.edit' : 'goal.define')}</label>
+    <p id="goal-write-hint">{t('goal.writeHint')}</p>
+    <textarea ref={editor} id="goal-objective" aria-describedby="goal-write-hint" rows={6} value={text} placeholder={t('goal.example')} disabled={pending} onInput={e => onDraft(e.currentTarget.value)} />
+    {goal && goalActive(goal) && <p>{t('goal.editHint')}</p>}
+    {!goal && !canStart && <p role="status">{t('sessions.goal.busy')}</p>}
+    <div class="goal-controls">{goal && <button class="btn" type="button" disabled={pending} onClick={onCancelEdit}>{t('common.cancel')}</button>}
+      <button class="btn primary" type="submit" disabled={pending || !text.trim() || (goal ? text.trim() === goal.text : !canStart)}><Icon name={goal ? 'check' : 'play'} size={14} />{t(goal ? 'common.save' : 'goal.start')}</button></div>
+  </form>
   const active = goalActive(goal)
-  // The bar only exists once the goal is published, so there is no draft
-  // "start" step left: not active means resume.
-  const nextAction = active ? 'pause' : goalNeedsMoreBudget(goal) ? 'raiseBudget' : 'resume'
-  const actionLabel = t('sessions.goal.' + nextAction)
-  const cancelLabel = t('sessions.goal.clear')
-  const title = goal.text || t('sessions.goal.hint')
-  return (
-    <section class="composer-goal" aria-label={t('sessions.goal.label')}>
-      <Icon name="target" size={17} />
-      <div class="composer-goal-copy">
-        <strong class="composer-goal-title" title={title}>{title}</strong>
-        <span class="composer-goal-state" aria-live="polite">
-          {t('sessions.goal.state.' + goal.phase)}
-        </span>
-      </div>
-      <div class="composer-goal-actions">
-        <button type="button" class="composer-goal-action" title={t('sessions.goal.edit')} aria-label={t('sessions.goal.edit')} disabled={pending} onClick={onEdit}><Icon name="pencil" size={16} /></button>
-        {goal.round && <button type="button" class="composer-goal-action" title={t('sessions.goal.stop')} aria-label={t('sessions.goal.stop')} disabled={pending} onClick={onStop}><Icon name="stop" size={16} /></button>}
-        {goal.phase !== 'finished' && (
-          <button type="button" class="composer-goal-action composer-goal-action-main" title={actionLabel} aria-label={actionLabel}
-            disabled={pending || !goal.text}
-            onClick={active ? onPause : onStart}>
-            <Icon name={active ? 'pause' : 'play'} size={16} />
-          </button>
-        )}
-        <button type="button" class="composer-goal-action" title={cancelLabel} aria-label={cancelLabel}
-          disabled={pending} onClick={onCancel}>
-          <Icon name="x" size={16} />
-        </button>
-      </div>
-    </section>
-  )
+  const phase = active && reviewId ? 'review' : goal.phase
+  const limited = goalNeedsMoreBudget(goal)
+  return <div class="goal-overview">
+    <div class="goal-phase" role="status"><Icon name={phase === 'finished' ? 'check' : active ? 'activity' : 'pause'} size={15} />{t(active && goal.waitingFor === 'input' ? 'goal.waitInput' : 'sessions.goal.state.' + phase)}</div>
+    <h2>{goal.text}</h2><button type="button" class="btn" onClick={onEdit} disabled={pending}><Icon name="pencil" size={14}/>{t('sessions.goal.edit')}</button>
+    <div class="goal-progress"><strong>{goal.rounds ? t('goal.round', { n: goal.rounds }) : t('sessions.goal.state.ready')}</strong><span>{(goal.tokens ?? 0).toLocaleString()}{goal.tokenBudget ? ' / ' + goal.tokenBudget.toLocaleString() : ''} tokens</span></div>
+    {goal.reason && <p class="goal-detail">{goal.reason}</p>}
+    {active && goal.waitingFor === 'input' && <button type="button" class="btn" onClick={onReply}><Icon name="message" size={14} />{t('goal.reply')}</button>}
+    {active && reviewId && <a class="btn" href={'#/task/' + encodeURIComponent(reviewId)}>{t('sessions.viewTask')} →</a>}
+    {limited && !active && goal.phase !== 'finished' && <label>{t('sessions.goal.newBudget')}<input type="number" min={(goal.tokens ?? 0)+1} value={limit} onInput={e => setLimit(e.currentTarget.value)} /></label>}
+    <div class="goal-controls goal-management">
+      <button type="button" class="btn goal-clear" disabled={pending} onClick={() => void onControl('clear')}>
+        <Icon name="trash" size={15} />{t('sessions.goal.clear')}
+      </button>
+      {goal.phase !== 'finished' && <button class="btn primary" disabled={pending || (!active && limited && (!Number.isSafeInteger(Number(limit)) || Number(limit) <= (goal.tokens ?? 0)))} onClick={() => void onControl(active ? 'pause' : 'resume',!active && limited ? Number(limit) : undefined)}>{t(active ? 'sessions.goal.pause' : limited ? 'sessions.goal.raiseBudget' : 'sessions.goal.resume')}</button>}
+    {goal.round && <button class="btn" disabled={pending} onClick={() => void onControl('stop')}>{t('sessions.goal.stop')}</button>}</div>
+  </div>
 }

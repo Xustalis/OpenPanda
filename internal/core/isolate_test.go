@@ -492,3 +492,22 @@ func TestPackStageOutputSkipsRegenerableDirs(t *testing.T) {
 		}
 	}
 }
+
+func TestIsolatedWorkspaceInsideSource(t *testing.T) {
+	c := NewCore(openTestDB(t), "iso-node", ledger.Card{Device: "iso-node"}, 5, testLogger(), config.ModelConfig{})
+	root := t.TempDir()
+	c.SetWorkDir(root)
+	writeFile(t, filepath.Join(root, "README.md"), "source")
+	writeFile(t, filepath.Join(root, "tasks", "sibling", "output"), "another task")
+	writeFile(t, filepath.Join(root, "docs", "tasks", "guide"), "project docs")
+	dir, err := c.setupIsolatedWorkDir(t.Context(), Task{TaskID: "01a151d0-0000-7000-8000-000000000001", Project: "project"}, root)
+	if err != nil {
+		t.Fatalf("nested setup: %v", err)
+	}
+	if readFile(t, filepath.Join(dir, "README.md")) != "source" || readFile(t, filepath.Join(dir, "docs", "tasks", "guide")) != "project docs" {
+		t.Fatal("project content missing")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "tasks")); !os.IsNotExist(err) {
+		t.Fatalf("managed task directories copied: %v", err)
+	}
+}

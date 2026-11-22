@@ -1,0 +1,40 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* Each destination picks an ink. Raised surfaces keep the theme's neutral base. */
+.ws-page, .control-section, .work-page, .memory-page, .settings-shell, .profile {
+  --section-ink: var(--task-blue);
+  --section-wash: color-mix(in srgb, var(--section-ink) 8%, var(--bg-raised));
+  --section-edge: color-mix(in srgb, var(--section-ink) 23%, var(--border-soft));
+  --section-surface: linear-gradient(120deg, var(--section-wash), var(--bg-raised) 62%);
+  --section-shadow: inset 0 1px var(--composer-highlight), var(--shadow-sm);
+}
+.control-section, .memory-page { --section-ink: var(--task-violet); }
+.work-page { --section-ink: var(--task-amber); }
+
+.ws-head-icon, .control-head-icon, .memory-head-icon, .work-head-icon {
+  flex: none;
+  box-sizing: border-box;
+  width: 32px;
+  height: 32px;
+  padding: 7px;
+  color: var(--section-ink);
+  background: var(--section-surface);
+  border: 1px solid var(--section-edge);
+  border-radius: 10px;
+  box-shadow: inset 0 1px var(--composer-highlight);
+}
+.ws-title, .control-title { margin: 0; font-size: var(--text-xl); letter-spacing: -.025em; }
+.ws-head, .control-head { border-bottom: 1px solid var(--border-soft); }
+:is(.control-tabs, .memory-tabs).segmented, .work-tabs {
+  padding: 3px;
+  gap: 3px;
+  background: var(--bg-chrome);
+  border: 1px solid var(--border-soft);
+  border-radius: 11px;
+}
+:is(.control-tabs, .memory-tabs) .seg.on, .work-tabs button[aria-current] {
+  color: var(--text);
+  background: var(--bg-raised);
+  box-shadow: inset 0 0 0 1px var(--section-edge), var(--shadow-xs);
+}
+:is(.control-tabs, .memory-tabs) .seg.on svg, .work-tabs button[aria-current] svg { color: var(--section-ink); }

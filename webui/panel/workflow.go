@@ -40,12 +40,15 @@ func (h *handler) workPolicy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	p, err := h.taskFlow.Policy(r.Context(), r.PathValue("id"), r.PathValue("space"))
+	p, configured, err := h.taskFlow.LookupPolicy(r.Context(), r.PathValue("id"), r.PathValue("space"))
 	if err != nil {
 		writeWorkError(w, err)
 		return
 	}
-	writeJSON(w, p)
+	writeJSON(w, struct {
+		taskflow.Policy
+		Configured bool `json:"configured"`
+	}{p, configured})
 }
 
 func (h *handler) workRuns(w http.ResponseWriter, r *http.Request) {

@@ -500,3 +500,31 @@
     padding: 0 9px;
   }
 }
+
+.notif-header-icon, .notif-empty-glyph { color: var(--task-violet); background: color-mix(in srgb,var(--task-violet) 10%,var(--bg-raised)); border-radius: 10px; }
+.notif-header-icon { box-sizing: content-box; padding: 7px; }
+.notif-rail { background: linear-gradient(145deg,color-mix(in srgb,var(--task-violet) 6%,var(--bg-chrome)),var(--bg-chrome) 65%); }
+.notif-tab.on .ico { color: var(--task-violet); }
+.notif-row-open { border: 0; padding: 0; color: inherit; font: inherit; text-align: start; background: transparent; cursor: pointer; }
+.notif-row-open::after { content: ''; position: absolute; inset: 0; border-radius: 9px; }
+.notif-side { position: relative; z-index: 1; }
+.notif-row:focus-within { background: var(--bg-chrome); }
+.notif-row.unread { background: color-mix(in srgb,var(--task-blue) 5%,var(--bg)); }
+.notif-tab, .notif-close { min-height: 36px; }
+@media (pointer: coarse) { .notif-tab,.notif-close { min-height: 44px; } }
+@media (prefers-reduced-motion: no-preference) { .notif-list { animation: fade-in var(--dur-fast) var(--ease); } }
+
+.notif-action {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px;
+  padding: 4px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-raised);
+  color: var(--text); font: inherit; font-size: var(--text-xs); font-weight: 550; cursor: pointer; box-shadow: var(--shadow-xs);
+}
+.notif-action svg { flex: none; }
+.notif-action:not(:disabled):hover { border-color: var(--task-violet); background: color-mix(in srgb, var(--task-violet) 6%, var(--bg-raised)); }
+.notif-action.notif-recheck:not(:disabled) { background: var(--text); color: var(--bg); border-color: var(--text); }
+.notif-action:disabled { box-shadow: none; background: var(--bg-chrome); border-color: var(--border-soft); color: var(--text-tertiary); }
+.notif-foot { min-height: 46px; }
+@media (prefers-reduced-motion: no-preference) {
+  .notif-recheck[aria-busy=true] svg { animation: notif-refresh .85s linear infinite; }
+  @keyframes notif-refresh { to { transform: rotate(360deg); } }
+}

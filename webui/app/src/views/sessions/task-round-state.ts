@@ -102,6 +102,10 @@ export function projectTaskRounds(msgs: ChatMsg[], tasks: Task[] | null, openOpe
     add(task.id, task.operation_id)
   }
   for (const msg of msgs) {
+    if (msg.role === 'user' && msg.ref) {
+      const entry = jobs.get(msg.ref)
+      if (entry && !entry.round.operation) entry.round.anchor ??= msg.k
+    }
     if (msg.role === 'user' && msg.idempotency_key?.startsWith('plan:user:')) {
       hidden.add(msg.k)
       continue
@@ -116,6 +120,9 @@ export function projectTaskRounds(msgs: ChatMsg[], tasks: Task[] | null, openOpe
     if (msg.kind !== 'answer' || !msg.ref || !splitReportHead(msg.text)) continue
     const entry = jobs.get(msg.ref)
     if (!entry || (msg.operation_id && msg.operation_id !== entry.round.operation)) continue
+    // A board task can have a delivery without a dispatch receipt. Keep
+    // that card at its first recorded delivery when another turn follows.
+    entry.round.anchor ??= msg.k
     entry.job.reports.push(msg)
     hidden.add(msg.k)
   }

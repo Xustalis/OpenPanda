@@ -8,7 +8,7 @@
 // call sites — the trap's contract is spelled out here rather than re-derived
 // per overlay.
 
-import { useEffect } from 'preact/hooks'
+import { useLayoutEffect } from 'preact/hooks'
 
 // Everything a Tab keypress could legally land on, in DOM order.
 const FOCUSABLE = [
@@ -38,7 +38,7 @@ export function useModalFocus(
   active: boolean,
   initial?: string,
 ): void {
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!active) return
     const root = ref.current
     if (!root) return

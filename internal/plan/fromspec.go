@@ -98,7 +98,7 @@ func FromSpec(spec entry.PlanSpec) (Plan, error) {
 		if err != nil {
 			return Plan{}, fmt.Errorf("plan: stage %q: %w", s.ID, err)
 		}
-		detail, err := json.Marshal(entry.TaskSpecDetail{Coordination: s.Coordination, Objectives: policy, Kind: s.Kind, Acceptance: checks,
+		detail, err := json.Marshal(entry.TaskSpecDetail{PreferredAgent: s.PreferredAgent, Coordination: s.Coordination, Objectives: policy, Kind: s.Kind, Acceptance: checks,
 			SuccessDefinition: s.SuccessDefinition, ToolsPolicy: s.ToolsPolicy, MaxTurns: s.MaxTurns})
 		if err != nil {
 			return Plan{}, err
@@ -109,14 +109,15 @@ func FromSpec(spec entry.PlanSpec) (Plan, error) {
 			title = firstLine(intent)
 		}
 		p.Stages = append(p.Stages, Stage{
-			ID:        strings.TrimSpace(s.ID),
-			Title:     title,
-			Requires:  trimAll(s.Requires),
-			Needs:     trimAll(s.Needs),
-			Node:      strings.TrimSpace(s.Node),
-			Intent:    intent,
-			SpecJSON:  string(detail),
-			Resources: s.Resources,
+			ID:         strings.TrimSpace(s.ID),
+			Title:      title,
+			Requires:   trimAll(s.Requires),
+			Needs:      trimAll(s.Needs),
+			Node:       strings.TrimSpace(s.Node),
+			Intent:     intent,
+			SpecJSON:   string(detail),
+			Resources:  s.Resources,
+			Complexity: s.Complexity,
 		})
 	}
 	if err := Validate(p); err != nil {

@@ -564,3 +564,69 @@ func TestLegacyProposalReviewAndExecutionUseSameMarkdown(t *testing.T) {
 		t.Fatalf("queued=%q err=%v", queued, err)
 	}
 }
+
+// Leaving Plan is a change of lens, not a decision to throw the plan away.
+// Blanking the column on the way out was what made "查看并实施" unreachable
+// after a single toggle: the button had nothing left to open.
+func TestLeavingPlanKeepsTheProposal(t *testing.T) {
+	ctx := context.Background()
+	s := &Store{DB: testdb.Open(t)}
+	if err := s.SetPlanning(ctx, "session", true); err != nil {
+		t.Fatal(err)
+	}
+	version, err := s.SaveProposal(ctx, "session", "1. Inspect the routing table.\n2. Fix the fallback.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.SetPlanning(ctx, "session", false); err != nil {
+		t.Fatal(err)
+	}
+	state, err := s.Get(ctx, "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Planning || state.Proposal == "" || state.ProposalVersion != version {
+		t.Fatalf("proposal dropped when leaving Plan: %+v", state)
+	}
+	// Approving after the toggle is the whole point.
+	if _, err = s.Confirm(ctx, "session", version); err != nil {
+		t.Fatalf("confirm after leaving Plan: %v", err)
+	}
+	if state, err = s.Get(ctx, "session"); err != nil || state.Proposal != "" {
+		t.Fatalf("confirmed proposal still offered: %+v %v", state, err)
+	}
+}
+
+// Re-entering Plan starts a new mode, so the previous mode's text is retired:
+// it cannot be confirmed by the mode that replaced it. The immutable copy in
+// conversation_proposals is what keeps it auditable.
+func TestReenteringPlanRetiresTheProposal(t *testing.T) {
+	ctx := context.Background()
+	s := &Store{DB: testdb.Open(t)}
+	if err := s.SetPlanning(ctx, "session", true); err != nil {
+		t.Fatal(err)
+	}
+	version, err := s.SaveProposal(ctx, "session", "1. Old plan.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, enabled := range []bool{false, true} {
+		if err = s.SetPlanning(ctx, "session", enabled); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state, err := s.Get(ctx, "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Proposal != "" {
+		t.Fatalf("previous mode's proposal still offered: %+v", state)
+	}
+	if _, err = s.Confirm(ctx, "session", version); !errors.Is(err, ErrConflict) {
+		t.Fatalf("previous mode's proposal accepted: %v", err)
+	}
+	var archived string
+	if err := s.DB.QueryRow("SELECT proposal FROM conversation_proposals WHERE session_id='session' AND version=?", version).Scan(&archived); err != nil || archived != "1. Old plan." {
+		t.Fatalf("retired proposal not archived: %q %v", archived, err)
+	}
+}

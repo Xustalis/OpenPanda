@@ -311,6 +311,22 @@ check('changelog.html lists every 0.1.x release in CHANGELOG.md',
       bool(md_releases) and site_releases == md_releases,
       f'site={sorted(site_releases)} changelog={sorted(md_releases)}')
 
+# The "In development" section is a promise, not a heading. It once shipped
+# empty while this gate stayed green, so the block must carry the summary of
+# the work that has no version number yet, and it must point at the
+# repository's own [Unreleased] section rather than at a released version.
+_unreleased_block = pages['changelog.html'].split('id="unreleased"', 1)[-1].split('</section>', 1)[0]
+unreleased_items = [k for k in re.findall(r'data-i18n="cl\.unreleased\.[a-z0-9]+"',
+                                         _unreleased_block)
+                    if k not in ('cl.unreleased.nav', 'cl.unreleased.t', 'cl.unreleased.d')]
+check('changelog.html lists the unreleased work, not only a heading',
+      len(unreleased_items) >= 5,
+      f'unreleased items={len(unreleased_items)}')
+check('the unreleased section points at the repository CHANGELOG, not at a release',
+      'CHANGELOG.md' in _unreleased_block and '[Unreleased]' in _unreleased_block
+      and not re.search(r'recorded under v\d', _unreleased_block),
+      'the lead must name the repository [Unreleased] section')
+
 rows = re.findall(r'<tr><td>([^<]+)</td><td>([^<]+)</td><td>', pages['download.html'])
 targets = {(os.strip(), arch.strip()) for os, arch in rows}
 expected_targets = {
