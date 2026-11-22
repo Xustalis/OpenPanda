@@ -132,6 +132,25 @@ export function ChatSkeleton() {
   )
 }
 
+export function ChatStarters({ onPick }: { onPick(text: string): void }) {
+  return (
+    <div class="chat-starters">
+      {(['sessions.s1', 'sessions.s2', 'sessions.s3'] as const).map((key, index) => (
+        <button
+          type="button"
+          class="chat-starter"
+          key={key}
+          onClick={() => onPick(t(key))}
+        >
+          <span class="starter-icon" aria-hidden="true"><Icon name={(['file-text', 'terminal', 'code'] as const)[index]!} size={16} /></span>
+          {t(key)}
+          <Icon name="chevron-right" size={14} />
+        </button>
+      ))}
+    </div>
+  )
+}
+
 /** Empty state: the greeting, one line of orientation, and three prompts that
  *  fill the composer. The brand mark and fleet strip stay out — the pet is
  *  already standing on the composer — but a blank page gives a first-time
@@ -151,19 +170,7 @@ export function ChatEmpty({
         {/* Once there is a draft or an attachment, a suggestion would replace
             work the reader already did; the chips step aside instead. */}
         {!hasDraft && (
-          <div class="chat-starters">
-            {(['sessions.s1', 'sessions.s2', 'sessions.s3'] as const).map((key) => (
-              <button
-                type="button"
-                class="chat-starter"
-                key={key}
-                onClick={() => onPick(t(key))}
-              >
-                {t(key)}
-                <Icon name="chevron-right" size={14} />
-              </button>
-            ))}
-          </div>
+          <ChatStarters onPick={onPick} />
         )}
       </div>
     </div>

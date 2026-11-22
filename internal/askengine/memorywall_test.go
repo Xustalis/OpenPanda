@@ -19,6 +19,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 // Personal memory follows the trusted owner entry, independently of cwd.
@@ -123,5 +124,26 @@ func TestSessionWorkDirUsesConfirmedProject(t *testing.T) {
 	}
 	if got := e.SessionWorkDir(&sessions.Session{}); got != e.WorkPath() {
 		t.Fatalf("default workspace = %q, want %q", got, e.WorkPath())
+	}
+}
+
+func TestBoardSessionWorkDirSurvivesFollowUp(t *testing.T) {
+	e := &Engine{cfg: &config.Config{}, db: testdb.OpenFile(t, filepath.Join(t.TempDir(), "test.db"))}
+	e.cfg.Storage.WorkPath = t.TempDir()
+	pinned := t.TempDir()
+	if _, err := e.db.Exec("INSERT INTO tasks(task_id, session_id, work_dir, intent,state,owner_node,attempt_id) VALUES('task','board',?,'first','done','local','attempt')", pinned); err != nil {
+		t.Fatal(err)
+	}
+	sess := &sessions.Session{ID: "board", Turns: []sessions.Turn{{Role: "user", Text: "first"}, {Role: "assistant", Ref: "task", IdempotencyKey: "session_summary:task:attempt"}}}
+	if got := e.SessionWorkDir(sess); got != pinned {
+		t.Fatalf("legacy board follow-up uses %q, want %q", got, pinned)
+	}
+	sess.ID = "other"
+	if got := e.SessionWorkDir(sess); got != e.WorkPath() {
+		t.Fatalf("unrelated session inherited %q", got)
+	}
+	sess.WorkDir = pinned
+	if got := e.SessionWorkDir(sess); got != pinned {
+		t.Fatalf("explicit board directory lost: %q", got)
 	}
 }

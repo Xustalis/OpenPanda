@@ -113,6 +113,15 @@ func (c *Core) lockActuator(id string) func() {
 // early exit the defer releases it instead, so a run that never reaches running
 // still frees its slot.
 func (c *Core) run(ctx context.Context, taskID, intent string, required []string, releaseSlot func()) (out bus.TaskResultPayload, rerr error) {
+	out, rerr = c.runHere(ctx, taskID, intent, required, releaseSlot)
+	var handoff *providerHandoff
+	if !errors.As(rerr, &handoff) {
+		return out, rerr
+	}
+	return c.handoffUnstartedTask(ctx, handoff)
+}
+
+func (c *Core) runHere(ctx context.Context, taskID, intent string, required []string, releaseSlot func()) (out bus.TaskResultPayload, rerr error) {
 	if remote, err := c.isRemoteBusiness(ctx, taskID); err != nil {
 		if releaseSlot != nil {
 			releaseSlot()
@@ -163,7 +172,8 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 				out.Chain = taskChain
 			}
 		}
-		if rerr != nil && !errors.Is(rerr, ErrAlreadyRunning) && claimed {
+		var handoff *providerHandoff
+		if rerr != nil && !queueStopping(ctx) && !errors.As(rerr, &handoff) && !errors.Is(rerr, ErrAlreadyRunning) && claimed {
 			// If run failed or cancelled before reaching a terminal state,
 			// fail the task in the store so it never lingers stranded in
 			// 'running'. ErrAlreadyRunning is excluded: the row is legitimately
@@ -514,6 +524,44 @@ func agentTaskTraits(spec entry.TaskSpecDetail) []string {
 	return traits
 }
 
+// effortTraits turns the classifier's complexity score into the vocabulary the
+// agent cards already declare, so "how hard is this" becomes a routing input
+// without a new field, a new schema, or a new question for the user.
+//
+// It exists because the two terms the router already has point the wrong way
+// for heavy work. costMultiplier discounts cheap agents (low tier = 1.0, high =
+// 0.6), so on a large refactor the cheapest seat wins by default; and best_at
+// was only ever matched against the task's kind, target, title and intent, so
+// a card declaring complex_reasoning could match only if the user happened to
+// type those words. Both now have the difficulty in hand: a light task emits
+// the quick-edit/search vocabulary, a deep one emits the reasoning/refactor
+// vocabulary, and the existing ×1.5 / ×0.5 multipliers do the rest.
+//
+// Standard effort adds nothing: the middle of the range is exactly the case
+// where cost and capability should trade off, and inventing traits for it
+// would make every ordinary task look specialised.
+func effortTraits(complexity float64) []string {
+	switch {
+	case complexity <= 0:
+		return nil // unknown: no opinion, the card's own tier decides
+	case complexity < complexityLight:
+		return []string{"quick_edits", "fast_scripts", "code_search", "code_explanation"}
+	case complexity >= complexityDeep:
+		return []string{"complex_reasoning", "multi_file_edits", "refactoring"}
+	default:
+		return nil
+	}
+}
+
+// routingTraits is everything the ranker sees about a task: what it is
+// (kind/scope/target), what it says (title/intent), and how hard the
+// classifier judged it. Kept as one function so a later caller cannot pass two
+// of the three and silently route on a partial picture.
+func routingTraits(task Task, spec entry.TaskSpecDetail) commander.TaskRouting {
+	traits := append(agentTaskTraits(spec), task.Title, task.Intent)
+	return commander.TaskRouting{Traits: traits, Effort: effortTraits(task.Complexity), PreferredAgent: spec.PreferredAgent}
+}
+
 func taskRosterRouter(router *commander.Router, spec entry.TaskSpecDetail, required []string) (*commander.Router, error) {
 	if roster := spec.AllowAgents; len(roster) > 0 {
 		// "The roster wins" used to mean "rank the roster instead", which
@@ -574,8 +622,8 @@ func (c *Core) resolveRunPlanWithRouter(ctx context.Context, taskID string, requ
 	if err != nil {
 		return commander.Plan{}, nil, "", err
 	}
-	traits := append(agentTaskTraits(spec), task.Title, task.Intent)
-	plan, err := router.DispatchRoute(required, traits...)
+	traits := routingTraits(task, spec)
+	plan, err := router.DispatchTaskRoute(required, traits)
 	if err != nil {
 		return commander.Plan{}, nil, "", fmt.Errorf("route: %w", err)
 	}
@@ -1886,7 +1934,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				interrupted = roundCtx.Err() != nil && c.steerUnseen(execCtx, taskID, boardSeen)
 				roundCancel()
 			}
-			if interrupted {
+			if interrupted || queueStopping(ctx) {
 				break
 			}
 			if res.ResumeRejected && sessionID != "" && !resumeRetried {
@@ -1991,6 +2039,13 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			} else if left < 0 {
 				tokenExhausted = true
 			}
+		}
+
+		// The adapter can return EOF while its owning scheduler is stopping.
+		// Keep the checkpoint and workspace for Recover before interpreting the
+		// envelope as a failure or dispatching any more work.
+		if queueStopping(ctx) {
+			return roundOutcome{}, ctx.Err()
 		}
 
 		// §4.2 Sub-MainAgent promotion: an agent that hits a resource it lacks
@@ -2360,7 +2415,8 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 
 		// Capture partial edits after a failed execution too, so Panda can
 		// plan from the actual workspace and check its scope before resuming.
-		collectFailureEvidence := !res.OK && supervisor != nil && execCtx.Err() == nil &&
+		allowPeer, _ := ctx.Value(peerFallbackKey{}).(bool)
+		collectFailureEvidence := !res.OK && (supervisor != nil || (allowPeer && res.NoProviderWork)) && execCtx.Err() == nil &&
 			!commander.IsAuthorizationRefusal(res.Stderr)
 		if plan.Kind == "agent" && beforeOK && (res.OK || collectFailureEvidence) {
 			after, err := defense.SnapshotDir(workDir)
@@ -2450,11 +2506,17 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		}
 
 		if !res.OK {
+			if allowPeer && res.NoProviderWork && round == 0 && sessionID == "" && task.AgentSessionID == "" && beforeOK && !filesTruncated && len(lastChanged) == 0 && len(w.checks) == 0 && execCtx.Err() == nil {
+				if handoff := c.providerFallbackPeer(ctx, task, res.Stderr); handoff != nil {
+					return roundOutcome{}, handoff
+				}
+			}
 			var recovery *entry.SuperviseVerdict
 			turnCapped := plan.Kind == "agent" && turnCapFailure(res)
 			overflowed := plan.Kind == "agent" && commander.ContextOverflow(res.Stderr)
+			loginRequired := res.Tokens == 0 && commander.IsAuthenticationSetupRequired(res.Stderr)
 			if plan.Kind == "agent" && supervisor != nil && ctx.Err() == nil && execCtx.Err() == nil &&
-				!tokenExhausted && !turnCapped && !overflowed && !commander.IsAuthorizationRefusal(res.Stderr) {
+				!tokenExhausted && !turnCapped && !overflowed && !loginRequired && !commander.IsAuthorizationRefusal(res.Stderr) {
 				recoveryEvidence := evidence.render(scout.Cached(workDir).Test)
 				v := c.superviseAgentFailure(execCtx, supervisor, task, fullIntent(), res,
 					lastChanged, recoveryEvidence, round+1, maxRounds)

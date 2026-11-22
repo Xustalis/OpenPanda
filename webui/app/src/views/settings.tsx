@@ -30,6 +30,7 @@ import {
 } from './execution-settings'
 import { ItemSettings } from '../components/item-settings'
 import { SystemView } from './system'
+import { shortcuts, shortcutKeys, chordOf, eventChord, saveBindings, useBindings, shortcutIds, type ShortcutID, type Bindings } from '../shortcuts'
 import { ModelsSection } from './models'
 import { loadAgentRoster } from '../utils/agent-roster'
 
@@ -39,6 +40,7 @@ import { loadAgentRoster } from '../utils/agent-roster'
 type SandboxMode = 'off' | 'standard' | 'strict'
 
 export type Section =
+  | 'shortcuts'
   | 'general'
   | 'models'
   | 'team'
@@ -68,6 +70,7 @@ const GROUPS: Array<{ label: string; items: Array<{ id: Section; label: string; 
     label: 'settings.group.prefs',
     items: [
       { id: 'general', label: 'settings.group.general', icon: 'gear' },
+      { id: 'shortcuts', label: 'settings.shortcuts', icon: 'keyboard' },
       { id: 'models', label: 'settings.model', icon: 'cpu' },
       { id: 'team', label: 'nav.team', icon: 'users' },
     ],
@@ -102,17 +105,7 @@ function normalizeSection(raw?: string): Section {
   // old `?tab=reminders` link falls back to the page's first tab instead of
   // rendering a section that no longer exists.
   if (raw === 'reminders') return 'general'
-  const valid: Section[] = [
-    'general',
-    'models',
-    'team',
-    'policy',
-    'agents',
-    'mcp',
-    'skills',
-    'system',
-  ]
-  return valid.includes(raw as Section) ? (raw as Section) : 'general'
+  return SECTIONS.find(item => item.id === raw)?.id ?? 'general'
 }
 
 /** The unified settings & management centre — a sheet over whatever you were
@@ -245,6 +238,7 @@ export function SettingsView(props: {
             <div class="settings-pane-body">
               {section === 'general' && <GeneralSection onLogout={props.onLogout} />}
               {section === 'models' && <ModelsSection />}
+              {section === 'shortcuts' && <ShortcutSection />}
               {section === 'team' && <TeamSection />}
               {section === 'policy' && <PolicySection />}
               {section === 'mcp' && <MCPSection />}
@@ -288,7 +282,7 @@ function GeneralSection(props: { onLogout(): void }) {
 
         <div class="field-group">
           <label>{t('settings.theme')}</label>
-          <div class="segmented" role="radiogroup">
+          <div class="appearance-options" role="radiogroup" aria-label={t('settings.theme')}>
             {(['light', 'dark', 'auto'] as const).map((v) => (
               <button
                 key={v}
@@ -298,6 +292,7 @@ function GeneralSection(props: { onLogout(): void }) {
                 class={`seg${theme() === v ? ' on' : ''}`}
                 onClick={() => setTheme(v)}
               >
+                <span class="appearance-sample" data-mode={v} aria-hidden="true" />
                 {t(`settings.theme.${v}`)}
               </button>
             ))}
@@ -334,36 +329,71 @@ function GeneralSection(props: { onLogout(): void }) {
   )
 }
 
+function ShortcutSection() {
+  const bindings = useBindings()
+  const [query, setQuery] = useState('')
+  const [recording, setRecording] = useState<ShortcutID | null>(null)
+  const [message, setMessage] = useState('')
+  const groups: [string, ShortcutID[]][] = [
+    ['nav.aria', ['guide', 'search', 'chat', 'workspace', 'control', 'plans', 'projects', 'memory', 'settings', 'notifications']],
+    ['dock.start', ['goal', 'dock', 'files', 'changes', 'side']],
+  ]
+  function persist(next: Bindings) {
+    try { saveBindings(next); setRecording(null); setMessage('') }
+    catch { setMessage(t('keys.saveError')) }
+  }
+  function capture(e: KeyboardEvent, id: ShortcutID) {
+    if (recording !== id || e.isComposing || e.keyCode === 229 || e.key === 'Tab') return
+    const chord = eventChord(e)
+    e.preventDefault(); e.stopPropagation()
+    if (e.key === 'Escape') { setRecording(null); setMessage(''); return }
+    if (['Shift','Alt','Control','Meta'].includes(e.key) || e.repeat) return
+    const clear = ['Backspace','Delete'].includes(e.key) && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey
+    if (!chord && !clear) { setMessage(t('keys.how')); return }
+    const duplicate = chord && shortcutIds.find(other => other !== id && chordOf(other,bindings) === chord)
+    if (duplicate) { setMessage(t('keys.conflict', { action: t(shortcuts[duplicate][0]) })); return }
+    const next = { ...bindings, [id]: chord }
+    if (chord === shortcuts[id][2]) delete next[id]
+    persist(next)
+  }
+  const needle = query.trim().toLowerCase()
+  const filtered = groups.map(([name,ids]) => ({ name, ids: ids.filter(id => [t(shortcuts[id][0]), shortcutKeys(chordOf(id,bindings)).join(' '), chordOf(id,bindings)].some(text => text.toLowerCase().includes(needle))) }))
+  return <div class="shortcut-sheet">
+    <label class="key-search"><Icon name="search" size={17}/><input aria-label={t('keys.search')} placeholder={t('keys.search')} value={query} onInput={e => setQuery(e.currentTarget.value)} /></label>
+    <p class="key-help" role="status">{message || t(recording ? 'keys.how' : 'keys.help')}</p>
+    {filtered.map(({name,ids}) => ids.length > 0 && <section key={name}><h3>{t(name)}</h3><dl>{ids.map(id => <div key={id}>
+      <dt><Icon name={shortcuts[id][1]} size={16} />{t(shortcuts[id][0])}</dt>
+      <dd><button type="button" class="key-bind" aria-label={t(shortcuts[id][0])} aria-pressed={recording === id}
+        onClick={() => { setRecording(recording === id ? null : id); setMessage('') }}
+        onBlur={() => { if (recording === id) { setRecording(null); setMessage('') } }} onKeyDown={e => capture(e,id)}>
+        {recording === id ? t('keys.record') : shortcutKeys(chordOf(id,bindings)).join(' ') || t('keys.none')}
+      </button></dd>
+    </div>)}</dl></section>)}
+    {filtered.every(g => !g.ids.length) && <p>{t('settings.noMatch')}</p>}
+    <footer><button type="button" class="btn" disabled={!Object.keys(bindings).length} onClick={() => persist({})}><Icon name="refresh" size={14}/>{t('keys.reset')}</button></footer>
+  </div>
+}
+
 /** Browser-local opt-in; task connections retain their separate node policies. */
 function TeamSection() {
   const enabled = useTeamFeature()
   return (
-    <div class="card settings-card">
-      <div class="team-feature-heading">
-        <h2 class="block-title">{t('nav.team')}</h2>
-        <span class="badge yellow experimental-badge">{t('team.experimental')}</span>
-      </div>
-      <p class="hint">{t('team.experimentalHelp')}</p>
-      <div class="field-group">
-        <label id="team-feature-label">{t('settings.teamFeature')}</label>
-        <div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={enabled}
-            aria-labelledby="team-feature-label"
-            aria-describedby="team-feature-help"
-            class={`btn${enabled ? '' : ' primary'}`}
-            onClick={() => setTeamFeatureEnabled(!enabled)}
-          >
-            {t(enabled ? 'settings.teamDisable' : 'settings.teamEnable')}
-          </button>
-        </div>
-        <p class="hint" id="team-feature-help">{t('settings.teamFeatureHelp')}</p>
-      </div>
-      <p class="hint">{t('team.subtitle')}</p>
-      <p class="hint">{t('work.policyHint')}</p>
-      {enabled && <a class="btn" href="#/team">{t('settings.teamOpen')}</a>}
+    <div class="collab-preferences">
+      <section class="collab-visibility">
+        <div class="collab-symbol"><Icon name="panel-right" size={22} /></div>
+        <div><h3 id="team-feature-label">{t('settings.teamEntry')}</h3>
+          <p id="team-feature-help">{t('settings.teamFeatureHelp')}</p></div>
+        <button type="button" class="visibility-switch" role="switch" aria-checked={enabled}
+          aria-labelledby="team-feature-label" aria-describedby="team-feature-help" onClick={() => setTeamFeatureEnabled(!enabled)} />
+      </section>
+      {enabled && <nav class="collab-links" aria-label={t('nav.team')}>
+        {(['mine', 'spaces', 'review'] as const).map(tab => <a key={tab} href={'#/team?tab=' + tab}>
+          <Icon name={({ mine: 'list-checks', spaces: 'users', review: 'shield' } as const)[tab]} size={19} />
+          <span>{t('work.' + tab)}</span><Icon name="chevron-right" size={15} />
+        </a>)}
+      </nav>}
+      <aside class="collab-note"><Icon name="shield" size={18} /><div><strong>{t('work.policyHint')}</strong>
+        <p><span class="badge yellow experimental-badge">{t('team.experimental')}</span> {t('team.experimentalHelp')}</p></div></aside>
     </div>
   )
 }

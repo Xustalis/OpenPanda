@@ -147,23 +147,29 @@ func (s *Service) SetPolicy(ctx context.Context, connection, space string, p Pol
 }
 
 func (s *Service) Policy(ctx context.Context, connection, space string) (Policy, error) {
+	p, _, err := s.LookupPolicy(ctx, connection, space)
+	return p, err
+}
+
+// LookupPolicy distinguishes an explicitly disabled policy from a new space.
+func (s *Service) LookupPolicy(ctx context.Context, connection, space string) (Policy, bool, error) {
 	c, err := s.Get(ctx, connection)
 	if err != nil {
-		return Policy{}, err
+		return Policy{}, false, err
 	}
 	if _, ok := authorizedSpace(c, space); !ok || c.State != "connected" {
-		return Policy{}, taskproviders.ErrAuthorizationChanged
+		return Policy{}, false, taskproviders.ErrAuthorizationChanged
 	}
 	var raw string
 	err = s.db.QueryRowContext(ctx, `SELECT p.policy_json FROM task_policies p JOIN task_connections c ON c.connection_id=p.connection_id AND c.account_id=p.account_id WHERE c.connection_id=? AND c.state='connected' AND p.space_id=?`, connection, space).Scan(&raw)
 	var p Policy
 	if errors.Is(err, sql.ErrNoRows) {
-		return p, nil
+		return p, false, nil
 	}
 	if err == nil {
 		err = json.Unmarshal([]byte(raw), &p)
 	}
-	return p, err
+	return p, err == nil, err
 }
 
 func authorizedSpace(c Connection, space string) (taskproviders.Space, bool) {
@@ -189,7 +195,13 @@ func eligible(c Connection, p Policy, t taskproviders.Snapshot, now time.Time) e
 	if !ok || space.WorkspaceID != t.Key.WorkspaceID || c.InstanceID != t.Key.InstanceID || c.State != "connected" || c.AuthEpoch != t.Permissions.AuthEpoch {
 		return taskproviders.ErrAuthorizationChanged
 	}
-	if !p.Execute || !t.Permissions.Read || !t.Permissions.Execute {
+	// The local policy and the task's own permissions are different gates.
+	// A policy that never enabled execution is a local switch, not a revoked
+	// grant, and must say so instead of blaming the connection.
+	if !p.Execute {
+		return taskproviders.ErrAutomationNotAuthorized
+	}
+	if !t.Permissions.Read || !t.Permissions.Execute {
 		return errors.New("task is not authorized for automation")
 	}
 	for _, scope := range []string{"tasks:read", "execution:read", "execution:claim", "execution:report", "delivery:write"} {

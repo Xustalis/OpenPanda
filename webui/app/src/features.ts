@@ -10,9 +10,9 @@ export function teamFeatureEnabled(): boolean {
   if (sessionOverride !== undefined) return sessionOverride
   try {
     const saved = localStorage.getItem(TEAM_FEATURE_KEY)
-    return saved === null || saved === 'true'
+    return saved === 'true'
   } catch {
-    return true
+    return false
   }
 }
 

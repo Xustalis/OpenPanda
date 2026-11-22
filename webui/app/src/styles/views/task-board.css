@@ -85,17 +85,17 @@
 
 @keyframes lens-queue {
   from {
-    opacity: 0;
+    opacity: .55;
   }
 }
 @keyframes lens-plans {
   from {
-    opacity: 0;
+    opacity: .55;
   }
 }
 @keyframes lens-projects {
   from {
-    opacity: 0;
+    opacity: .55;
   }
 }
 
@@ -138,7 +138,7 @@
    which is the thing that actually constrains it. */
 .kanban {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(250px, 100%), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(225px, 100%), 1fr));
   gap: var(--sp-4);
   /* Every lane is the same height, empty or not — four equal panels read as
      one board, where a populated lane next to three stubs read as three
@@ -173,12 +173,21 @@
   box-shadow: var(--shadow-sm);
 }
 
-/* Colored accent strip per column type */
-.kanban-col[data-col="todo"] { border-top: 3px solid var(--semantic-info); }
-.kanban-col[data-col="doing"] { border-top: 3px solid var(--accent-2); box-shadow: var(--shadow-xs), var(--shadow-glow-2); }
-.kanban-col[data-col="review"] { border-top: 3px solid var(--semantic-warn); }
-.kanban-col[data-col="done"] { border-top: 3px solid var(--semantic-good); }
-
+.kanban-col { --lane-ink: var(--text-secondary); }
+.col-todo { --lane-ink: var(--task-violet); }
+.col-doing { --lane-ink: var(--task-blue); }
+.col-review { --lane-ink: var(--task-amber); }
+.kanban-col {
+  background: linear-gradient(165deg, color-mix(in srgb, var(--lane-ink) 6%, var(--bg-chrome)), var(--bg-chrome) 140px);
+}
+.kanban-head::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--lane-ink);
+  margin-inline-end: 8px;
+}
 /* Focus-review mode: the approval centre collapses the board to a single
    centred column — this is what the sidebar badge deep-links into. */
 .kanban.focus-review {
@@ -284,7 +293,7 @@
 .kanban-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   font-size: var(--fs-caption);
   font-weight: var(--fw-semibold);
   margin: 0;
@@ -309,10 +318,13 @@
   transition: all var(--dur-fast) var(--ease-standard);
 }
 
-.kanban-col[data-col="todo"] .kanban-count { color: var(--semantic-info); background: var(--semantic-info-soft); border: 1px solid var(--semantic-info-border); }
-.kanban-col[data-col="doing"] .kanban-count { color: var(--accent-2); background: var(--accent-2-soft); border: 1px solid var(--accent-2-border); }
-.kanban-col[data-col="review"] .kanban-count { color: var(--semantic-warn); background: var(--semantic-warn-soft); border: 1px solid var(--semantic-warn-border); }
-.kanban-col[data-col="done"] .kanban-count { color: var(--semantic-good); background: var(--semantic-good-soft); border: 1px solid var(--semantic-good-border); }
+.kanban-count {
+  margin-inline-start: auto;
+  color: var(--lane-ink);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-xs);
+  font-variant-numeric: tabular-nums;
+}
 
 .kanban-more {
   margin: 0;
@@ -960,3 +972,52 @@
   margin: 6px 0;
   font-size: var(--text-sm);
 }
+
+.task-execution-options > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  padding-block: var(--sp-2);
+}
+.task-execution-options[open] > .field-row { margin-block: var(--sp-2); }
+
+/* An entirely empty board keeps a drop area under every heading. */
+.kanban:not(:has(.kanban-list[data-empty='false'])) .kanban-list { height: clamp(80px, 15vh, 150px); }
+@media (max-width: 720px) {
+  .kanban:not(:has(.kanban-list[data-empty='false'])) .kanban-list { height: auto; }
+}
+
+/* The empty queue owns the available reading area, including short windows. */
+.control-body:has(.queue-empty-state) { display: flex; flex-direction: column; }
+.queue-section:has(.queue-empty-state) { flex: 1; display: flex; flex-direction: column; }
+.queue-empty-state {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: clamp(32px, 6vh, 76px) 16px; text-align: center;
+  background: radial-gradient(ellipse 250px 140px at 50% 43%, color-mix(in srgb, var(--glow-violet) 52%, transparent), transparent);
+}
+.queue-empty-art { position: relative; width: 196px; height: 101px; margin-bottom: 16px; }
+.queue-sheet {
+  --sheet-ink: var(--task-violet);
+  position: absolute; top: 15px; left: 49px; width: 98px; height: 70px;
+  padding: 11px; text-align: start; color: var(--sheet-ink);
+  background: linear-gradient(140deg, color-mix(in srgb, var(--sheet-ink) 12%, var(--bg-raised)), var(--bg-raised) 82%);
+  border: 1px solid color-mix(in srgb, var(--sheet-ink) 30%, var(--border-soft));
+  border-radius: 12px; box-shadow: inset 0 1px var(--composer-highlight), var(--shadow-md);
+}
+.queue-sheet svg { width: 20px; height: 20px; }
+.queue-sheet::after { content: ''; display: block; margin-top: 4px; height: 12px; background: linear-gradient(currentColor 0 0) left top / 70% 2px no-repeat, linear-gradient(currentColor 0 0) left bottom / 43% 2px no-repeat; opacity: .35; }
+.queue-sheet.rear { --sheet-ink: var(--task-blue); transform: translate(-30px, 2px) rotate(-16deg); }
+.queue-sheet.middle { --sheet-ink: var(--task-amber); transform: translate(30px, 2px) rotate(15deg); }
+.queue-sheet.front { transform: translateY(7px) rotate(-3deg); }
+.queue-empty-state h2 { margin: 0; font-size: clamp(21px, 2vw, 29px); line-height: 1.3; letter-spacing: -.035em; }
+.queue-empty-state p { max-width: 42ch; margin: 10px 0 0; line-height: 1.7; color: var(--text-secondary); }
+.queue-empty-state .btn { margin-top: 20px; min-height: 40px; padding-inline: 18px; }
+.queue-stages { display: flex; flex-wrap: wrap; justify-content: center; list-style: none; padding: 0; gap: 10px; margin: 32px 0 0; }
+.queue-stages li { display: flex; align-items: center; gap: 6px; font-size: var(--text-xs); color: var(--text-secondary); }
+.queue-stages li::before { content: ''; width: 6px; height: 6px; background: var(--lane-ink, var(--text-tertiary)); border-radius: 50%; }
+.queue-stages li:not(:last-child)::after { content: ''; width: 16px; height: 1px; margin-inline-start: 4px; background: var(--border); }
+@media (max-width: 520px) { .queue-stages { gap: 6px; } .queue-stages li:not(:last-child)::after { width: 7px; margin: 0; } }
+
+.parallel-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px 14px; border: 1px solid var(--section-edge); border-radius: 12px; background: var(--section-surface); }
+.parallel-count { display: inline-flex; align-items: center; gap: 8px; font-weight: 650; }
+.parallel-count > svg, .parallel-lane-mark { color: var(--task-blue); }
+.kanban-live, .tt-live { border-radius: 8px; background: color-mix(in srgb,var(--task-blue) 8%,var(--bg-raised)); padding: 5px 8px; }

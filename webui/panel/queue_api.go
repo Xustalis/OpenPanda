@@ -201,9 +201,9 @@ func (h *handler) enqueueBoardTask(
 		return "", "", "", "", err
 	}
 	if h.sessions != nil {
-		if sess, serr := h.sessions.Create(req.Title, req.Project); serr == nil {
+		if sess, serr := h.sessions.CreateInDir(req.Title, req.Project, req.WorkDir); serr == nil {
 			sessionID = sess.ID
-			_, _ = h.sessions.AppendTurn(sess.ID, sessions.Turn{Role: "user", Text: req.Prompt})
+			_, _ = h.sessions.AppendTurn(sess.ID, sessions.Turn{Role: "user", Text: req.Prompt, Ref: task.TaskID})
 			_ = h.store.SetSessionID(ctx, task.TaskID, sess.ID)
 		}
 	}

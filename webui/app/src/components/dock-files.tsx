@@ -328,7 +328,7 @@ function DockFileView(props: {
     const heads = bodyRef.current?.querySelectorAll<HTMLElement>(
       '.df-doc h2, .df-doc h3, .df-doc h4, .df-doc h5, .df-doc h6',
     )
-    heads?.[index]?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+    heads?.[index]?.scrollIntoView({ block: 'start', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' })
   }
 
   async function openImage(target: string, label: string) {

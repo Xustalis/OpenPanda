@@ -49,6 +49,7 @@ export type IconName =
   | 'git-fork'
   | 'home'
   | 'image'
+  | 'keyboard'
   | 'kanban'
   | 'layout'
   | 'lightbulb'
@@ -90,6 +91,7 @@ export type IconName =
   | 'x'
 
 const paths: Record<IconName, JSX.Element> = {
+  keyboard: <><rect x="2" y="5" width="20" height="14" rx="3" /><path d="M6 9h1m3 0h1m3 0h1m3 0h.1M6 12h1m3 0h1m3 0h1m3 0h.1M8 15h8" /></>,
   pause: <path d="M9 5v14m6-14v14" />,
   play: <path d="m8 5 12 7-12 7V5Z" />,
   stop: <rect x="5" y="5" width="14" height="14" rx="2" />,

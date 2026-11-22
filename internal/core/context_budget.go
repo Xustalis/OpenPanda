@@ -4,15 +4,25 @@ package core
 
 import "unicode/utf8"
 
+// The two complexity thresholds the runtime reads. They are named because
+// three separate decisions turn on them — how much optional context a run
+// gets, which agent the route prefers, and whether the work is described to
+// the reader as light or deep — and those must agree: an agent chosen for a
+// "deep" task must not be handed the "light" context budget.
+const (
+	complexityLight = 0.35
+	complexityDeep  = 0.75
+)
+
 // These are budgets for optional context, not truncation limits on user
 // instructions. Task intent, acceptance requirements and scope always survive.
 // Low-confidence/unknown complexity keeps the standard budget; only an
 // explicitly low score selects the small tier.
 func agentContextBudget(task Task) int {
 	switch {
-	case task.Complexity > 0 && task.Complexity < 0.35:
+	case task.Complexity > 0 && task.Complexity < complexityLight:
 		return 12000
-	case task.Complexity >= 0.75:
+	case task.Complexity >= complexityDeep:
 		return 64000
 	default:
 		return 32000

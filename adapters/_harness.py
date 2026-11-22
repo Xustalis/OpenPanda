@@ -297,6 +297,10 @@ def _popen(*args, **kw) -> "subprocess.Popen":
     # resolves it to Popen[str] from the **kw it cannot read and then rejects
     # the binary call sites; the callers that know the mode annotate their own
     # local (`proc: subprocess.Popen[bytes]`).
+    # Popen changes the kernel cwd but inherits the launcher's PWD. Some
+    # CLIs use that variable to select the project for their file tools.
+    if kw.get("cwd") and os.name == "posix":
+        kw["env"]["PWD"] = os.path.abspath(kw["cwd"])
     proc = subprocess.Popen(*args, **kw)
     _LIVE_PROCS.add(proc)
     return proc

@@ -779,7 +779,7 @@ input[type='checkbox'].check,
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
   padding: var(--sp-6);
-  animation: modal-in var(--dur-med) var(--ease);
+  animation: modal-in var(--dur-med) var(--ease-enter);
 }
 .modal-title {
   font-size: var(--text-lg);
@@ -849,7 +849,7 @@ dialog.confirm-modal::backdrop {
   font-size: var(--text-xs);
 }
 @keyframes modal-in {
-  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  from { opacity: 0; transform: translateY(5px) scale(.991); }
   to { opacity: 1; transform: none; }
 }
 @keyframes fade-in {
@@ -953,6 +953,7 @@ dialog.confirm-modal::backdrop {
   max-width: min(420px, calc(100vw - 32px));
 }
 .toast-host-top-center {
+  --toast-offset: -5px;
   top: 72px;
   bottom: auto;
   right: auto;
@@ -970,11 +971,18 @@ dialog.confirm-modal::backdrop {
   border: 1px solid var(--border-strong);
   box-shadow: var(--shadow-pop);
   font-size: var(--text-md);
-  animation: toast-in var(--dur-med) var(--ease);
+  animation: toast-in var(--dur-med) var(--ease-enter);
 }
 @keyframes toast-in {
-  from { opacity: 0; transform: translateY(8px); }
+  from { opacity: 0; transform: translateY(var(--toast-offset, 5px)); }
   to { opacity: 1; transform: none; }
+}
+.toast.leaving {
+  pointer-events: none;
+  animation: toast-out var(--dur-fast) ease-in forwards;
+}
+@keyframes toast-out {
+  to { opacity: 0; transform: translateY(var(--toast-offset, 5px)); }
 }
 .toast-error { border-color: var(--semantic-danger-border); }
 .toast-success { border-color: var(--semantic-good-border); }

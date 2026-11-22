@@ -40,7 +40,7 @@ import { ClarifyCard } from '../components/clarify-card'
 import { buildCommands } from '../components/palette'
 import { rankWords } from '../components/fuzzy'
 import { goalArgument, goalBudget, goalCommand } from '../components/goal-command'
-import { composerIntent, reconcileTranscript, threadBusy, patchStreaming, slashQuery, slashArgStarted, slashWords, planArgument, type ComposerMode } from '../components/chatstate'
+import { composerIntent, reconcileTranscript, threadBusy, patchStreaming, slashAtCaret, slashWords, planArgument, type ComposerMode } from '../components/chatstate'
 import { atQuery, expandFileRefs, exportMarkdown, exportFilename, fileLabel, withAttachments } from '../components/attach'
 import { isLiveSession } from '../components/session-guard'
 import { sortSessions, turnsChanged } from '../components/session-list'
@@ -56,6 +56,8 @@ import {
   type PermissionMode,
 } from '../components/permission-picker'
 import { NodePicker } from '../components/node-picker'
+import { RosterPicker } from '../components/team-picker'
+import { ComposerPanda } from '../components/composer-panda'
 import { ComposerPet } from '../components/composer-pet'
 import { OrchestrateCard } from '../components/orchestrate'
 import { DirButton } from '../components/dir-picker'
@@ -72,6 +74,7 @@ import {
   editorInsertText,
   editorTextOf,
   editorTextWalker,
+  removeEditorToken,
   insertTextAtCaret,
 } from '../components/composer-editor'
 import { dragHasFiles, livePillKeys, useComposerAttachments } from './sessions/use-composer-attachments'
@@ -79,11 +82,12 @@ import { ComposerInput, type CompletionItem } from './sessions/composer-input'
 import { QueuedNotes } from './sessions/queued-notes'
 import { fmtSize, type PendingAttachment } from './sessions/attachment-pills'
 import { AttachMenu } from './sessions/attach-menu'
-import { GoalBar, goalActive, goalNeedsMoreBudget, legacyGoalFor, useComposerGoals } from './sessions/goal-bar'
-import { PlanProposalDock } from './sessions/plan-proposal-dock'
-import { GoalBudgetDialog, PlanProposalDialog } from './sessions/conversation-dialogs'
+import { GoalPane, goalActive, legacyGoalFor, useComposerGoals, type ComposerGoal } from './sessions/goal-bar'
+import { PlanProposalDock, PlanRunningDock } from './sessions/plan-proposal-dock'
+import { PlanPane } from './sessions/plan-pane'
+import { shortcutFor, useBindings } from '../shortcuts'
 import { projectForDir, waitDevReady } from './sessions/session-project'
-import { ChatEmpty, ChatSkeleton, ChatTurn, reportFallbackRefs, RunSummaryRow, useSessionTasks } from './sessions/transcript'
+import { ChatEmpty, ChatStarters, ChatSkeleton, ChatTurn, reportFallbackRefs, RunSummaryRow, useSessionTasks } from './sessions/transcript'
 import { hydrateTurns, localMsgId, statusNote, type ChatMsg } from './sessions/transcript-state'
 
 export {
@@ -210,8 +214,24 @@ export function SessionsView({
   // page, it never opens a floating card over the panel underneath. `tab`
   // survives a collapse so reopening returns to the surface you left; `epoch`
   // is the head's `+`, which every panel reads as "start a fresh one".
+  const createdWithGoal = useRef<string | null>(null)
   const [dockOpen, setDockOpen] = useState(false)
   const [dockTab, setDockTab] = useState<DockTab>('')
+  const bindings = useBindings()
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (document.querySelector('dialog[open], [aria-modal=true]') || (event.target instanceof HTMLElement && (event.target.isContentEditable || event.target.closest('input, textarea, select, [role="textbox"]')))) return
+      const action = shortcutFor(event, bindings)
+      if (action === 'goal') { event.preventDefault(); showGoalPanel(); return }
+      if (!activeId) return
+      if (action !== 'dock' && action !== 'files' && action !== 'changes' && action !== 'side') return
+      event.preventDefault()
+      if (action === 'dock') setDockOpen(open => !open)
+      else { setDockTab(action); setDockOpen(true) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [activeId, bindings])
   const [reportSelection, setReportSelection] = useState<RoundReportSelection>()
   const reportOrigin = useRef<HTMLButtonElement | null>(null)
   // The column's width is a preference, not fleet or thread state: it lives in
@@ -449,8 +469,11 @@ export function SessionsView({
     // against this thread's worktree, a page is what this thread was talking
     // about, and a side conversation is a snapshot of it. Carrying any of them
     // across would show the next thread something it never mentioned.
-    setDockOpen(false)
-    setDockTab('')
+    if (!activeId || createdWithGoal.current !== activeId) {
+      setDockOpen(false)
+      setDockTab('')
+    }
+    createdWithGoal.current = null
     setReportSelection(undefined)
     reportOrigin.current = null
     setFileRef(null)
@@ -498,18 +521,23 @@ export function SessionsView({
   const busy = threadBusy(localBusy, activeId, session, liveIds.length)
   const goalAction = useRef<string | null>(null)
   const [pendingGoalAction, setPendingGoalAction] = useState<string | null>(null)
-  const {
-    goal, shownGoal, state: controlState, refresh: refreshControl, goalFor,
-    completedGoalKey, dismissCompletedGoal,
-  } = useComposerGoals(activeId, session?.operation, Boolean(pendingGoalAction))
+  const { goal, completionDismissed, onMessageAccepted, failed: controlFailed, state: controlState, refresh: refreshControl, apply: applyControl, goalFor } = useComposerGoals(activeId, session?.operation, Boolean(pendingGoalAction))
   const legacyGoal = activeId && !goal ? legacyGoalFor(activeId) : undefined
-  const [goalEditor, setGoalEditor] = useState<{ sid: string; id: string; text: string } | null>(null)
-  const [budgetGoal, setBudgetGoal] = useState<{ sid: string; id: string } | null>(null)
-  const [planReview, setPlanReview] = useState<{ sid: string; version: number } | null>(null)
-  const proposal = controlState?.planning && controlState.proposal &&
+  const [goalDrafts, setGoalDrafts] = useState<Record<string, string>>({})
+  const [savingGoal, setSavingGoal] = useState(false)
+  const [editingGoal, setEditingGoal] = useState('')
+  // Leaving Plan is a change of lens, not a decision to discard the plan, so
+  // the proposal is read from the store without asking whether planning is
+  // still on. Only "already confirmed" hides it: from then on the transcript
+  // owns the plan and a second copy above the composer would offer to run it
+  // twice.
+  const proposal = controlState?.proposal &&
     controlState.proposal_version > controlState.confirmed_version
     ? { text: controlState.proposal, version: controlState.proposal_version, resumesGoal: Boolean(controlState.goal?.paused_by_plan) }
     : null
+  // Both doors of the proposal card open the same dock pane; this only says
+  // whether the note field takes focus on the way in.
+  const [reviewVersion, setReviewVersion] = useState<number | null>(null)
   // `/goal` and `/plan` are picks, not prefixes: choosing one takes the token
   // out of the editor and leaves a chip beside the actions, so the draft is
   // the objective and nothing repeats the command. The goal bar is the
@@ -525,7 +553,7 @@ export function SessionsView({
   }>())
   // Still parsed so a hand-typed `/goal …` keeps its menu suppressed and its
   // send routed; the chip no longer mirrors it.
-  const goalDraft = goalArgument(input)
+  const shownGoal: ComposerGoal | undefined = goal?.phase === 'cancelled' ? undefined : goal
   // The pre-execution question the running turn is parked on. Cleared when the
   // browser answers, when the turn ends, or when the user cancels it.
   const [clarify, setClarify] = useState<{
@@ -592,19 +620,15 @@ export function SessionsView({
       ro?.disconnect()
     }
   }, [notes.length, notesOpen])
-  const [selectedProject, setSelectedProject] = useState(project || '')
-  // The directory a brand-new thread will run in, as the composer's footer
-  // shows it. It starts as the scope's own work dir and only becomes a real
-  // choice once the user picks one (`dirTouched`): a send then binds the
-  // thread to that directory instead of to the scope's.
   const [pickedDir, setPickedDir] = useState('')
-  const [dirTouched, setDirTouched] = useState(false)
+  const [defaultProject, setDefaultProject] = useState('')
+  const draftProject = ws || project || defaultProject
   // The project a picked directory resolved to. It outranks the route's
   // project, so a directory chosen on the new-chat page really is where the
   // thread it creates runs; it steps aside the moment the pane shows a
   // thread belonging to another project.
   const [dirProject, setDirProject] = useState('')
-  const activeProject = dirProject || project || selectedProject || ''
+  const activeProject = dirProject || project || ''
   // True only while a thread's transcript is in flight, so the pane can show
   // its shape instead of an empty box (or worse, the "new chat" hero).
   const [loading, setLoading] = useState(false)
@@ -643,6 +667,28 @@ export function SessionsView({
   // deltas may only write to the thread that started them. Kept in sync by
   // the effect below; send() fast-forwards it through the create flow.
   const activeIdRef = useRef<string | null>(activeId)
+  // Focus, change feed, operation polling and the post-send read can overlap.
+  // Share their newest successful response and discard reads across a send or navigation.
+  const sessionReads = useRef({ issued: 0, applied: 0, latest: null as Session | null })
+  function invalidateSessionReads() {
+    sessionReads.current = { issued: 0, applied: 0, latest: null }
+  }
+  async function readSession(sid: string) {
+    const reads = sessionReads.current
+    const ticket = ++reads.issued
+    try {
+      const snapshot = await api.session(sid)
+      if (activeIdRef.current !== sid || sessionReads.current !== reads) return null
+      if (ticket > reads.applied) {
+        reads.applied = ticket
+        reads.latest = snapshot
+      }
+    } catch (error) {
+      if (activeIdRef.current !== sid || sessionReads.current !== reads) return null
+      if (ticket > reads.applied) throw error
+    }
+    return reads.latest
+  }
   // Which row of the `/` completion menu is highlighted.
   const [completeCursor, setCompleteCursor] = useState(0)
   // The input as of the last Escape: Escape hides the menu until the text
@@ -770,17 +816,21 @@ export function SessionsView({
     }
   }, [activeId, activeProject])
 
-  // The projects table, once: the composer foot's read-only directory pill
-  // resolves the open thread's project row to the directory it runs in. The
-  // row rarely changes mid-visit, and a stale path is corrected on the next
-  // mount — this fetch exists for geometry and orientation, not live state.
   const [threadProjects, setThreadProjects] = useState<ProjectDetail[]>([])
   useEffect(() => {
-    api
-      .projects()
-      .then((pl) => setThreadProjects(pl.detail ?? []))
-      .catch(() => {})
-  }, [])
+    let live = true
+    setPickedDir('')
+    api.projects().then((pl) => {
+      if (!live) return
+      setThreadProjects(pl.detail ?? [])
+      setDefaultProject(pl.active || '')
+    }).catch(() => {})
+    return () => { live = false }
+  }, [activeId, project, ws])
+  const contextProject = pickedDir
+    ? threadProjects.find((p) => p.work_dir === pickedDir)?.name || ''
+    : draftProject
+  const draftDir = pickedDir || threadProjects.find((p) => p.name === draftProject)?.work_dir || ''
 
   // Live rail: the panel pushes a 'sessions' fingerprint slot on the change
   // feed, so a thread created/pinned/deleted on another tab, device, or the
@@ -807,11 +857,10 @@ export function SessionsView({
       // surface deleted the thread out from under the pane: leave it
       // rather than keep showing a ghost.
       const sid = activeIdRef.current
-      if (!sid) return
-      api
-        .session(sid)
+      if (!sid || inflight.current) return
+      readSession(sid)
         .then((s) => {
-          if (!isLiveSession(sid, activeIdRef.current)) return
+          if (!s || !isLiveSession(sid, activeIdRef.current)) return
           if (inflight.current && inflightSid.current === sid) return
           const prev = sessionRef.current
           setSession(s)
@@ -829,47 +878,12 @@ export function SessionsView({
   }, [])
 
 
-  // Keep selectedProject in sync with active project prop
-  useEffect(() => {
-    if (project) {
-      setSelectedProject(project)
-    }
-  }, [project])
-
   // Boundary guard: if a session is active but does not belong to the newly entered project, unselect it.
   useEffect(() => {
     if (activeId && session && activeProject && session.project && session.project !== activeProject) {
       onOpenSession('')
     }
   }, [activeProject, session, activeId])
-
-  // The footer's directory readout, and the only two things that can seed it:
-  // the workspace a new thread was handed in from (`ws`, the history's "+"),
-  // or the project this pane was opened *in*. The server's active project used
-  // to seed it too, which is why 新建对话 opened with the last project you had
-  // visited already filled in — a choice you never made, dressed as one you
-  // had. It starts empty now; picking a directory is the reader's call, and a
-  // group's "+" is the shortcut that makes it for them.
-  useEffect(() => {
-    if (activeId) return
-    let live = true
-    api
-      .projects()
-      .then((pl) => {
-        if (!live) return
-        const name = ws || project || ''
-        const hit = (pl.detail ?? []).find((d) => d.name === name)
-        setPickedDir(hit?.work_dir ?? '')
-        // A directory handed in by the rail is a decision already made, so the
-        // send binds the thread to it. A scope's own directory is only where
-        // the pane happens to sit — it stays the default, not a pick.
-        setDirTouched(!!ws && !!hit?.work_dir)
-      })
-      .catch(() => {})
-    return () => {
-      live = false
-    }
-  }, [activeId, project, ws])
 
   // A thread opened from the rail answers for its own project: once the pane
   // shows a thread of another project the pick's override has done its job
@@ -898,9 +912,12 @@ export function SessionsView({
     draftSession.current = activeId
     activeIdRef.current = activeId
     if (previous === activeId) return
-    setPlanReview(null)
-    setGoalEditor(null)
-    setBudgetGoal(null)
+    invalidateSessionReads()
+    // The pane belongs to the thread that produced the proposal; switching
+    // threads takes the column back instead of showing another session's plan.
+    setReviewVersion(null)
+    setDockTab((current) => current === 'plan' ? '' : current)
+    setEditingGoal('')
     const el = composer.current
     const text = el ? editorTextOf(el) : ''
     // Stash the thread we are leaving before deciding whether to restore the
@@ -985,10 +1002,9 @@ export function SessionsView({
     // a failed A load cleared B's messages.
     let alive = true
     const current = () => alive && activeIdRef.current === activeId
-    api
-      .session(activeId)
+    readSession(activeId)
       .then((s) => {
-        if (!current()) return
+        if (!s || !current()) return
         setSession(s)
         setLoadError('')
         setTeam(s.team ?? [])
@@ -1062,8 +1078,9 @@ export function SessionsView({
         await new Promise((r) => setTimeout(r, 2000))
         if (cancelled) return
         try {
-          const s = await api.session(activeId)
-          if (cancelled) return
+          const s = await readSession(activeId)
+          if (cancelled || inflight.current) return
+          if (!s) continue
           setSession(s)
           restore(s)
           if (s.operation?.id !== op.id || s.operation.status !== 'running') return
@@ -1103,10 +1120,9 @@ export function SessionsView({
       // and replacing the transcript underneath it would drop that bubble and
       // aim the next delta at an older message.
       if (inflight.current && inflightSid.current === activeId) return
-      api
-        .session(activeId)
+      readSession(activeId)
         .then((s) => {
-          if (activeIdRef.current !== activeId) return
+          if (!s || activeIdRef.current !== activeId) return
           if (inflight.current && inflightSid.current === activeId) return
           const turns = s.turns ?? []
           const last = turns[turns.length - 1]
@@ -1203,7 +1219,7 @@ export function SessionsView({
     const top = node.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop
     pinned.current = false
     setIsPinned(false)
-    el.scrollTo({ top: Math.max(0, top - 16), behavior: 'smooth' })
+    el.scrollTo({ top: Math.max(0, top - 16), behavior: 'auto' })
   }
 
   // Load the session's worktree changes (badge count + drawer contents).
@@ -1348,8 +1364,8 @@ export function SessionsView({
         await api.cancelSession(targetSid, operationID)
         ctrl?.abort()
         // Re-read the session so its operation row clears and Stop becomes Send.
-        const s = await api.session(targetSid)
-        if (activeIdRef.current === targetSid) setSession(s)
+        const s = await readSession(targetSid)
+        if (s && activeIdRef.current === targetSid) setSession(s)
       } catch (e) { toastError(e) }
       return
     }
@@ -1389,7 +1405,7 @@ export function SessionsView({
   async function sendIntoRunningTurn(text: string, tray: PendingAttachment[]) {
     const sid = activeId
     if (!sid || (!text && tray.length === 0)) return
-    const completedGoal = completedGoalKey(sid)
+    const acknowledgeGoal = onMessageAccepted(sid)
     try {
       // Upload before the note so a failed upload leaves the draft intact.
       let mentions: string[] = []
@@ -1402,7 +1418,7 @@ export function SessionsView({
       // note as an attachment, the same shape an uploaded file's mention takes.
       const refs = tray.flatMap((p) => (p.ref ? [p.ref] : []))
       const r = await api.sendSessionMessage(sid, text, false, [...mentions, ...refs])
-      if (completedGoal) dismissCompletedGoal(sid, completedGoal)
+      acknowledgeGoal?.()
       // Only clear once the server accepted it: a refused note is still the
       // user's text, and losing it to an optimistic clear costs more than the
       // round trip.
@@ -1564,22 +1580,23 @@ export function SessionsView({
     }
   }
 
-  async function send(e?: Event, queued?: string, intoSid?: string) {
+  async function send(e?: Event, queued?: string, intoSid?: string, revision = false, sidebarObjective?: string) {
     e?.preventDefault()
     // A continuation turn carries its own prompt: the words came from the
     // notes the last turn never read, not from the composer. The draft and the
     // tray on screen belong to whatever the user types next, so they are left
     // untouched — clearing them here would eat text typed while the answer was
     // still streaming.
-    const fromComposer = queued === undefined
+    const fromComposer = queued === undefined && sidebarObjective === undefined
+    if (fromComposer && loading) return
     const typed = (queued ?? input).trim()
     // An armed chip owns the whole draft; a continuation is never a command.
     const intent = fromComposer ? composerIntent(armed, typed) : { goalText: null, planText: null }
-    let goalText = intent.goalText
-    const budget = goalText ? goalBudget(goalText) : undefined
+    let goalText = sidebarObjective ?? intent.goalText
+    const budget = goalText && sidebarObjective === undefined ? goalBudget(goalText) : undefined
     if (budget?.invalid) { toast(t('sessions.goal.invalidBudget')); return }
     if (budget) goalText = budget.text
-    const planText = intent.planText
+    const planText = revision ? typed : intent.planText
     // A bare `/goal` is a pick, not a send: the token leaves the editor and
     // the chip carries the mode until the task is published. The same words
     // with the chip already armed mean the objective is still empty.
@@ -1604,7 +1621,7 @@ export function SessionsView({
       // words (`pause`, `stop`, `edit`…) belong to the `/goal …` text form,
       // and an objective that happens to be one word must not act on the
       // current goal instead of becoming a new one.
-      const command = armed === 'goal' ? { action: 'create' as const, objective: goalText } : goalCommand(goalText)
+      const command = sidebarObjective !== undefined || armed === 'goal' ? { action: 'create' as const, objective: goalText } : goalCommand(goalText)
       if (command.action === 'create') {
         goalText = command.objective
         if (!goalText) { toast(t('sessions.goal.hint')); return }
@@ -1654,10 +1671,11 @@ export function SessionsView({
     }
     // Snapshot the completion at send time so a goal that finishes during
     // this turn (or an automatic continuation) keeps its completion readout.
-    const completedGoal = fromComposer && activeId ? completedGoalKey(activeId) : undefined
+    const acknowledgeGoal = fromComposer && activeId ? onMessageAccepted(activeId) : undefined
     // Claim the slot before the async file expansion — a second Enter during
     // the /api/fs/read round-trips must not start a parallel ask.
     const ctrl = new AbortController()
+    invalidateSessionReads()
     inflight.current = ctrl
     inflightOperation.current = null
     stopRequested.current = false
@@ -1670,6 +1688,7 @@ export function SessionsView({
     /** Set once the user's bubble is on screen, so a later failure has
      *  somewhere to render instead of needing a toast. */
     let announced = false
+    let streamFailed = false
     // Deltas arrive per chunk — dozens a second — and each one re-rendered
     // the whole transcript, re-parsing the growing reply every time. They
     // are coalesced into one update per frame; nothing is lost, because the
@@ -1693,21 +1712,10 @@ export function SessionsView({
     }
 
     try {
-      // Where this thread runs. A directory picked in the composer's footer is
-      // resolved before anything else: the panel reads a session's work dir
-      // from its project row, so a directory no project points at would be
-      // silently ignored.
-      let threadProject = project || selectedProject || undefined
-      if (dirTouched && pickedDir) {
-        try {
-          threadProject = await projectForDir(pickedDir)
-          setSelectedProject(threadProject)
-          setDirProject(threadProject)
-        } catch (err) {
-          // The send matters more than the pick: report the failure and fall
-          // back to the scope's directory rather than dropping the turn.
-          toastError(err)
-        }
+      let threadProject = draftProject || undefined
+      if (!id && pickedDir) {
+        threadProject = await projectForDir(pickedDir)
+        setDirProject(threadProject)
       }
       // The thread landed outside the project this pane was opened in. The
       // URL still says otherwise, and the pane's boundary guard compares the
@@ -1720,6 +1728,7 @@ export function SessionsView({
       const openCreatedThread = (created: Session) => {
         setSessions((ls) => [created, ...ls])
         if (activeIdRef.current !== origin || inflight.current !== ctrl) return
+        if (sidebarObjective !== undefined) createdWithGoal.current = created.id
         setSession(created)
         inflightSid.current = created.id
         activeIdRef.current = created.id
@@ -1752,7 +1761,7 @@ export function SessionsView({
       // @file references become inline fenced blocks before the prompt
       // leaves the composer — "explain @main.go" works without pasting the
       // file. Inside try so a rejected expansion still clears inflight.
-      const expanded = await expandFileRefs(
+      const expanded = sidebarObjective !== undefined ? { prompt: raw, attached: [] } : await expandFileRefs(
         withAttachments(raw, [...mentions, ...refs]),
         (p) => api.fsRead(p),
       )
@@ -1778,8 +1787,16 @@ export function SessionsView({
         // A mode picked before the first send has no row to live on until
         // now; persist it so reopening the thread does not silently widen it.
         if (permission !== 'auto') {
-          api.patchSession(s.id, { permission_mode: permission }).catch(() => {
+          if (goalTarget) await api.patchSession(s.id, { permission_mode: permission })
+          else api.patchSession(s.id, { permission_mode: permission }).catch(() => {
             /* the ask below still carries the mode for this turn */
+          })
+        }
+        if (sidebarObjective !== undefined) {
+          setGoalDrafts(previous => {
+            const next = { ...previous, [s.id]: sidebarObjective }
+            if (next['']?.trim() === sidebarObjective) delete next['']
+            return next
           })
         }
         openCreatedThread(s)
@@ -1801,13 +1818,16 @@ export function SessionsView({
             setInput('')
             clearPending()
           }
-        } else {
+        } else if (fromComposer) {
           const draft = drafts.current.get(sid)
           if (draft && draft.mode === armed && draft.text.trim() === typed && draft.attachments === pending) drafts.current.delete(sid)
         }
-        void refreshControl(sid).catch(() => {})
+        if (sidebarObjective !== undefined) setGoalDrafts(previous => { const next = { ...previous }; delete next[sid]; return next })
+        if (fromComposer && live()) showGoalPanel()
+        await refreshControl(sid)
         return
       }
+      const userKey = localMsgId()
       const replyKey = localMsgId()
       if (live()) {
         setBusy(true)
@@ -1837,7 +1857,7 @@ export function SessionsView({
             // before the turn is filed, and its clock should not pop in on the
             // refetch that follows.
             ts: Math.floor(Date.now() / 1000),
-            k: localMsgId(),
+            k: userKey,
           },
           { role: 'assistant', text: '', streaming: true, k: replyKey },
         ])
@@ -1903,10 +1923,10 @@ export function SessionsView({
             queuedTurn.current = text
           },
           onOperation: (operationID) => {
-            if (operationID && completedGoal) dismissCompletedGoal(sid, completedGoal)
+            if (operationID) acknowledgeGoal?.()
             if (inflight.current === ctrl && inflightSid.current === sid) {
               inflightOperation.current = operationID
-              patch((m) => ({ ...m, operation_id: operationID }))
+              if (live()) setMsgs(ms => ms.map(m => m.k === userKey || m.k === replyKey ? { ...m, operation_id: operationID } : m))
               if (stopRequested.current) {
                 void api.cancelSession(sid, operationID).then(() => ctrl.abort()).catch(toastError)
               }
@@ -1969,6 +1989,7 @@ export function SessionsView({
             })
           },
           onError: (message, code, info) => {
+            streamFailed = true
             flushStream()
             patch((m) => ({
               ...m,
@@ -1996,12 +2017,13 @@ export function SessionsView({
         permission,
         // A continuation: the server drains its parked notes as this turn's
         // input, so the prompt above is display only and cannot double-post.
-        queued !== undefined,
+        queued !== undefined && !revision,
         planText !== null ? 'plan' : undefined,
       )
       flushStream()
       patch((m) => ({ ...m, streaming: false, status: undefined }))
       finishTurn()
+      return !streamFailed
     } catch (err) {
       // Whatever streamed before the failure is the user's only copy of it.
       flushStream()
@@ -2048,7 +2070,8 @@ export function SessionsView({
               Date.now() < deadline
             ) {
               try {
-                const s = await api.session(id)
+                const s = await readSession(id)
+                if (!s || inflight.current !== ctrl) break
                 const operationID = inflightOperation.current
                 const op = s.operation
                 const settled = operationID
@@ -2102,8 +2125,10 @@ export function SessionsView({
         setBusy(false)
       }
       // Persisted transcript is server-side truth; refresh title + turns.
-      if (id) {
-        api.session(id).then((s) => {
+      if (id && ownsFlight) {
+        invalidateSessionReads()
+        readSession(id).then((s) => {
+          if (!s) return
           // The rail entry's title is worth refreshing either way; the pane
           // belongs to whichever thread is active now.
           setSessions((ls) => ls.map((x) => (x.id === s.id ? s : x)))
@@ -2159,14 +2184,28 @@ export function SessionsView({
    *  as the draft, so `/goal fix the login` picked from the menu keeps
    *  "fix the login" as the objective instead of throwing it away. */
   function armMode(mode: ComposerMode) {
+    if (mode === 'goal') {
+      const argument = goalArgument(input)?.trim()
+      if (argument) setGoalDrafts(previous => ({ ...previous, [activeId ?? '']: argument }))
+      removeModeCommand(true)
+      setArmed(null)
+      openGoalEditor()
+      return
+    }
     removeModeCommand()
     setArmed(mode)
-    setGoalEditor(null)
     composer.current?.focus()
   }
 
+  function showGoalPanel() {
+    setDockTab('goal')
+    setDockOpen(true)
+    document.getElementById('goal-objective')?.focus()
+  }
+
   function openGoalEditor() {
-    if (goal && activeId) setGoalEditor({ sid: activeId, id: goal.id, text: goal.text })
+    showGoalPanel()
+    if (goal) setEditingGoal(goal.id)
   }
 
   // Arming the chip is local state; the backend turns planning on when the ask
@@ -2215,13 +2254,29 @@ export function SessionsView({
         })
         if (!ok || activeIdRef.current !== sid) return false
       }
-      await api.controlConversation(sid, { action, goal_id: goal.id, objective, token_budget: tokenBudget })
-      void refreshControl(sid).catch(() => {})
+      const state = await api.controlConversation(sid, { action, goal_id: goal.id, objective, token_budget: tokenBudget })
+      applyControl(sid, state)
+      if (action === 'clear') {
+        setGoalDrafts(previous => {
+          const next = { ...previous }
+          delete next[sid]
+          return next
+        })
+        try {
+          const cached = JSON.parse(sessionStorage.getItem('openpanda.composerGoals') || '{}')
+          delete cached[sid]
+          sessionStorage.setItem('openpanda.composerGoals', JSON.stringify(cached))
+        } catch { /* Browser storage is optional. */ }
+        if (activeIdRef.current === sid) {
+          setEditingGoal('')
+          toast(t('goal.cleared'))
+        }
+      }
       if (action === 'pause' || action === 'stop') {
         // Both interrupt the round server-side. Re-read the session so its
         // operation settles here and the thinking bubble leaves with it,
         // rather than waiting for the next change frame.
-        const s = await api.session(sid).catch(() => null)
+        const s = await readSession(sid).catch(() => null)
         if (s && activeIdRef.current === sid) setSession(s)
       }
       return true
@@ -2229,7 +2284,7 @@ export function SessionsView({
     finally { goalAction.current = null; setPendingGoalAction(null) }
   }
 
-  async function confirmProposal(review: NonNullable<typeof planReview>) {
+  async function confirmProposal(review: { sid: string; version: number }) {
     const { sid, version } = review
     if (sid !== activeIdRef.current || proposal?.version !== version || busy || inflight.current) return
     try {
@@ -2241,8 +2296,36 @@ export function SessionsView({
       }
       toast(t('sessions.plan.changed'), 'info')
     }
-    setPlanReview((current) => current === review ? null : current)
+    if (sid === activeIdRef.current) setDockTab('')
     void refreshControl(sid).catch(() => {})
+  }
+
+  async function adjustPlan(note: string): Promise<boolean> {
+    if (!activeId || activeId !== activeIdRef.current || !proposal || busy || inflight.current) return false
+    // A queued continuation drains parked notes. A revision submits its own text.
+    return (await send(undefined, note, activeId, true)) === true
+  }
+
+  /** Stop a plan round that is already implementing. The round id is also its
+   *  operation id, so the ordinary cancel path reaches the controller that
+   *  owns it — closing the ask round alone would take up to a supervisor tick
+   *  to be noticed. */
+  async function stopPlanRound(round: string) {
+    const sid = activeIdRef.current
+    if (!sid || !round) return
+    try {
+      await api.cancelSession(sid, round)
+    } catch (error) {
+      toastError(error)
+      return
+    }
+    void refreshControl(sid).catch(() => {})
+  }
+
+  function openPlan(review: boolean) {
+    setReviewVersion(review && proposal ? proposal.version : null)
+    setDockTab('plan')
+    setDockOpen(true)
   }
 
   // TUI-parity slash commands: the ones that act inside this view (new
@@ -2301,7 +2384,7 @@ export function SessionsView({
   // `/` completion (parity with the CLI REPL's Tab completion): TUI verbs
   // first, then the ⌘K palette's destinations — one slash and a few letters
   // run an action, open a view, flip the theme, or log out.
-  const slashToken = slashQuery(input)
+  const slashToken = slashAtCaret(input, caret)
   const commands: CompletionItem[] = [
     ...chatCommands,
     ...(buildCommands(onLogout) as CompletionItem[]),
@@ -2347,10 +2430,9 @@ export function SessionsView({
   // exactly when they were fully typed. Matching is word-start (`rankWords`),
   // not the palette's subsequence: `/pla` must offer the two plan verbs, not
   // every destination whose English keywords happen to spell p…l…a.
-  const slashArg = slashArgStarted(input)
   const completeShown: CompletionItem[] = (() => {
-    if (input === completeDismissed || slashArg) return []
-    if (slashToken !== null) return rankWords(commands, slashToken, slashWords)
+    if (input === completeDismissed) return []
+    if (slashToken !== null) return rankWords(commands, slashToken.query, slashWords)
     if (atTok) return fileItems
     return []
   })()
@@ -2426,21 +2508,27 @@ export function SessionsView({
   }
 
   function acceptCompletion(item: CompletionItem) {
-    if (item.id === 'cmd:plan' || item.id === 'cmd:goal') { item.run(); return }
-    if (item.id.startsWith('file:')) {
-      item.run()
+    if (item.id.startsWith('file:')) { item.run(); return }
+    const el = composer.current
+    if (!el || !slashToken || editorTextOf(el) !== input) return
+    removeEditorToken(el, slashToken.start, slashToken.end)
+    setInput(editorTextOf(el))
+    setCaret(editorCaretOffset(el))
+    setCompleteDismissed('')
+    if (item.id === 'cmd:goal') {
+      const sid = activeId ?? ''
+      const suggestion = editorTextOf(el).trim()
+      if (!shownGoal && suggestion) setGoalDrafts(previous => previous[sid] !== undefined ? previous : { ...previous, [sid]: suggestion })
+      setArmed(null)
+      openGoalEditor()
       return
     }
-    // Text already typed after the command name is its argument: `/read
-    // foo.go` + Enter runs /read with "foo.go", not a bare menu pick that
-    // would silently drop the path.
-    const arg = /^\/\S+\s+(.+)$/.exec(input)?.[1]?.trim() || undefined
-    setInput('')
-    // The state is not the surface: clearing `input` alone left the typed
-    // slash line sitting in the editable under whatever the command inserts.
-    editorClear(composer.current)
-    setCompleteDismissed('')
-    item.run(arg)
+    if (item.id === 'cmd:plan') {
+      if (controlState?.planning) { void exitPlanning(); setArmed(null) }
+      else setArmed('plan')
+      return
+    }
+    item.run()
   }
 
   /** `/export`: serialize the live transcript to Markdown and download it —
@@ -2520,7 +2608,7 @@ export function SessionsView({
   // 谈起，而唯一与这一页有关的那个决定 —— 在哪台机器上跑 —— 原本也锁在栏的工具
   // 页后面。所以这一页把节点按钮直接摆到头部（见下），栏本身不出现，连折叠按钮
   // 也不留（没有栏可折）。线程一存在就恢复原样：栏、栏的按钮、它记住的那一页。
-  const dockShown = dockOpen && !newChatPage
+  const dockShown = dockOpen && (!newChatPage || dockTab === 'goal')
 
   // The overview is furniture, not a preference: a thread that is open always
   // has one, the way it always has a composer. It is a single line in the pane
@@ -2576,13 +2664,7 @@ export function SessionsView({
     window: sample.window,
   }))
 
-  // The open thread's directory, read-only: the foot row under the box keeps
-  // its place on every surface — 新对话 picks a directory there, 工作空间
-  // picks one, and a thread shows where it runs — so moving between them does
-  // not bounce the composer up and down. The pill is display, not a control:
-  // a thread's directory is fixed by its project row and cannot be re-picked
-  // mid-thread. A project with no dir yet falls back to its name, which is
-  // what the rail calls it anyway.
+  // An existing thread keeps the directory of its project.
   const threadDir = (() => {
     const name = session?.project || activeProject || ''
     if (!name) return ''
@@ -2635,6 +2717,10 @@ export function SessionsView({
   const projection = projectTaskRounds(msgs, sessionTasks, openOperation)
   const selectedReport = reportSelection && projection.rounds.find(round => round.key === reportSelection.key && round.settled)
   const reportShown = dockShown && dockTab === 'report' && !!selectedReport
+  // The proposal owns the pane only while it exists. Confirming it (or the
+  // session switching away) leaves `''` behind, so the column falls back to
+  // the overview instead of holding a document that is no longer confirmed.
+  const planShown = dockShown && dockTab === 'plan' && !!proposal
   // A round can settle from a task-list update before its report turn arrives.
   // Follow that layout change only if the reader was already at the bottom.
   const roundLayout = projection.rounds.map(round => `${round.key}:${round.settled}:${round.jobs.length}`).join('|')
@@ -2667,7 +2753,7 @@ export function SessionsView({
       class={`chat${dockShown ? ' dock-open' : ''}`}
       style={dockShown ? `--dock-w:${dockW}px` : undefined}
     >
-      <div class="chat-pane session-chat-pane">
+      <div class={newChatPage ? 'chat-pane session-chat-pane new-chat-pane' : 'chat-pane session-chat-pane'}>
         {/* The header is unconditional so the drawer toggle is reachable even
             on a brand-new, empty thread — that is exactly when a phone user
             needs to get back to the thread list. */}
@@ -2698,6 +2784,7 @@ export function SessionsView({
               >
                 <input
                   class="input chat-title-input"
+                  aria-label={t('sessions.editTitle')}
                   value={titleInput}
                   autoFocus
                   onInput={(e) => setTitleInput((e.target as HTMLInputElement).value)}
@@ -2709,19 +2796,13 @@ export function SessionsView({
                 />
               </form>
             ) : (
-              <h1
-                class={`chat-title${session ? ' editable' : ''}`}
-                title={session ? t('sessions.editTitle') : undefined}
-                onClick={() => {
-                  if (session) {
-                    setTitleInput(session.title || '')
-                    setIsEditingTitle(true)
-                  }
-                }}
-              >
-                <span class="chat-title-text">{headerTitle}</span>
-                {session && <Icon name="pencil" class="chat-title-edit-icon" />}
-              </h1>
+              <h1 class="chat-title">{session ? (
+                <button class="chat-title-button" type="button" title={t('sessions.editTitle')}
+                  aria-label={t('sessions.editTitle') + ' · ' + headerTitle}
+                  onClick={() => { setTitleInput(session.title || ''); setIsEditingTitle(true) }}>
+                  <span class="chat-title-text">{headerTitle}</span><Icon name="pencil" class="chat-title-edit-icon" />
+                </button>
+              ) : <span class="chat-title-text">{headerTitle}</span>}</h1>
             )}
           </div>
           {/* 分支名不挂在标题旁：同一份事实由右栏起始页的环境卡承担（机器 →
@@ -2795,7 +2876,7 @@ export function SessionsView({
           }}
         >
           {msgs.length === 0 && loading && <ChatSkeleton />}
-          {msgs.length === 0 && !loading && !busy && (
+          {!newChatPage && msgs.length === 0 && !loading && !busy && (
             <ChatEmpty
               onPick={useStarter}
               hasDraft={input.trim() !== '' || pending.length > 0}
@@ -2900,7 +2981,7 @@ export function SessionsView({
                 onClick={() => {
                   pinned.current = true
                   setIsPinned(true)
-                  scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: 'smooth' })
+                  scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: 'auto' })
                 }}
               >
                 <Icon name="arrow-down" size={16} />
@@ -2950,7 +3031,20 @@ export function SessionsView({
           <PlanProposalDock
             version={proposal.version}
             text={proposal.text}
-            onReview={() => setPlanReview({ sid: activeId, version: proposal.version })}
+            onOpen={() => openPlan(false)}
+            onReview={() => openPlan(true)}
+          />
+        )}
+
+        {/* A confirmed plan runs as a background round. Without this line the
+            composer showed nothing at all between "开始实施" and the first
+            transcript message, which is exactly what a hang looks like. */}
+        {activeId && !proposal && controlState?.implementation && (
+          <PlanRunningDock
+            phase={controlState.implementation.phase}
+            detail={controlState.implementation.detail}
+            onTask={controlState.implementation.task_id ? () => openTaskInPlace(controlState.implementation!.task_id!) : undefined}
+            onStop={controlState.implementation.round ? () => void stopPlanRound(controlState.implementation!.round) : undefined}
           />
         )}
 
@@ -2968,6 +3062,10 @@ export function SessionsView({
             as a single control rather than a field with a toolbar loose
             underneath it — the focus ring belongs to the whole thing. */}
         <form class="composer" onSubmit={send}>
+          {newChatPage && <div class="new-chat-intro">
+            <ComposerPanda working={false} />
+            <h2 class="new-chat-heading">{t('sessions.hello')}</h2>
+          </div>}
           <div
             class={`composer-box${busy ? ' composer-running' : ''}${dropping ? ' composer-dropping' : ''}`}
             onDragOver={(e) => {
@@ -2990,6 +3088,24 @@ export function SessionsView({
               addFiles([...(e.dataTransfer?.files ?? [])])
             }}
           >
+            <div class="composer-head">
+              {newChatPage && (
+                <DirButton
+                  value={draftDir}
+                  label={draftDir ? t('sessions.chooseDir') : draftProject || t('sessions.optionalDir')}
+                  onChange={setPickedDir}
+                  allowClear={!!pickedDir}
+                  clearLabel={draftProject ? t('sessions.resetDir') : undefined}
+                  hint={t('sessions.hint')}
+                  disabled={busy}
+                />
+              )}
+              {newChatPage ? (
+                <RosterPicker value={team} onChange={pickTeam} onManage={() => navigateView('settings:agents')} />
+              ) : (
+                <ComposerPet working={busy} team={team} onTeam={pickTeam} onManage={() => navigateView('settings:agents')} />
+              )}
+            </div>
             {dropping && <div class="attach-drop-hint">{t('sessions.attachDrop')}</div>}
             <ComposerInput
               composer={composer}
@@ -2997,11 +3113,11 @@ export function SessionsView({
               pendingCount={pending.length}
               placeholder={
                 busy && goalActive(shownGoal)
-                  ? ''
+                  ? t('sessions.placeholder')
                   : t(armed === 'goal' ? 'sessions.goal.hint'
                     : armed === 'plan' ? 'sessions.plan.hint'
                     : busy ? 'sessions.placeholderRunning'
-                    : 'sessions.placeholder')
+                    : newChatPage ? 'sessions.newPrompt' : 'sessions.placeholder')
               }
               completeShown={completeShown}
               completeIdx={completeIdx}
@@ -3029,10 +3145,10 @@ export function SessionsView({
               <AttachMenu
                 onInsert={insertMentions}
                 onAttach={addFiles}
-                project={session?.project || activeProject || ''}
+                project={session?.project || (newChatPage ? contextProject : activeProject)}
               />
               <PermissionPicker value={permission} onChange={pickPermission} />
-              {(armed === 'goal' || goalEditor?.sid === activeId) && <button type="button" class="composer-goal-trigger" title={t('sessions.goal.hint')} onClick={() => { setGoalEditor(null); setArmed(null); if (goalDraft !== null) removeModeCommand() }}><Icon name="target" size={16} />{t('sessions.goal.label')}</button>}
+              <button class="composer-goal-trigger" type="button" aria-expanded={dockShown && dockTab === 'goal'} aria-controls="goal-panel" onClick={showGoalPanel}><Icon name="target" size={16} />{t('sessions.goal.label')}{shownGoal && !completionDismissed && !dockShown && <span class="goal-trigger-phase">{t(shownGoal.waitingFor === 'input' && goalActive(shownGoal) ? 'goal.waitInput' : 'sessions.goal.state.' + shownGoal.phase)}</span>}</button>
               {(armed === 'plan' || controlState?.planning) && <button type="button" class="composer-goal-trigger composer-plan-trigger" aria-pressed={armed === 'plan'} title={t(armed === 'plan' && !controlState?.planning ? 'sessions.plan.hint' : 'sessions.plan.exit')} onClick={() => { if (controlState?.planning) void exitPlanning(); setArmed(null); if (planArgument(input) !== null) removeModeCommand() }}><Icon name="lightbulb" size={16} />{t('sessions.plan.label')}</button>}
               {/* The model switch, immediately left of Send — the row's right
                   edge is where you reach for before sending, and "which model"
@@ -3052,67 +3168,16 @@ export function SessionsView({
                   {t('sessions.stop')}
                 </button>
               ) : (
-                <button class="btn primary" type="submit" disabled={!input.trim() && pending.length === 0}>
+                <button class="btn primary" type="submit" disabled={loading || (!input.trim() && pending.length === 0)}>
                   {t('sessions.send')}
                 </button>
               )}
             </div>
-            {goalEditor?.sid === activeId && <section class="composer-proposal">
-              <textarea aria-label={t('sessions.goal.edit')} value={goalEditor.text} onInput={e => setGoalEditor({ ...goalEditor, text: e.currentTarget.value })} />
-              <button type="button" disabled={!goalEditor.text.trim()} onClick={async () => {
-                try {
-                  await api.controlConversation(goalEditor.sid, { action: 'edit', goal_id: goalEditor.id, objective: goalEditor.text })
-                  setGoalEditor((current) => current === goalEditor ? null : current)
-                  void refreshControl(goalEditor.sid).catch(() => {})
-                } catch (error) { toastError(error) }
-              }}>{t('common.save')}</button>
-              <button type="button" onClick={() => setGoalEditor(null)}>{t('common.cancel')}</button>
-            </section>}
-            {legacyGoal && <section class="composer-proposal"><span>{t('sessions.goal.legacy')}</span><button type="button" onClick={async () => {
-              if (!activeId) return
-              try { await api.controlConversation(activeId, { action: 'create', objective: legacyGoal.text }); const cached = JSON.parse(sessionStorage.getItem('openpanda.composerGoals') || '{}'); delete cached[activeId]; sessionStorage.setItem('openpanda.composerGoals', JSON.stringify(cached)); await refreshControl(activeId) } catch (error) { toastError(error) }
-            }}>{t('sessions.goal.restore')}</button></section>}
-            <div class="composer-head">
-              <ComposerPet
-                working={busy}
-                team={team}
-                onTeam={pickTeam}
-                onManage={() => navigateView('settings:agents')}
-              />
-              {shownGoal && (
-                <GoalBar goal={shownGoal} pending={pendingGoalAction === shownGoal.id}
-                   onStart={() => {
-                     if (activeId && goalNeedsMoreBudget(shownGoal)) setBudgetGoal({ sid: activeId, id: shownGoal.id })
-                     else void changeGoal('resume')
-                   }}
-                  onPause={() => void changeGoal('pause')}
-                  onCancel={() => void changeGoal('clear')}
-                  onStop={() => void changeGoal('stop')}
-                  onEdit={openGoalEditor}
-                />
-              )}
-            </div>
+
           </div>
-          {/* Below the box, on one line: where the thread will run, then the
-              keyboard legend. The roster used to sit here too; it now hangs
-              off the pet (composer-pet.tsx), so this row is footer furniture
-              on every surface — a thread that exists shows its directory
-              read-only, which keeps the box above it on the same line as
-              新对话 and 工作空间 instead of letting it drop a row height when
-              the reader opens history. A thread with a directory but no legend
-              keeps the row; a thread with neither has no footer at all. */}
           {newChatPage ? (
-            <div class="composer-foot">
-              <DirButton
-                value={pickedDir}
-                onChange={(path) => {
-                  setPickedDir(path)
-                  setDirTouched(true)
-                }}
-                label={t('sessions.chooseDir')}
-                disabled={busy}
-              />
-              <p class="composer-shortcut-hint">{t('sessions.sendShortcut')}</p>
+            <div class="new-chat-suggestions" inert={!!input.trim() || pending.length > 0}>
+              <ChatStarters onPick={useStarter} />
             </div>
           ) : (
             <div class="composer-foot">
@@ -3129,23 +3194,6 @@ export function SessionsView({
             </div>
           )}
         </form>
-        {proposal && planReview && planReview.sid === activeId && planReview.version === proposal.version && (
-          <PlanProposalDialog
-            {...proposal}
-            busy={busy}
-            onClose={() => setPlanReview(null)}
-            onConfirm={() => confirmProposal(planReview)}
-          />
-        )}
-        {budgetGoal && budgetGoal.sid === activeId && shownGoal?.id === budgetGoal.id && goalNeedsMoreBudget(shownGoal) && (
-          <GoalBudgetDialog
-            used={shownGoal.tokens ?? 0}
-            limit={shownGoal.tokenBudget ?? 0}
-            pending={pendingGoalAction === shownGoal.id}
-            onClose={() => setBudgetGoal((current) => current === budgetGoal ? null : current)}
-            onResume={(value) => changeGoal('resume', undefined, value)}
-          />
-        )}
         {/* The pill's floating copy and its lightbox. Fixed-position and
             outside the box, so neither the composer's own edge nor the
             transcript's scroller can clip them. */}
@@ -3262,10 +3310,46 @@ export function SessionsView({
           if (sideMounted) setSideEpoch((n) => n + 1)
         }}
       >
+        {dockShown && dockTab === 'goal' && <section id="goal-panel" class="goal-panel">
+          {activeId && !controlState ? <p role="status">{t(controlFailed ? 'goal.reconnecting' : 'common.loading')}</p> : <GoalPane key={activeId ?? 'draft'} goal={shownGoal} draft={goalDrafts[activeId ?? '']} editing={!!shownGoal && editingGoal === shownGoal.id}
+            onReply={() => { setDockOpen(false); composer.current?.focus() }}
+            onDraft={text => setGoalDrafts(previous => ({ ...previous, [activeId ?? '']: text }))}
+            onEdit={() => { if (shownGoal) setEditingGoal(shownGoal.id) }} onCancelEdit={() => { setEditingGoal(''); setGoalDrafts(previous => { const next = { ...previous }; delete next[activeId ?? '']; return next }) }}
+            pending={savingGoal || !!pendingGoalAction} canStart={!busy}
+            reviewId={shownGoal?.round ? sessionTasks?.find(task => task.operation_id === shownGoal.round && task.state === 'review')?.id : undefined}
+            onCreate={async text => { setSavingGoal(true); try { await send(undefined, undefined, undefined, false, text) } finally { setSavingGoal(false) } }}
+            onSave={async text => { if (await changeGoal('edit', text)) { setEditingGoal(''); setGoalDrafts(previous => { const next = { ...previous }; delete next[activeId ?? '']; return next }) } }}
+            onControl={(action,budget) => changeGoal(action, undefined, budget)} />}
+            {legacyGoal && <section class="composer-proposal"><span>{t('sessions.goal.legacy')}</span><button type="button" onClick={async () => {
+              if (!activeId) return
+              try { await api.controlConversation(activeId, { action: 'create', objective: legacyGoal.text }); const cached = JSON.parse(sessionStorage.getItem('openpanda.composerGoals') || '{}'); delete cached[activeId]; sessionStorage.setItem('openpanda.composerGoals', JSON.stringify(cached)); await refreshControl(activeId) } catch (error) { toastError(error) }
+            }}>{t('sessions.goal.restore')}</button></section>}
+        </section>}
         {reportShown && selectedReport && reportSelection && (
           <div class="dock-pane">
             <RoundReportPane key={`${activeId}:${selectedReport.key}`} round={selectedReport} selection={reportSelection}
               onOpenTask={openTaskInPlace} onPreview={openTaskPreview} onClose={closeRoundReport} />
+          </div>
+        )}
+        {/* The proposal, in the column beside the thread it is about. Its
+            decision row stays at the foot of the pane, so "read it", "say
+            what to change" and "start" are one surface rather than a modal
+            the reader has to dismiss first. */}
+        {planShown && proposal && activeId && (
+          <div class="dock-pane">
+            <PlanPane
+              key={activeId + proposal.version}
+              onReview={() => setReviewVersion(proposal.version)}
+              onDismiss={() => setReviewVersion(null)}
+              version={proposal.version}
+              text={proposal.text}
+              resumesGoal={proposal.resumesGoal}
+              busy={busy}
+              review={reviewVersion === proposal.version}
+              onAdjust={adjustPlan}
+              onConfirm={() => confirmProposal({ sid: activeId, version: proposal.version })}
+              onClose={() => setDockTab('')}
+            />
           </div>
         )}
         {/* The three tool pages. They are panes like files/browser/side, not

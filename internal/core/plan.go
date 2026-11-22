@@ -318,7 +318,7 @@ func (c *Core) startPlan(ctx context.Context, p plan.Plan, q QueueSpec, req *Exe
 		if title == "" {
 			title = st.ID
 		}
-		in := TaskInput{Title: title, Project: q.Project, Intent: st.Intent, SpecJSON: st.SpecJSON, Requires: st.Requires, ResourceJSON: string(resourceJSON), SessionID: q.SessionID, TargetNode: st.Node, Authorized: q.Authorized}
+		in := TaskInput{Complexity: st.Complexity, Title: title, Project: q.Project, Intent: st.Intent, SpecJSON: st.SpecJSON, Requires: st.Requires, ResourceJSON: string(resourceJSON), SessionID: q.SessionID, TargetNode: st.Node, Authorized: q.Authorized}
 		in.SpecJSON, err = planStageObjectives(p, in.SpecJSON)
 		if err != nil {
 			return "", false, fmt.Errorf("stage %s objectives: %w", st.ID, err)
@@ -356,7 +356,7 @@ func (c *Core) startPlan(ctx context.Context, p plan.Plan, q QueueSpec, req *Exe
 			keys = []string{"plan:" + planID + ":" + st.ID}
 		}
 		keys = mergeActuatorKeys(keys, st.Requires, st.SpecJSON)
-		prepared = append(prepared, Task{TaskID: id, AttemptID: attempt, Title: title, Project: q.Project, State: StateSubmitted, OwnerNode: c.nodeID, Chain: []string{c.nodeID}, Intent: d.Intent, SpecJSON: d.SpecJSON, ContextType: d.ContextType, ContextHash: hash, ResourceJSON: d.ResourceJSON, Requires: d.Requires, Authorized: q.Authorized, Priority: q.Priority, SessionID: q.SessionID, ResourceKeys: keys, Scheduled: true, PlanID: planID, StageID: st.ID, Needs: st.Needs, Inputs: source, TokenBudget: max(0, budget)})
+		prepared = append(prepared, Task{Complexity: st.Complexity, TaskID: id, AttemptID: attempt, Title: title, Project: q.Project, State: StateSubmitted, OwnerNode: c.nodeID, Chain: []string{c.nodeID}, Intent: d.Intent, SpecJSON: d.SpecJSON, ContextType: d.ContextType, ContextHash: hash, ResourceJSON: d.ResourceJSON, Requires: d.Requires, Authorized: q.Authorized, Priority: q.Priority, SessionID: q.SessionID, ResourceKeys: keys, Scheduled: true, PlanID: planID, StageID: st.ID, Needs: st.Needs, Inputs: source, TokenBudget: max(0, budget)})
 	}
 	// A scheduler can see either no rows or the fully configured graph.
 	publishedID, existing, err := c.store.createPlanStagesForRequest(ctx, prepared, p.Goal, partial, q.WorkDir, req)

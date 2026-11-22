@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/defense"
+	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
 // cleanCredentialEnv isolates the credential probes from the developer's
@@ -643,6 +645,49 @@ func TestClaudeProviderRescueWithStartupSession(t *testing.T) {
 				}
 			} else if calls != 2 || !res.OK || !res.Injected {
 				t.Fatalf("expected injected recovery after startup 429: calls=%d result=%+v", calls, res)
+			}
+		})
+	}
+}
+
+func TestOpenCodeConsoleReconnectWithEmptySession(t *testing.T) {
+	cleanCredentialEnv(t)
+	card := ledger.Card{Agents: map[string]ledger.Agent{
+		"opencode": {Adapter: "opencode.py", Capabilities: []string{"coding"}},
+		"codex":    {Adapter: "codex.py", Capabilities: []string{"coding"}},
+	}}
+	refusal := AgentResult{ExitCode: 1, Result: "provider failure: Reconnect OpenCode Console to continue.", SessionID: "ses_startup", ProviderStartupFailure: true}
+	for _, tc := range []struct {
+		name       string
+		alternates []string
+		edit       func(*AgentResult)
+		wantCalls  int
+	}{
+		{"pinned uses configured model", nil, nil, 2},
+		{"automatic uses native alternate", []string{"codex"}, nil, 2},
+		{"tool checkpoint", nil, func(r *AgentResult) { r.WorkObserved = true }, 1},
+		{"billed checkpoint", nil, func(r *AgentResult) { r.Usage = &UsageDetail{InputTokens: 3} }, 1},
+		{"existing session", nil, func(r *AgentResult) { r.ProviderStartupFailure = false }, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := NewRouter(card, NewExecutor(), flashModel, config.InjectionConfig{Model: config.InjectionModelAuto}, config.RoutingConfig{})
+			r.SetAgentProber(func(string, ledger.Agent) bool { return true })
+			calls := 0
+			r.SetAdapterProcessRunner(func(_ context.Context, adapter, _, _ string, env []string) AgentResult {
+				calls++
+				if calls == 1 {
+					ar := refusal
+					if tc.edit != nil {
+						tc.edit(&ar)
+					}
+					return ar
+				}
+				injected := slices.Contains(env, "OPENPANDA_INJECTED_MODEL=1")
+				return AgentResult{OK: (len(tc.alternates) == 0 && adapter == "opencode.py" && injected) || (len(tc.alternates) > 0 && adapter == "codex.py" && !injected)}
+			})
+			got := r.Execute(context.Background(), Plan{Kind: "agent", Agent: "opencode", Adapter: "opencode.py", Alternates: tc.alternates}, "job", "", true)
+			if calls != tc.wantCalls || got.OK != (tc.wantCalls == 2) || (!got.OK && got.SessionID != refusal.SessionID) {
+				t.Fatalf("calls=%d result=%+v", calls, got)
 			}
 		})
 	}
@@ -1578,5 +1623,102 @@ func TestInjectionCarriesTheAPIVersionPiCannotAdd(t *testing.T) {
 	prefixed.BaseURL = "https://relay.example.com/openai"
 	if got := effectiveBaseURLFor("pi", "pi.py", prefixed); got != "https://relay.example.com/openai/v1" {
 		t.Fatalf("prefixed base = %q, want /openai/v1", got)
+	}
+}
+
+// The last native candidate cannot speak the configured dialect. Return to
+// the compatible candidate only after both native providers refused the run.
+func TestRescueReturnsToCompatibleCandidate(t *testing.T) {
+	cleanCredentialEnv(t)
+	t.Setenv("ANTHROPIC_API_KEY", "native-anthropic")
+	t.Setenv("OPENAI_API_KEY", "native-openai")
+
+	card := ledger.Card{Agents: map[string]ledger.Agent{
+		"claude_code": {Adapter: "claude_code.py", Capabilities: []string{"coding"}},
+		"codex":       {Adapter: "codex.py", Capabilities: []string{"coding"}},
+	}}
+	r := NewRouter(card, NewExecutor(), testModel,
+		config.InjectionConfig{Model: config.InjectionModelAuto}, config.RoutingConfig{})
+	r.SetAgentProber(func(string, ledger.Agent) bool { return true })
+	var calls []string
+	r.SetAdapterProcessRunner(func(_ context.Context, adapter, _, _ string, env []string) AgentResult {
+		calls = append(calls, adapter)
+		if slices.Contains(env, "OPENPANDA_INJECTED_MODEL=1") {
+			return AgentResult{OK: true, Result: "ran on panda's model"}
+		}
+		// Deliberately not "API Error: …": that wording also trips the
+		// transient-provider retry, which would add a call per attempt and
+		// hide whether the *rescue* ran.
+		return AgentResult{Result: "Unauthorized: invalid api key (HTTP 401)", ExitCode: 1}
+	})
+
+	plan := Plan{Kind: "agent", Agent: "claude_code", Ability: "claude_code",
+		Adapter: "claude_code.py", Tier: defense.TierReversible, Alternates: []string{"codex"}}
+	res := r.Execute(context.Background(), plan, "do the thing", "", true)
+
+	if !res.OK || !res.Injected || res.Agent != "claude_code" || !slices.Equal(calls, []string{"claude_code.py", "codex.py", "claude_code.py"}) {
+		t.Fatalf("rescue order %v, result %+v", calls, res)
+	}
+}
+
+// A single-agent route has no next candidate, so the injection rescue is the
+// only thing left — and there it must still fire.
+func TestRescueStillFiresOnASingleAgentRoute(t *testing.T) {
+	cleanCredentialEnv(t)
+	t.Setenv("ANTHROPIC_API_KEY", "native-anthropic")
+
+	r := injectionRouter(testModel, config.InjectionModelAuto)
+	r.SetAgentProber(func(string, ledger.Agent) bool { return true })
+	calls := 0
+	r.SetAdapterProcessRunner(func(_ context.Context, _, _, _ string, env []string) AgentResult {
+		calls++
+		if slices.Contains(env, "OPENPANDA_INJECTED_MODEL=1") {
+			return AgentResult{OK: true, Result: "ran on panda's model"}
+		}
+		return AgentResult{Result: "Unauthorized: invalid api key (HTTP 401)", ExitCode: 1}
+	})
+	plan := Plan{Kind: "agent", Agent: "claude_code", Ability: "claude_code",
+		Adapter: "claude_code.py", Tier: defense.TierReversible}
+	res := r.Execute(context.Background(), plan, "do the thing", "", true)
+	if !res.OK || !res.Injected || calls != 2 {
+		t.Fatalf("single-candidate route lost its rescue: calls=%d result=%+v", calls, res)
+	}
+}
+
+func TestPreflightUsesInjectedEndpointWhenNativeIsUnreachable(t *testing.T) {
+	cleanCredentialEnv(t)
+	t.Setenv("ANTHROPIC_API_KEY", "native")
+	t.Setenv("ANTHROPIC_BASE_URL", "https://native.invalid")
+	r := NewRouter(ledger.Card{Agents: map[string]ledger.Agent{"claude_code": {Adapter: "claude_code.py", InstallCheck: "which go"}}}, NewExecutor(), testModel, config.InjectionConfig{Model: config.InjectionModelAuto}, config.RoutingConfig{})
+	r.SetEndpointProber(func(p ProbeSpec) ProbeVerdict {
+		return ProbeVerdict{OK: p.APIKey == testModel.APIKey, Detail: "test transport"}
+	})
+	plan, err := r.DispatchRoute([]string{"agent:claude_code"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	r.SetAdapterProcessRunner(func(_ context.Context, _, _, _ string, env []string) AgentResult {
+		calls++
+		return AgentResult{OK: slices.Contains(env, "OPENPANDA_INJECTED_MODEL=1")}
+	})
+	if res := r.Execute(context.Background(), plan, "task", "", true); !res.OK || !res.Injected || calls != 1 {
+		t.Fatalf("calls=%d result=%+v", calls, res)
+	}
+	if res := r.Execute(WithModelCredsWithheld(context.Background()), plan, "task", "", true); res.OK || calls != 1 {
+		t.Fatalf("withheld route ran: %+v", res)
+	}
+}
+
+func TestCodexExplicitResponsesProviderInjection(t *testing.T) {
+	cleanCredentialEnv(t)
+	model := config.ModelConfig{APIType: config.APITypeResponses, BaseURL: "https://relay.example/v1", Model: "model", APIKey: "fixture"}
+	r := injectionRouter(model, config.InjectionModelAuto)
+	if !r.InjectionDecision("codex", "codex.py").Inject {
+		t.Fatal("Responses-compatible model not available to Codex")
+	}
+	p := r.agentTarget("codex", ledger.Agent{Adapter: "codex.py"})
+	if p.APIType != config.APITypeResponses || p.Endpoint != model.BaseURL || p.APIKey != model.APIKey {
+		t.Fatal("probe did not use the injected Responses provider")
 	}
 }

@@ -93,14 +93,14 @@ Publicado en v0.1.6. Un solo hilo: una ejecución es honesta sobre lo que termin
 | Línea | Descripción | Estado |
 |---|---|---|
 | **Orquestación multiagente** | Contratar y dirigir varios agentes de terminal: despacho, supervisión, conmutación por error, aprobación | ✅ Enfoque actual |
-| **Colaboración multidispositivo** | Enrutado y planificación de tareas entre nodos sobre una malla P2P | ✅ Publicado hasta v0.1.4: AEAD por sesión, emparejamiento tipo Bluetooth, niveles de confianza, relevos multi-salto y ejecución paralela del mismo proyecto mediante ámbitos de ruta y worktrees aislados |
+| **Colaboración multidispositivo** | Enrutado y planificación de tareas entre nodos sobre una malla P2P | ✅ Publicado hasta v0.1.6: AEAD por sesión, emparejamiento tipo Bluetooth, niveles de confianza, relevos multi-salto y ejecución paralela del mismo proyecto mediante ámbitos de ruta y worktrees aislados |
 
 El detalle por capacidad —qué está verificado, qué solo compilado y los límites conocidos— está en [estado del proyecto](docs/status.md); lo fusionado tras la etiqueta se lista en `[Unreleased]` de [CHANGELOG.md](CHANGELOG.md).
 
 ## 🌟 ¿Qué puede hacer OpenPanda?
 
 ### 1. 🌐 Colaboración multidispositivo P2P heterogénea
-- **Estado multidispositivo (publicado hasta v0.1.4)**: AEAD por sesión, emparejamiento estilo Bluetooth, niveles de confianza, retransmisión multisalto y ejecución paralela en el mismo proyecto mediante ámbitos de ruta y worktrees aislados.
+- **Estado multidispositivo (publicado hasta v0.1.6)**: AEAD por sesión, emparejamiento estilo Bluetooth, niveles de confianza, retransmisión multisalto y ejecución paralela en el mismo proyecto mediante ámbitos de ruta y worktrees aislados.
 - **Descubrimiento LAN + emparejamiento estilo Bluetooth**: Los nodos se encuentran en la LAN con admisión confirmada por huella; `panda pair` incorpora un dispositivo con un código corto confirmado en ambos extremos, y `panda nodes verify` fija la clave Ed25519 de cada par.
 - **Tarjetas de capacidad dinámicas**: Cada nodo declara su perfil de hardware (CPU, GPU, RAM, SO) y herramientas disponibles.
 - **Enrutamiento inteligente de tareas**: Asigna compilaciones pesadas a servidores potentes y tareas de sensores a placas de bajo consumo según capacidad medida; `panda nodes drain` retira un nodo para mantenimiento.

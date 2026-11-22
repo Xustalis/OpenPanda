@@ -329,6 +329,15 @@ func (a queueRunnerAdapter) Run(ctx context.Context, taskID string) {
 	a.c.runScheduled(ctx, taskID)
 }
 
+// The scheduler lifetime ends on shutdown or loss of node ownership. An
+// individual task cancellation or an adapter deadline does not end it.
+type queueLifetimeKey struct{}
+
+func queueStopping(ctx context.Context) bool {
+	lifetime, _ := ctx.Value(queueLifetimeKey{}).(context.Context)
+	return lifetime != nil && lifetime.Err() != nil
+}
+
 // runScheduled executes a task the queue scheduler claimed (queued ->
 // dispatched already done by ClaimLocal): accept it into running and drive
 // the shared retry/review loop. Intent/requires come from the persisted
@@ -376,7 +385,14 @@ func (c *Core) runScheduled(ctx context.Context, taskID string) {
 		c.logger.Warn("queue: preferred device unavailable, running locally",
 			"task", taskID, "preferred", ref)
 	}
-	result, err := c.run(ctx, taskID, t.Intent, t.Requires, nil)
+	runCtx := context.WithValue(ctx, queueLifetimeKey{}, ctx)
+	result, err := c.run(context.WithValue(runCtx, peerFallbackKey{}, !remoteBusiness), taskID, t.Intent, t.Requires, nil)
+	if ctx.Err() != nil {
+		return // startup recovery owns the interrupted row
+	}
+	if result.State == StateDispatched && err == nil {
+		return
+	}
 	if remoteBusiness {
 		// A remote request is recovered by its cloud fence and business
 		// ledger. Kernel retry must not silently create another action.
@@ -572,6 +588,12 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 			"reason", c.enrichDeclineReason(ctx, t.TaskID, decision.Reason))
 		return false
 	}
+	return c.forwardClaimTo(ctx, t, chain, decision, awaitRevival)
+}
+
+func (c *Core) forwardClaimTo(ctx context.Context, t Task, chain []string, decision scheduler.Decision, awaitRevival bool) bool {
+	pinRef := targetNodeOf(t)
+	pinned := pinRef != ""
 	p := bus.TaskDelegatePayload{
 		TaskID:       t.TaskID,
 		ParentID:     t.ParentID,

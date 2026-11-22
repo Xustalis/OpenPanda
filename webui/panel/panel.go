@@ -319,6 +319,7 @@ func New(d Deps) http.Handler {
 		mux.HandleFunc("GET /api/work/tasks/{key}/history", h.workHistory)
 	}
 	if h.taskFlow != nil {
+		mux.HandleFunc("POST /api/work/tasks/{key}/draft", h.firstWorkDraft)
 		mux.HandleFunc("GET /api/work/connections/{id}/spaces/{space}/members", h.connectionMembers)
 		mux.HandleFunc("POST /api/work/connections/{id}/spaces/{space}/tasks", h.createRemoteWork)
 		mux.HandleFunc("GET /api/work/runs", h.workRuns)

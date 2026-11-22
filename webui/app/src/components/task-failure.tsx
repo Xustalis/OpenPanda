@@ -11,10 +11,11 @@ export function isStalledReview(task: Task): boolean {
  * The server supplies it even on brief rows, where events/results are absent. */
 export function taskReviewLabel(task: Task): string {
   if (isStalledReview(task)) return t('detail.stalledReview')
-  if (task.needs_followup) return t('detail.continue')
+  if (task.needs_followup && !task.retry_available && !task.review_cause) return t('detail.continue')
   switch (task.review_cause) {
     case 'rate_limited': return t('detail.failureRateLimited')
     case 'input_rejected': return t('detail.failureInputRejected')
+    case 'authentication_required': return t('goal.authTitle')
     case 'provider_error': return t('detail.failureProvider')
     case 'model_config': return t('detail.reviewCauseModelConfig')
   }
@@ -31,7 +32,8 @@ export function TaskFailureNotice({ task }: { task: Task }) {
   else if (task.review_cause === 'model_config') hint = t('detail.retryModelConfigHint')
   if (!task.retry_available) hint = t(task.review_cause === 'model_config'
     ? 'detail.approveBlockedModelConfig' : 'detail.needsChangedInputHint')
-  if (task.needs_followup) hint = t('detail.continueHint')
+  if (task.needs_followup && !task.retry_available) hint = t('detail.continueHint')
+  if (task.review_cause === 'authentication_required') hint = t('goal.authHint')
   const stalled = isStalledReview(task)
   if (stalled) hint = t('detail.stalledReviewHint')
   return (

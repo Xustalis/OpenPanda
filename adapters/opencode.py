@@ -1151,8 +1151,15 @@ def main():
             # instead of surfacing a provider error the operator has to
             # decode; when no free model remains, the result still says why
             # and the orchestrator's injection rescue takes over.
+            st = e.state
+            usage = st["usage"]
+            # A session handle may exist before the first provider response.
+            # Once the model produced output, changing models and sending the
+            # same prompt again can duplicate tool effects.
+            untouched = not (st["texts"] or st["seen_tool"] or st["model_part"] or
+                             any(usage.values()) or st["cost"])
             retry = ""
-            if not injected:
+            if not injected and untouched:
                 if _looks_like_funds_failure(str(e)) and funds_tries < 2:
                     retry = _funds_retry(model, tried, available)
                     if retry:
@@ -1162,17 +1169,16 @@ def main():
                             % (model or "default", retry))
                 if not retry:
                     retry = _retry_pick(model, tried, prefer_free, req.effort, str(e))
-            st = getattr(e, "state", None) or {}
             if retry:
                 model = retry
                 if st.get("session_id"):
                     resumed = st["session_id"]
                 continue
-            usage = st.get("usage") if isinstance(st.get("usage"), dict) else {}
             harness.emit(False, f"provider failure: {e}", 1,
                          tokens=(usage.get("input_tokens", 0) + usage.get("output_tokens", 0)) or None,
                          cost=st.get("cost"), usage=usage or None,
-                         session_id=st.get("session_id") or None)
+                         session_id=st.get("session_id") or None,
+                         extra={"provider_startup_failure": True} if untouched and not req.resume else None)
             return
         except Unsupported:
             # The help listed --format but the run rejected it: one-shot
@@ -1374,6 +1380,7 @@ def _run_events(cmd, cwd, timeout):
         # first time it reports a terminal status.
         "seen_text": set(),
         "seen_tool": set(),
+        "model_part": False,
         "done_tool": set(),
         "usage": {"input_tokens": 0, "output_tokens": 0},
         "cost": None,
@@ -1540,6 +1547,8 @@ def _fold(ev, state):
     if part is not None:
         pid = str(part.get("id") or len(state["order"]))
         ptype = part.get("type")
+        if ptype in ("reasoning", "tool", "step-finish", "patch"):
+            state["model_part"] = True
         if ptype == "text" and isinstance(part.get("text"), str) and part["text"]:
             if pid not in state["texts"]:
                 state["order"].append(pid)

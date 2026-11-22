@@ -3537,12 +3537,12 @@
   pointer-events: none;
   transition: opacity var(--dur-fast) var(--ease);
 }
-.workdir-btn.has-value:hover .workdir-glyph,
-.workdir-btn.has-value:focus-within .workdir-glyph {
+.workdir-btn.can-clear:hover .workdir-glyph,
+.workdir-btn.can-clear:focus-within .workdir-glyph {
   opacity: 0;
 }
-.workdir-btn.has-value:hover .workdir-clear,
-.workdir-btn.has-value:focus-within .workdir-clear {
+.workdir-btn.can-clear:hover .workdir-clear,
+.workdir-btn.can-clear:focus-within .workdir-clear {
   opacity: 1;
   pointer-events: auto;
 }
@@ -6409,6 +6409,253 @@
   min-width: 0;
   margin-inline: auto;
 }
+/* Before the first message, keep the task and its context in one place. */
+.new-chat-pane {
+  overflow-y: auto;
+  --composer-measure: 760px;
+  background:
+    radial-gradient(ellipse min(44vw, 520px) 190px at 32% 55%, var(--glow-blue), transparent),
+    radial-gradient(ellipse min(42vw, 490px) 185px at 70% 57%, var(--glow-violet), transparent),
+    var(--bg);
+  caret-color: var(--text);
+}
+.new-chat-pane .chat-log { display: none; }
+.new-chat-pane .composer {
+  margin-block: auto;
+  padding-block: 24px;
+}
+.new-chat-intro {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 24px;
+}
+.new-chat-intro .composer-panda {
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 3px;
+  border-radius: 12px;
+  background: var(--bg-chrome);
+  box-shadow: inset 0 0 0 1px var(--border-soft);
+}
+.new-chat-heading {
+  margin: 0;
+  font-size: clamp(24px, 2.6vw, 35px);
+  font-weight: 600;
+  letter-spacing: -.045em;
+  line-height: 1.2;
+}
+.new-chat-pane .composer-box {
+  padding-top: 12px;
+  border-color: var(--composer-edge);
+  background: linear-gradient(155deg, color-mix(in srgb, var(--task-blue) 3%, var(--bg-raised)), var(--bg-raised) 60%);
+  box-shadow: inset 0 1px var(--composer-highlight), var(--shadow-md);
+  transition: border-color 150ms ease, box-shadow 180ms ease;
+}
+.new-chat-pane .composer-box:has(.composer-input:focus) {
+  border-color: color-mix(in srgb, var(--task-blue) 58%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--task-blue) 12%, transparent);
+}
+.new-chat-pane .composer-head {
+  position: static;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px 8px;
+  pointer-events: auto;
+}
+.new-chat-pane .workdir-pick { max-width: 56%; }
+.new-chat-pane .workdir-btn, .roster-trigger {
+  border: 0;
+  border-radius: 8px;
+  background: var(--surface-alpha-sm);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+.new-chat-pane .workdir-open { min-height: 28px; }
+.roster-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 3px 9px;
+}
+.roster-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  padding-inline: 3px;
+  border-radius: 5px;
+  background: var(--text);
+  color: var(--bg);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+.new-chat-pane .wd-panel {
+  top: calc(100% + 6px);
+  bottom: auto;
+  width: min(340px, calc(100vw - 88px));
+  max-height: min(38dvh, 360px);
+}
+.roster-dialog {
+  inset: 0 12px 0 auto;
+  margin: auto 0;
+  width: min(336px, calc(100vw - 24px));
+  padding: 0;
+  max-height: calc(100dvh - 24px);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--bg-raised);
+  color: var(--text);
+  box-shadow: var(--shadow-pop);
+}
+.roster-dialog::backdrop { background: rgb(0 0 0 / 14%); }
+.roster-dialog .team-panel {
+  position: static;
+  width: 100%;
+  max-height: min(580px, calc(100dvh - 28px));
+  padding: 12px;
+  box-shadow: none;
+  border: 0;
+  animation: none;
+}
+.roster-dialog .team-panel-head { display: flex; align-items: center; justify-content: space-between; padding: 0 4px 10px; }
+.roster-dialog .team-panel-label { margin: 0; font-size: var(--text-lg); color: var(--text); font-weight: 600; }
+.roster-dialog .team-row { min-height: 42px; flex-shrink: 0; }
+.roster-dialog .team-row.on { background: color-mix(in srgb, var(--task-blue) 10%, var(--bg-raised)); }
+.roster-dialog .team-check { color: var(--task-blue); }
+
+.roster-dialog .team-duty-dot { background: var(--text-secondary); }
+.roster-dialog .team-hint, .roster-dialog .team-foot { flex: none; }
+@media (min-width: 1100px) {
+  .new-chat-pane:has(.roster-dialog[open]) .composer { margin-right: 348px; }
+}
+@media (max-width: 1099px) {
+  .roster-dialog { inset: 0; margin: auto; }
+}
+@media (max-width: 600px) {
+  .roster-dialog {
+    inset: auto 0 0;
+    margin: 0;
+    width: 100%;
+    max-width: none;
+    border-radius: 20px 20px 0 0;
+  }
+  .roster-dialog .team-panel {
+    max-height: min(72dvh, 580px);
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+}
+.wd-hint {
+  margin: 4px 8px;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+@media (max-width: 520px) {
+  .new-chat-pane .model-select {
+    flex: 1 1 38px;
+    min-width: 0;
+    justify-content: flex-end;
+  }
+  .new-chat-pane .model-select-btn {
+    max-width: 100%;
+  }
+}
+.new-chat-pane .composer-actions .btn.primary:not(:disabled) {
+  background: var(--text);
+  border-color: var(--text);
+  color: var(--bg);
+}
+.new-chat-pane .model-select-name {
+  font-weight: 450;
+  color: var(--text-secondary);
+}
+.new-chat-suggestions { padding-top: 12px; min-height: 64px; }
+.chat-starter .starter-icon { display: none; }
+.new-chat-suggestions .chat-starters {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.new-chat-suggestions .chat-starter {
+  --task-tint: var(--task-blue);
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  text-align: start;
+  background: color-mix(in srgb, var(--task-tint) 3%, var(--bg-raised));
+  border-color: color-mix(in srgb, var(--task-tint) 14%, var(--border-soft));
+  box-shadow: inset 0 1px var(--composer-highlight);
+}
+.new-chat-suggestions .starter-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--task-tint) 14%, var(--bg-raised));
+  color: var(--task-tint);
+}
+.new-chat-suggestions .chat-starter:nth-child(2) { --task-tint: var(--task-violet); }
+.new-chat-suggestions .chat-starter:nth-child(3) { --task-tint: var(--task-amber); }
+@media (hover: hover) {
+  .new-chat-suggestions .chat-starter:hover {
+    background: color-mix(in srgb, var(--task-tint) 8%, var(--bg-raised));
+    border-color: color-mix(in srgb, var(--task-tint) 36%, var(--border));
+  }
+}
+.new-chat-suggestions .starter-icon svg { color: inherit; }
+.new-chat-suggestions .chat-starter > svg { margin-inline-start: auto; flex: none; }
+@media (max-width: 600px) {
+  .new-chat-suggestions .chat-starters { grid-template-columns: 1fr; gap: 4px; }
+  .new-chat-suggestions .chat-starter { padding: 6px 10px; }
+}
+.new-chat-suggestions[inert] {
+  visibility: hidden;
+  opacity: 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .roster-dialog {
+    --roster-offset: translateX(14px);
+    opacity: 0;
+    transform: var(--roster-offset);
+    transition: opacity 140ms ease-in, transform 160ms ease-in,
+      overlay 160ms allow-discrete, display 160ms allow-discrete;
+  }
+  .roster-dialog[open] {
+    opacity: 1;
+    transform: none;
+    transition: opacity 160ms ease-out, transform 220ms cubic-bezier(.2,.7,.2,1);
+  }
+  .roster-dialog::backdrop {
+    opacity: 0;
+    transition: opacity 160ms ease, display 160ms allow-discrete, overlay 160ms allow-discrete;
+  }
+  .roster-dialog[open]::backdrop { opacity: 1; }
+  @starting-style {
+    .roster-dialog[open] { opacity: 0; transform: var(--roster-offset); }
+    .roster-dialog[open]::backdrop { opacity: 0; }
+  }
+  .roster-dialog .team-check, .roster-count { animation: roster-select 145ms ease-out; }
+  .new-chat-pane .composer { transition: margin-right 220ms cubic-bezier(.2,.7,.2,1); }
+  .new-chat-suggestions { transition: opacity 140ms ease-out, visibility 140ms; }
+  .roster-trigger > svg:last-child { transition: rotate 160ms ease-out; }
+  .roster-trigger[aria-expanded="true"] > svg:last-child { rotate: 180deg; }
+}
+@media (max-width: 1099px) and (prefers-reduced-motion: no-preference) {
+  .roster-dialog { --roster-offset: translateY(8px); }
+}
+@media (max-width: 600px) and (prefers-reduced-motion: no-preference) {
+  .roster-dialog { --roster-offset: translateY(20px); }
+}
+@keyframes roster-select {
+  from { opacity: 0; transform: scale(.88); }
+  to { opacity: 1; transform: scale(1); }
+}
 .session-chat-pane .chat-rail-wrap { left: 1px; }
 .session-chat-pane .chat-rail { padding-inline: 0; }
 .session-chat-pane .chat-rail-tick { max-width: 8px; }
@@ -6634,3 +6881,12 @@
     max-width: 320px;
   }
 }
+
+.chat-title-button { display: inline-flex; align-items: center; gap: 7px; min-width: 0; padding: 4px 7px; margin-inline-start: -7px; border: 0; border-radius: 7px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.chat-title-button:hover, .chat-title-button:focus-visible { background: var(--bg-hover); }
+.chat-title-button .chat-title-edit-icon { opacity: .6; flex: none; }
+.history-count { font-size: var(--text-xs); color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.thread-group-head .history-caret { flex: none; opacity: .65; transition: transform var(--dur-fast); }
+.thread-group-head[aria-expanded=true] .history-caret { transform: rotate(90deg); }
+.thread-item.active .thread-title { font-weight: 600; }
+.bubble-slot-row.slot-status .status-line { padding: 4px 9px; border-radius: 8px; background: color-mix(in srgb,var(--task-blue) 7%,var(--bg-raised)); color: var(--text-secondary); }

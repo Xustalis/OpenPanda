@@ -251,6 +251,9 @@ func ValidatePlanSpec(p *PlanSpec) error {
 	}
 	seen := make(map[string]bool, len(p.Stages))
 	for i, s := range p.Stages {
+		if !(s.Complexity >= 0 && s.Complexity <= 1) {
+			return fmt.Errorf("entry: plan.stages[%d] complexity outside [0,1]", i)
+		}
 		if err := ValidateCoordination(s.Coordination); err != nil {
 			return fmt.Errorf("entry: plan.stages[%d]: %w", i, err)
 		}

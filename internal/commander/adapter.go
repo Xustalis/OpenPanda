@@ -331,6 +331,19 @@ func WithComplexity(ctx context.Context, c float64) context.Context {
 // sessionKey requests the adapter's interactive session mode.
 type sessionKey struct{}
 
+// A single-agent route may rescue inline. A multi-agent route schedules
+// provider retries itself so all native candidates get their turn first.
+type injectionRescueKey struct{}
+
+func withInjectionRescue(ctx context.Context, allowed bool) context.Context {
+	return context.WithValue(ctx, injectionRescueKey{}, allowed)
+}
+
+func injectionRescueAllowed(ctx context.Context) bool {
+	allowed, ok := ctx.Value(injectionRescueKey{}).(bool)
+	return !ok || allowed
+}
+
 // WithSessionMode asks the adapter to keep the agent process alive across
 // turns. Only set for adapters whose registry entry declares
 // Capabilities.SupportsSession.
@@ -2178,9 +2191,17 @@ func (s *agentSession) await(ctx context.Context) AgentResult {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			code = 124
 		}
+		detail := s.stderr.diag()
+		if detail == "" {
+			if ctx.Err() != nil {
+				detail = ctx.Err().Error()
+			} else {
+				detail = err.Error()
+			}
+		}
 		return AgentResult{
 			OK: false, ExitCode: code,
-			Result:    security.Redact("adapter session ended: " + s.stderr.diag()),
+			Result:    security.Redact("adapter session ended: " + detail),
 			SessionID: s.stderr.session(),
 		}
 	}

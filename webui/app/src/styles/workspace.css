@@ -926,8 +926,9 @@
      empty with one or two machines on it, and a ruled surface reads as canvas
      where a blank one reads as a rendering failure. `local` keeps the dots
      travelling with the panels when the fleet outgrows the pane. */
-  background-image: radial-gradient(circle at 1px 1px, var(--border-soft) 1px, transparent 0);
-  background-size: 22px 22px;
+  background-image: radial-gradient(circle at 1px 1px, var(--border-soft) 1px, transparent 0),
+    radial-gradient(ellipse at 28% 30%, color-mix(in srgb, var(--glow-blue) 45%, transparent), transparent 65%);
+  background-size: 22px 22px, 100% 100%;
   background-attachment: local;
 }
 
@@ -1136,25 +1137,12 @@
   border-style: dashed;
   background: var(--bg-inset);
 }
-/* The tint rides on the raised surface rather than on the page: composited
-   straight onto the page the dark theme turns a panel into a coloured block. */
-.ws-panel[data-form='laptop'],
-.ws-panel[data-form='desktop'] {
-  background-color: var(--bg-raised);
-  background-image: linear-gradient(var(--semantic-good-soft), var(--semantic-good-soft));
-  border-color: var(--semantic-good-border);
+.ws-panel {
+  --device-ink: var(--task-blue);
+  background-image: linear-gradient(135deg, color-mix(in srgb, var(--device-ink) 8%, transparent), transparent 62%);
 }
-.ws-panel[data-form='mini'] {
-  background-color: var(--bg-raised);
-  background-image: linear-gradient(var(--accent-2-soft), var(--accent-2-soft));
-  border-color: var(--accent-2-border);
-}
-.ws-panel[data-form='server'],
-.ws-panel[data-form='vm'] {
-  background-color: var(--bg-raised);
-  background-image: linear-gradient(var(--semantic-info-soft), var(--semantic-info-soft));
-  border-color: var(--semantic-info-border);
-}
+.ws-panel[data-form='mini'] { --device-ink: var(--task-amber); }
+.ws-panel:is([data-form='server'], [data-form='vm']) { --device-ink: var(--task-violet); }
 /* Selection is a stronger statement than the machine-class tint. Keeping
    these after the form rules also makes the two endpoints readable at a
    glance instead of relying on the hairline alone. */
@@ -1753,3 +1741,7 @@
     animation: none;
   }
 }
+
+.ws-panel-glyph { color: var(--device-ink); }
+.ws-page .composer-box { border-color: var(--composer-edge); box-shadow: var(--section-shadow); }
+.ws-page .composer-box:focus-within { border-color: var(--task-blue); }

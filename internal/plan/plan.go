@@ -59,6 +59,7 @@ func ValidID(s string) bool {
 // needing a GPU cannot land on the Pi because of what it declares here, not
 // because of anything plan-specific.
 type Stage struct {
+	Complexity float64
 	// ID is the stage's name within the plan ("develop", "train"). It is what
 	// Needs refers to, and it is persisted on the task row.
 	ID string
@@ -137,6 +138,9 @@ func Validate(p Plan) error {
 		}
 		if strings.TrimSpace(s.Intent) == "" {
 			return fmt.Errorf("plan: stage %q has no intent", id)
+		}
+		if !(s.Complexity >= 0 && s.Complexity <= 1) {
+			return fmt.Errorf("plan: stage %q complexity outside [0,1]", id)
 		}
 		if r := s.Resources; r.CPU < 0 || r.RAMGB < 0 || r.GPUVRAMGB < 0 {
 			// A negative request is never satisfiable; rejected here so it

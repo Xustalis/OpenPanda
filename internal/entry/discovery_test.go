@@ -32,6 +32,9 @@ func TestDiscoveryModelLoopAndSchemaCache(t *testing.T) {
 		names := map[string]bool{}
 		for _, s := range req.Tools {
 			names[s.Name] = true
+			if s.Name == "inspect_machine" && s.Description != "inspect memory pressure on this machine" {
+				t.Error("lost tool description during discovery")
+			}
 		}
 		if !names["task_submit"] || !names["tool_search"] {
 			t.Error("lost universal dispatch/discovery bridge")
@@ -69,6 +72,9 @@ func TestDiscoveryModelLoopAndSchemaCache(t *testing.T) {
 		result, err := tool.Run(context.Background(), out.Tool.Arguments)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if i == 0 && (!strings.Contains(result, "inspect_machine") || strings.Contains(result, "inspect memory pressure")) {
+			t.Fatalf("expected tool name without a duplicate schema description: %s", result)
 		}
 		turns = append(turns, Turn{Role: "user", Content: result})
 		if i == 1 && result != "memory is healthy" {

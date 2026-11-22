@@ -25,6 +25,11 @@ var (
 	ErrPrecondition         = errors.New("task revision and idempotency key are required")
 	ErrCursorExpired        = errors.New("task sync cursor expired")
 	ErrAuthorizationChanged = errors.New("task authorization changed during sync")
+	// ErrAutomationNotAuthorized is a local refusal, not a grant change: the
+	// space automation policy never enabled this operation. It must not be
+	// reported as an authorization change, which sends the reader looking for a
+	// revoked grant instead of the policy switch that actually blocks the run.
+	ErrAutomationNotAuthorized = errors.New("local automation policy does not authorize this operation")
 )
 
 // Key components are complete provider identifiers, never display names or

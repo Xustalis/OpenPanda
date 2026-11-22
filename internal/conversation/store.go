@@ -51,6 +51,21 @@ type State struct {
 	Proposal         string `json:"proposal,omitempty"`
 	ConfirmedVersion int64  `json:"confirmed_version"`
 	Goal             *Goal  `json:"goal,omitempty"`
+	// Implementation is the live phase of a confirmed proposal that is being
+	// executed right now, nil otherwise. It is not stored in this table: the
+	// service fills it from the session's running operation so the console
+	// has something to say between "confirm" and the first transcript line.
+	Implementation *Implementation `json:"implementation,omitempty"`
+}
+
+// Implementation is the read-only progress report of a plan round. Phase is a
+// stable token the console localizes; Detail is the caller's already-readable
+// qualifier and is never translated.
+type Implementation struct {
+	Round  string `json:"round"`
+	Phase  string `json:"phase"`
+	Detail string `json:"detail,omitempty"`
+	TaskID string `json:"task_id,omitempty"`
 }
 
 type Store struct{ DB *sql.DB }
@@ -65,12 +80,24 @@ func scanGoal(row interface{ Scan(...any) error }) (*Goal, error) {
 
 func (s *Store) Get(ctx context.Context, sid string) (State, error) {
 	var st State
+	// Planning is read but no longer gates the proposal: leaving the lens
+	// must not hide the plan the user was reading. Only "already confirmed"
+	// hides it, because from then on the transcript owns the plan.
 	err := s.DB.QueryRowContext(ctx, "SELECT planning,proposal_version,proposal,confirmed_version,mode_generation FROM conversation_controls WHERE session_id=? AND deleted=0", sid).Scan(&st.Planning, &st.ProposalVersion, &st.Proposal, &st.ConfirmedVersion, &st.ModeGeneration)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return st, err
 	}
-	if !st.Planning || st.ProposalVersion <= st.ConfirmedVersion {
+	if st.ProposalVersion <= st.ConfirmedVersion {
 		st.Proposal = ""
+	}
+	if st.ConfirmedVersion > 0 {
+		var run Implementation
+		err = s.DB.QueryRowContext(ctx, "SELECT round_id,status FROM conversation_plan_runs WHERE session_id=? AND version=? AND status IN ('pending','running')", sid, st.ConfirmedVersion).Scan(&run.Round, &run.Phase)
+		if err == nil {
+			st.Implementation = &run
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return st, err
+		}
 	}
 	g, err := scanGoal(s.DB.QueryRowContext(ctx, "SELECT "+goalColumns+" FROM conversation_goals WHERE session_id=? AND status!='cleared'", sid))
 	if err == nil {
@@ -138,9 +165,15 @@ func (s *Store) SetPlanning(ctx context.Context, sid string, enabled bool) error
 	if err = ensure(ctx, tx, sid); err != nil {
 		return err
 	}
+	// The proposal is deliberately not touched here. It used to be blanked
+	// whenever planning flipped, which meant one click on the Plan chip
+	// deleted the plan the user was about to approve. Leaving the lens keeps
+	// the text; entering it again starts a new planning mode and retires the
+	// previous mode's proposal (below), so a stale plan can never be
+	// confirmed in the mode that replaced it.
 	if _, err = tx.ExecContext(ctx, `UPDATE conversation_controls
 SET mode_generation=mode_generation+CASE WHEN planning!=? THEN 1 ELSE 0 END,
-    proposal=CASE WHEN planning!=? THEN '' ELSE proposal END,
+    proposal=CASE WHEN ? AND planning=0 THEN '' ELSE proposal END,
     planning=?
 WHERE session_id=?`, enabled, enabled, enabled, sid); err != nil {
 		return err
@@ -219,6 +252,12 @@ func (s *Store) SaveProposal(ctx context.Context, sid, text string, expected ...
 
 // Confirm consumes exactly the current proposal once and queues it for
 // implementation in this session.
+//
+// It no longer requires planning=1. The proposal is a document the user owns:
+// toggling the lens off is a change of view, not a decision to discard it, so
+// approving it after leaving Plan is allowed. Entering Plan again retires the
+// text (SetPlanning), which is what keeps a superseded proposal from being
+// confirmed by the mode that replaced it.
 func (s *Store) Confirm(ctx context.Context, sid string, version int64) (string, error) {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -226,7 +265,7 @@ func (s *Store) Confirm(ctx context.Context, sid string, version int64) (string,
 	}
 	defer tx.Rollback()
 	var text string
-	err = tx.QueryRowContext(ctx, "UPDATE conversation_controls SET planning=0,confirmed_version=? WHERE session_id=? AND deleted=0 AND planning=1 AND proposal_version=? AND confirmed_version<? AND proposal!='' RETURNING proposal", version, sid, version, version).Scan(&text)
+	err = tx.QueryRowContext(ctx, "UPDATE conversation_controls SET planning=0,confirmed_version=? WHERE session_id=? AND deleted=0 AND proposal_version=? AND confirmed_version<? AND proposal!='' RETURNING proposal", version, sid, version, version).Scan(&text)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ErrConflict
 	}
