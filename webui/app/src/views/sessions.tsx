@@ -127,12 +127,14 @@ function promptLabel(text: string): string {
  * and one worktree-isolated conversation on the right, streaming over SSE. */
 export function SessionsView({
   activeId,
+  tourActive,
   project,
   ws,
   onOpenSession,
   onLogout,
 }: {
   activeId: string | null
+  tourActive: boolean
   project?: string | null
   /** The workspace a brand-new thread was handed in from (the history's
    *  per-directory "+"), by project name. It seeds the composer's directory
@@ -1586,6 +1588,7 @@ export function SessionsView({
     // untouched — clearing them here would eat text typed while the answer was
     // still streaming.
     const fromComposer = queued === undefined && sidebarObjective === undefined
+    if (tourActive && (fromComposer || sidebarObjective !== undefined)) return
     if (fromComposer && loading) return
     const typed = (queued ?? input).trim()
     // An armed chip owns the whole draft; a continuation is never a command.
@@ -3085,6 +3088,7 @@ export function SessionsView({
             <div class="composer-head">
               {newChatPage && (
                 <DirButton
+                  tourTarget="workdir"
                   value={draftDir}
                   label={draftDir ? t('sessions.chooseDir') : draftProject || t('sessions.optionalDir')}
                   onChange={setPickedDir}
@@ -3095,7 +3099,7 @@ export function SessionsView({
                 />
               )}
               {newChatPage ? (
-                <RosterPicker value={team} onChange={pickTeam} onManage={() => navigateView('settings:agents')} />
+                <RosterPicker value={team} onChange={pickTeam} onManage={tourActive ? undefined : () => navigateView('settings:agents')} />
               ) : (
                 <ComposerPet working={busy} team={team} onTeam={pickTeam} onManage={() => navigateView('settings:agents')} />
               )}
@@ -3113,7 +3117,7 @@ export function SessionsView({
                     : busy ? 'sessions.placeholderRunning'
                     : newChatPage ? 'sessions.newPrompt' : 'sessions.placeholder')
               }
-              completeShown={completeShown}
+              completeShown={tourActive ? [] : completeShown}
               completeIdx={completeIdx}
               setInput={setInput}
               setCaret={setCaret}
@@ -3162,7 +3166,7 @@ export function SessionsView({
                   {t('sessions.stop')}
                 </button>
               ) : (
-                <button class="btn primary" type="submit" disabled={loading || (!input.trim() && pending.length === 0)}>
+                <button class="btn primary" type="submit" disabled={tourActive || loading || (!input.trim() && pending.length === 0)}>
                   {t('sessions.send')}
                 </button>
               )}

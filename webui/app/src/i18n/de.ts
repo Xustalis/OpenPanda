@@ -964,6 +964,7 @@ const de: Messages = {
   'onboarding.title': 'Willkommen bei OpenPanda',
   'onboarding.step.language': 'Sprache',
   'onboarding.step.terms': 'Bedingungen',
+  'onboarding.step.guide': 'Kurze Einführung',
   'onboarding.step.approval': 'Freigaben',
   'onboarding.step.model': 'Modell',
   'onboarding.langTitle': 'Sprache wählen',
@@ -986,45 +987,25 @@ const de: Messages = {
   'onboarding.skip': 'Später',
 
   // Erststart-Tour (nach den Bedingungen, vor der Modell-Einrichtung)
-  'onboarding.guide.title': 'Drei Minuten Rundgang',
-  'onboarding.guide.sub':
-    'Die Konsole kann drei Dinge: du sagst etwas, es wird erledigt, du behältst die Kontrolle. Hier sind die Karte, der Panda in der Ecke und der Weg zu einem Modell.',
-  'onboarding.guide.nav': 'Die linke Leiste',
   'onboarding.guide.nav.newChat':
     'Startet einen Thread. Die Sitzung entsteht mit der ersten Nachricht.',
   'onboarding.guide.nav.workspace':
     'Geräte und Agenten auf einer Karte. Rad zoomt, Klick zeigt die Kanten.',
   'onboarding.guide.nav.control':
     'Warteschlange, Pläne, Projekte — drei Boards über denselben Aufgaben.',
-  'onboarding.guide.nav.team': 'Experimentell und standardmäßig aus. In den Einstellungen aktivieren, um Aufgaben, Team-Bereiche und ausstehende Bestätigungen anzuzeigen.',
   'onboarding.guide.nav.memory': 'Was dieser Knoten gelernt hat. Lesen, ändern, löschen.',
-  'onboarding.guide.nav.settings': 'Modelle, Richtlinien, Agenten, MCP, Skills, System.',
-  'onboarding.guide.panda': 'Der Panda in der Ecke',
-  'onboarding.guide.panda.pose': 'Steht = frei · hüpft = antwortet · liegt = außer Dienst',
-  'onboarding.guide.panda.click': 'Ein Klick',
-  'onboarding.guide.panda.clickDesc': 'Öffnet die Team-Karte — wähle die Agenten dieses Threads.',
-  'onboarding.guide.panda.working': 'Im Turn',
-  'onboarding.guide.panda.workingDesc':
-    'Öffnet sofort, ohne Drücken — das Team bleibt im Turn änderbar.',
-  'onboarding.guide.panda.double': 'Doppelklick',
-  'onboarding.guide.panda.doubleDesc':
-    'Drückt ihn platt. Ein Spielzeug — nichts wird gezählt oder gemerkt.',
-  'onboarding.guide.panda.burst': 'Weiter tippen',
-  'onboarding.guide.panda.burstDesc': 'Er lässt die Karte sein und lässt sich nur noch drücken.',
-  'onboarding.guide.panda.night': '20:00–08:00',
-  'onboarding.guide.panda.nightDesc': 'Er legt sich hin. Aufgaben laufen weiter; die Pose ist Dekoration.',
-  'onboarding.guide.model': 'Ein Modell anschließen',
-  'onboarding.guide.model.one': 'Einstellungen → Modelle → Verbindung hinzufügen',
-  'onboarding.guide.model.oneDesc':
-    'Anbieter wählen, Endpunkt und Schlüssel einfügen. Eine Karte ist ein Konto.',
-  'onboarding.guide.model.two': 'Modelle zur Karte hinzufügen',
-  'onboarding.guide.model.twoDesc': 'Zeile anklicken zum Wechseln. Den Alias benennst du selbst.',
-  'onboarding.guide.model.three': '„Verbindung testen“ drücken',
-  'onboarding.guide.model.threeDesc': 'Ein ✓ mit Latenz heißt: es antwortet.',
-  'onboarding.guide.modelNote':
-    'Der nächste Schritt führt dich einmal durch — und alles bleibt später in den Einstellungen änderbar.',
-  'onboarding.guide.cta': 'Weiter',
   'onboarding.guide.skip': 'Tour überspringen',
+  'onboarding.guide.tryClick': 'Klicke auf das hervorgehobene Bedienelement.',
+  'onboarding.guide.composer': 'Nachrichteneingabe',
+  'onboarding.guide.overview': 'Die Konsole erkunden',
+  'onboarding.guide.firstChat': 'Den ersten Chat starten',
+  'onboarding.guide.back': 'Zurück',
+  'onboarding.guide.workdirDesc': 'Wähle den Projektordner, den sich Panda ansehen soll. Du kannst einen zuletzt genutzten oder einen neuen Ordner auswählen. Dabei entsteht noch kein Chat.',
+  'onboarding.guide.teamDesc': 'Öffne die Mitarbeiterauswahl über dem Nachrichtenfeld. Lass die automatische Zuweisung aktiv oder wähle die Mitarbeitenden für diesen Chat aus.',
+  'onboarding.guide.composerDesc': 'Probiere das Beispiel oder schreibe eine eigene Frage. Während der Einführung bleibt sie ein Entwurf. Sende sie erst nach der Einrichtung der Freigaben und eines Modells.',
+  'onboarding.guide.exampleLabel': 'Beispielfrage',
+  'onboarding.guide.example': 'Hilf mir, dieses Projekt zu verstehen. Was macht es und wo soll ich anfangen zu lesen? Ändere noch keine Dateien.',
+  'onboarding.guide.done': 'Fertig',
 
   // Skills view
   'skills.title': 'Skills',
