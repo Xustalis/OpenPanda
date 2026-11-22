@@ -138,6 +138,17 @@ export class ApiError extends Error {
   }
 }
 
+// HTTP header values are restricted to ISO-8859-1 (a ByteString). A token
+// carrying any higher code point — a Chinese character pasted out of a chat
+// message, a full-width space — makes every fetch() throw before the request
+// leaves the browser ("Failed to read the 'headers' property … non
+// ISO-8859-1 code point"). Because the token is persisted, one bad paste
+// breaks the whole console across reloads with no way back to the token gate.
+// Reject it at both ends: never store one, and drop one already in storage.
+export function isHeaderSafeToken(token: string): boolean {
+  return /^[\x20-\x7e]*$/.test(token)
+}
+
 export function getToken(): string {
   try {
     return localStorage.getItem(TOKEN_KEY) ?? ''
@@ -147,11 +158,14 @@ export function getToken(): string {
 }
 
 export function setToken(token: string): void {
+  if (!isHeaderSafeToken(token)) {
+    clearToken()
+    return
+  }
   try {
     localStorage.setItem(TOKEN_KEY, token)
   } catch {
     // storage unavailable — token lasts only for this session
-    sessionToken = token
   }
   sessionToken = token
 }
@@ -171,7 +185,15 @@ let sessionToken = ''
 /** The token for the current session — localStorage or the session fallback.
  *  Used by both header-based fetches and the ?token= EventSource URL. */
 export function currentToken(): string {
-  return getToken() || sessionToken
+  const token = getToken() || sessionToken
+  if (token && !isHeaderSafeToken(token)) {
+    // A token the browser cannot put in a header is worse than no token:
+    // every request throws, and the token gate never shows. Clear it so the
+    // next render falls back to the login screen.
+    clearToken()
+    return ''
+  }
+  return token
 }
 
 // Auto-login: `panda web` / `/web` open the browser at /?token=… so no

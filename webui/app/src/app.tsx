@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { PandaLockup, PandaMark } from './brand/panda'
-import { api, clearToken, currentToken, displayVersion, onUnauthorized, setToken, type UpdateStatus } from './api/client'
+import { api, clearToken, currentToken, displayVersion, isHeaderSafeToken, onUnauthorized, setToken, type UpdateStatus } from './api/client'
 import { onLocaleChange, t } from './i18n'
 import { useAsync, useChangeSignal, useTeamFeature } from './hooks'
 import { isSelfNodeUp } from './format/node-status'
@@ -569,6 +569,14 @@ function TokenGate(props: {
     e.preventDefault()
     const candidate = token.trim()
     if (!candidate || busy) return
+    // A token carrying a Chinese character or a full-width space cannot go
+    // into an Authorization header: fetch() throws a TypeError before the
+    // request leaves the browser, and the catch below would report the panel
+    // as unreachable. Treat it as a bad paste instead.
+    if (!isHeaderSafeToken(candidate)) {
+      props.onRejected()
+      return
+    }
     setBusy(true)
     try {
       // The candidate is validated against a cheap authenticated endpoint
