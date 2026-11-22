@@ -13,6 +13,7 @@ import { SessionsView } from './views/sessions'
 import { installClickFeedback } from './components/click-feedback'
 import { NavigationMarker } from './components/navigation-marker'
 import { SidebarHistory } from './views/sidebar-history'
+import type { TourPhase } from './views/onboarding-guide'
 import { OnboardingBanner } from './views/onboarding'
 
 // Only the thread shell is on the first-paint path. The boards, settings and
@@ -114,6 +115,8 @@ export function App() {
   const [authed, setAuthed] = useState<boolean>(currentToken() !== '')
   const [gateError, setGateError] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
+  const [tourPhase, setTourPhase] = useState<TourPhase>(null)
+  const railOpen = tourPhase ? tourPhase === 'navigation' : menuOpen
   const sidebar = useRef<HTMLElement>(null)
 
   // 设置 is a sheet, not a destination: opening it raises a top-layer dialog
@@ -230,7 +233,7 @@ export function App() {
       <PairRequestHost />
       <aside
         ref={sidebar}
-        class={`sidebar${menuOpen ? ' mobile-open' : ''}`}
+        class={`sidebar${railOpen ? ' mobile-open' : ''}`}
       >
         {/* One line of chrome at the head of the rail: the name and the one
             ambient action that works from any view. The name is a label, not a
@@ -268,12 +271,12 @@ export function App() {
             <button
               type="button"
               class="icon-btn mobile-menu-btn"
-              aria-label={t(menuOpen ? 'nav.menuClose' : 'nav.menuOpen')}
-              aria-expanded={menuOpen}
+              aria-label={t(railOpen ? 'nav.menuClose' : 'nav.menuOpen')}
+              aria-expanded={railOpen}
               aria-controls="sidebar-panel"
               onClick={() => setMenuOpen((open) => !open)}
             >
-              <Icon name={menuOpen ? 'x' : 'menu'} />
+              <Icon name={railOpen ? 'x' : 'menu'} />
             </button>
           </div>
         </div>
@@ -283,6 +286,7 @@ export function App() {
           <button
             type="button"
             class="nav-item nav-new-chat"
+            data-tour-target="new-chat"
             onClick={() => navigate({ view: 'sessions', id: null })}
           >
             <Icon name="square-pen" />
@@ -291,6 +295,7 @@ export function App() {
           </button>
           <a
             href="#/workspace"
+            data-tour-target="workspace"
             class={`nav-item${active === 'workspace' ? ' active' : ''}`}
             aria-current={active === 'workspace' ? 'page' : undefined}
           >
@@ -298,7 +303,7 @@ export function App() {
             <span class="nav-label">{t('nav.workspace')}</span>
           </a>
           <div class={`nav-item nav-destination${active === 'control' ? ' active' : ''}`}>
-            <a href="#/control" class="nav-destination-link" aria-current={active === 'control' ? 'page' : undefined}>
+            <a href="#/control" data-tour-target="control" class="nav-destination-link" aria-current={active === 'control' ? 'page' : undefined}>
               <Icon name="kanban" />
               <span class="nav-label">{t('nav.control')}</span>
             </a>
@@ -332,6 +337,7 @@ export function App() {
               one *is* configuration. */}
           <a
             href="#/memory"
+            data-tour-target="memory"
             class={`nav-item${active === 'memory' ? ' active' : ''}`}
             aria-current={active === 'memory' ? 'page' : undefined}
           >
@@ -378,12 +384,13 @@ export function App() {
         </div>
       </aside>
       <main class="main">
-        <OnboardingBanner />
+        <OnboardingBanner onPhase={setTourPhase} />
         <UpdateBanner />
         <Suspense fallback={<div class="view-loading" aria-busy="true" />}>
         {base.view === 'sessions' && (
           <SessionsView
             activeId={base.id}
+            tourActive={tourPhase !== null}
             project={base.project ?? null}
             ws={base.ws ?? null}
             onOpenSession={(id) => navigate({ view: 'sessions', id: id || null, project: base.project })}

@@ -42,7 +42,7 @@ export function AgentFace(props: {
 export function RosterPicker(props: {
   value: string[]
   onChange(names: string[]): void
-  onManage(): void
+  onManage?(): void
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const [opened, setOpened] = useState(false)
@@ -55,7 +55,7 @@ export function RosterPicker(props: {
   }
 
   return (
-    <div class="roster-picker">
+    <div class="roster-picker" data-tour-target="team">
       <button type="button" class="roster-trigger" aria-haspopup="dialog" aria-expanded={expanded} onClick={open}>
         <Icon name="users" size={15} />
         <span>{t('sessions.pickTeam')}</span>

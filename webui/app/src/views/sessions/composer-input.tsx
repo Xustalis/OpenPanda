@@ -91,6 +91,7 @@ export function ComposerInput({
         }}
         class={`composer-input${editorPlain(input) === '' && pendingCount === 0 ? ' is-empty' : ''}`}
         contenteditable="true"
+        data-tour-target="composer"
         role="textbox"
         aria-multiline="true"
         aria-label={t('sessions.placeholder')}
