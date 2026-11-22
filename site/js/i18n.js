@@ -453,7 +453,7 @@ export const EN = {
   'dl.s4.b': 'Re-running the installer upgrades in place. Config, sessions and stored data are preserved.',
   'dl.s4.c': 'Removes the binary, the marked PATH block and the autostart unit. --purge also deletes the data directory; --backup-only archives it first.',
   'dl.s4.t': 'Upgrade & uninstall',
-  'dl.s5.d': 'Pass --version 0.1.3 on macOS / Linux or -Version 0.1.3 in PowerShell to pin a release. Pre-releases must always be named explicitly — "latest" only ever means the newest stable version.',
+  'dl.s5.d': 'Pass --version 0.1.6 on macOS / Linux or -Version 0.1.6 in PowerShell to pin a release. Pre-releases must always be named explicitly — "latest" only ever means the newest stable version.',
   'dl.s5.link': 'Release history and what changed →',
   'dl.s5.t': 'Other versions',
   "docs.first.t": "Run your first task and get the result back",
