@@ -148,9 +148,7 @@ Die Details je Fähigkeit —was verifiziert, was nur gebaut ist und die bekannt
 
 ---
 
-## 🚀 Schnellstart
-
-### Schritt 1: Installation
+## 📦 Installation
 
 **macOS / Linux:**
 ```bash
@@ -174,6 +172,8 @@ make build && ./bin/panda init
 ```
 
 Bereits installiert? `panda update` aktualisiert vor Ort; deine Daten bleiben erhalten.
+
+## 🚀 Schnellstart
 
 ### Schritt 2: Knoten initialisieren
 
@@ -230,6 +230,12 @@ Probiere dieselbe Aufgabe auf einem gekoppelten Build-Rechner mit passender Test
 | `panda version` | Aktuelle Binärversion ausgeben |
 
 ---
+
+## 🏗️ Architektur
+
+Webkonsole, TUI und CLI nutzen dieselbe Aufgabenverwaltung. `entry` ordnet Anfragen ein, `scheduler` wählt anhand von Fähigkeiten und Latenz einen Knoten. `commander` führt einen lokalen Befehl aus, beauftragt einen Agenten oder fordert einen manuellen Eingriff an.
+
+`bus` verbindet Knoten über WebSocket oder verschlüsseltes UDP. `ledger` verwaltet ihre Fähigkeiten, `trust` regelt die Freigabe von Daten für einzelne Peers. Aufgaben und Ereignisse liegen in SQLite im WAL-Modus.
 
 ## 📜 Versionsgeschichte
 

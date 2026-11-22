@@ -26,6 +26,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/log"
+	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/util"
 )
@@ -1575,7 +1576,7 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		if _, err := w.Write([]byte("event: " + event + "\ndata: " + string(data) + "\n\n")); err != nil {
+		if _, err := w.Write([]byte("event: " + event + "\ndata: " + string(security.RedactJSON(data)) + "\n\n")); err != nil {
 			return false
 		}
 		flusher.Flush()

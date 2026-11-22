@@ -237,6 +237,17 @@ done
 # had already drifted into four different spellings.
 coc_files="CODE_OF_CONDUCT.md CODE_OF_CONDUCT.zh-CN.md CODE_OF_CONDUCT.ja.md CODE_OF_CONDUCT.es.md CODE_OF_CONDUCT.de.md"
 
+for family in README CHANGELOG CONTRIBUTING CLA COMMERCIAL TERMS SECURITY; do
+	ref=$(grep -c '^## ' "$family.md")
+	for translation in "$family".*.md; do
+		count=$(grep -c '^## ' "$translation")
+		if [ "$count" != "$ref" ]; then
+			echo "FAIL: $translation has $count sections, $family.md has $ref"
+			fail=1
+		fi
+	done
+done
+
 # Sections are compared by count, not by text: headings are translated, so a
 # translated heading can never equal the English one. Equal counts still catch
 # the drift that matters — a section added or dropped in one language only.

@@ -17,6 +17,7 @@ import {
   rimDistance,
   searchGraph,
   seenDates,
+  visibleCaptions,
   type LayerMode,
 } from './graph-layout'
 
@@ -250,6 +251,7 @@ export function MemoryGraphView({
   // brings every label back, so reading tools stay available without the
   // all-at-once text collision of the old default view.
   const showLabels = view.k >= 1.2 || (view.k >= 0.7 && filtered.nodes.length <= 30)
+  const captions = useMemo(() => visibleCaptions(pos.values(), showLabels, hover, selected), [pos, showLabels, hover, selected])
 
   const fitView = () => {
     const pts = [...pos.values()]
@@ -499,7 +501,7 @@ export function MemoryGraphView({
               const dimmed = focus !== null && focus !== n.id && !neighbors.has(n.id)
               const r = nodeRadius(n)
               const alpha = recencyAlpha(n.last_seen, now)
-              const labelVisible = showLabels || hover === n.id || selected === n.id
+              const labelVisible = captions.has(n.id)
               const lines = labelLines(n.label)
               return (
                 <g

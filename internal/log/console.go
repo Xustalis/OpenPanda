@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Xustalis/OpenPanda/internal/security"
 )
 
 // consoleHandler is a slog.Handler rendering records as aligned one-liners.
@@ -46,7 +48,7 @@ func (h *consoleHandler) Handle(_ context.Context, r slog.Record) error {
 	b.WriteString(consoleLevel(r.Level))
 	b.WriteByte(' ')
 	b.WriteString(r.Message)
-	attrs := h.attrs
+	attrs := append([]slog.Attr(nil), h.attrs...)
 	r.Attrs(func(a slog.Attr) bool {
 		attrs = append(attrs, a)
 		return true
@@ -58,7 +60,7 @@ func (h *consoleHandler) Handle(_ context.Context, r slog.Record) error {
 	b.WriteByte('\n')
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	_, err := io.WriteString(h.w, b.String())
+	_, err := io.WriteString(h.w, security.Redact(b.String()))
 	return err
 }
 

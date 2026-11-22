@@ -3044,6 +3044,35 @@ class HarnessContractTest(unittest.TestCase):
         self.assertEqual(payload["exit_code"], 2)
         self.assertEqual(proc.returncode, 0)
 
+    def test_all_bundled_adapters_reject_invalid_requests(self):
+        for adapter in sorted(ADAPTERS.glob("*.py")):
+            if adapter.name.startswith("_"):
+                continue
+            with self.subTest(adapter=adapter.name):
+                proc = subprocess.run([sys.executable, str(adapter)], input="invalid",
+                                      capture_output=True, text=True, timeout=10, check=True)
+                result = json.loads(proc.stdout)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["exit_code"], 2)
+
+    def test_plain_runner_bounds_both_pipes_and_keeps_the_ends(self):
+        script = "import sys; data = b'START' + b'x' * 2000000 + b'END'; sys.stdout.buffer.write(data); sys.stderr.buffer.write(data)"
+        payload, _ = run_harness(
+            "import sys; rc, out, err = _harness.run_plain([sys.executable, '-c', %r]); "
+            "_harness.emit(True, str(all(s.startswith('START') and s.endswith('END') "
+            "and len(s) < 810000 and _harness.TRUNCATION_MARKER in s for s in (out, err))), rc)" % script)
+        self.assertEqual(payload["result"], "True")
+
+    def test_plain_runner_times_out_with_unread_stdin(self):
+        payload, _ = run_harness(
+            "import subprocess, sys\n"
+            "try:\n"
+            "    _harness.run_plain([sys.executable, '-c', 'import time; time.sleep(30)'], "
+            "timeout=0.25, input=b'x' * 2000000)\n"
+            "except subprocess.TimeoutExpired:\n"
+            "    _harness.emit(True, 'timed out', 0)")
+        self.assertEqual(payload["result"], "timed out")
+
     def test_run_simple_passes_exit_code_through(self):
         with tempfile.TemporaryDirectory() as td:
             tmp = pathlib.Path(td)

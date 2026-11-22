@@ -2,7 +2,7 @@
 
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 
 import en from './en.ts'
 import zhCN from './zh-CN.ts'
@@ -53,11 +53,10 @@ describe('i18n parity', () => {
     }
   })
 
-  it('task collaboration references resolve in every locale', () => {
-    // Comparing dictionaries alone misses a new page whose keys are absent
-    // from every dictionary. Check the page's references as well.
-    const source = ['team.tsx', 'workflow.tsx'].map(file => readFileSync(new URL(`../views/${file}`, import.meta.url), 'utf8')).join('\n')
-    const keys = [...source.matchAll(/\bt\('([^']+)'\)/g)].map(m => m[1]!)
+  it('literal UI references resolve in every locale', () => {
+    const root = new URL('../', import.meta.url)
+    const files = readdirSync(root, { recursive: true, encoding: 'utf8' }).filter(f => (f.endsWith('.tsx') || f.endsWith('.ts')) && !f.includes('.test.') && !f.startsWith('i18n'))
+    const keys = files.flatMap(file => [...readFileSync(new URL(file, root), 'utf8').matchAll(/\bt\(\s*['"]([\w.-]+)['"]\s*[,)]/g)].map(m => m[1]!))
     keys.push(...['mine', 'spaces', 'review', 'executionQueue', 'executionPlans', 'localProjects'].map(k => `work.${k}`))
     keys.push(...['pending', 'running', 'paused', 'done', 'cancelled'].map(k => `todos.status.${k}`))
     keys.push(...['low', 'normal', 'high'].map(k => `todos.priority.${k}`))

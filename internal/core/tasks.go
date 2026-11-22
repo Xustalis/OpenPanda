@@ -21,6 +21,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/contract"
 	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/scheduler/queue"
+	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 	"github.com/Xustalis/OpenPanda/internal/util"
 )
@@ -526,6 +527,7 @@ func (s *TaskStore) recordEventTx(ctx context.Context, tx *sql.Tx, taskID, typ s
 	default:
 		raw, _ = json.Marshal(v)
 	}
+	raw = security.RedactJSON(raw)
 	ts := s.now()
 
 	var prevHash string

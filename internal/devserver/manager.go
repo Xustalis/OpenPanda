@@ -8,12 +8,12 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/Xustalis/OpenPanda/internal/security"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"os"
 	"os/exec"
 	"sort"
 	"strconv"
@@ -225,7 +225,7 @@ func (m *Manager) StartProject(project string) (Status, error) {
 	name, args := m.opts.ShellCommand(cfg.Command)
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // the project's own declaration
 	cmd.Dir = dir
-	cmd.Env = os.Environ()
+	cmd.Env = security.NewSandbox(dir).Env()
 	cmd.Stdout = s.log
 	cmd.Stderr = s.log
 	setProcessGroup(cmd)

@@ -17,6 +17,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/security"
 )
 
 // eventsPollInterval is how often the SSE feed re-checks the task/node
@@ -45,6 +46,7 @@ var openEventStreams atomic.Int64
 // and the orbit pill can say what the task is *doing*, not only which stage
 // it reached. Consumers that only read orbit types ignore the rest.
 var traceEventTypes = map[string]bool{
+	"reasoning":            true,
 	"classify_result":      true,
 	"route_decision":       true,
 	"delegation_hop":       true,
@@ -307,10 +309,10 @@ func (h *handler) pushTraceBatch(ctx context.Context, w http.ResponseWriter, wat
 		// data is already JSON; embed it as a decoded object so the browser
 		// reads {data:{...}}, not {data:"{...}"}.
 		var raw any
-		if err := json.Unmarshal([]byte(dataJSON), &raw); err == nil {
+		if err := json.Unmarshal(security.RedactJSON([]byte(dataJSON)), &raw); err == nil {
 			body["data"] = clipTraceData(raw)
 		} else {
-			body["data"] = dataJSON
+			body["data"] = security.Redact(dataJSON)
 		}
 		buf, err := json.Marshal(body)
 		if err != nil {

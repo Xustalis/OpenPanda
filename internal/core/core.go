@@ -342,6 +342,8 @@ type Core struct {
 	// Add past a Wait that can no longer see it.
 	artMu      sync.Mutex
 	artClosing bool
+	workWG     sync.WaitGroup
+	workStop   chan struct{}
 
 	// pushAck maps peer|hash -> the receiver's latest reported contiguous
 	// waterline for an outbound push (§8.3). It lives beside the persisted
@@ -685,6 +687,7 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 		logger = slog.Default()
 	}
 	c := &Core{
+		workStop:         make(chan struct{}),
 		agentConcurrency: commander.NewAgentConcurrency(),
 		delegLimits:      config.DelegationConfig{}.NormalizedDelegation(),
 		db:               db,

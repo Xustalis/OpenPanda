@@ -233,8 +233,12 @@ func (d *Daily) archive(name string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("memory: create archive dir: %w", err)
 	}
-	if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
-		return fmt.Errorf("memory: archive path is not a directory: %v", err)
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return fmt.Errorf("memory: inspect archive path: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("memory: archive path is not a directory")
 	}
 	src, dst := filepath.Join(d.dir, name), filepath.Join(dir, name)
 	// A late append can recreate a warm file for a date already archived.

@@ -182,7 +182,7 @@ func TestReviewHoldKeepsDelegatorLease(t *testing.T) {
 	}
 
 	// Re-arming an already-held row is a no-op, not a second loop.
-	worker.holdReviewUpstream(taskID)
+	worker.holdReviewUpstream(ctx, taskID)
 	if _, ok := worker.reviewHolds.Load(taskID); !ok {
 		t.Fatal("hold not tracked in reviewHolds")
 	}

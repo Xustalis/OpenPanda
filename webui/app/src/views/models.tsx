@@ -1450,7 +1450,7 @@ function ModelSheet(props: {
                       onValue={(v) => patch(d.id, { model: v, alias: d.alias === d.model ? v : d.alias })}
                       options={remote?.ids ?? []}
                       owners={remote?.owners}
-                      placeholder={provider.default_model || 'model-id'}
+                      placeholder={provider.default_model || t('models.col.model')}
                       required
                     />
                     <p class="wizard-help">
@@ -1878,7 +1878,7 @@ function DraftRow(props: {
                 onValue={(v) => props.onPatch({ model: v, alias: d.alias === d.model ? v : d.alias })}
                 options={props.remote?.ids ?? []}
                 owners={props.remote?.owners}
-                placeholder="model-id"
+                placeholder={t('models.col.model')}
               />
             </div>
             <div class="field-group">

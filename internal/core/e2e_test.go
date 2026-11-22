@@ -1336,11 +1336,8 @@ func TestRegisterAndListenPublishesEphemeralPort(t *testing.T) {
 // Listeners bind inside Listen; retry the dial until both are up instead of
 // sleeping a fixed 200ms — loaded CI runners can exceed that.
 //
-// The ports are shared across tests, and a finished test's listener can still
-// be accepting during its ctx-cancel shutdown window: a dial that lands on it
-// gets a hello reply signed by the WRONG node id. A transport-level "success"
-// is therefore not enough — keep redialing until the conn actually registers
-// the expected id.
+// After a successful dial wait for that handshake. Redialing during a slow
+// handshake can make the endpoints retain opposite same-id connections.
 func linkPair(t *testing.T, ctx context.Context, entry, worker *Core, workerAddr string, listenErrs ...<-chan error) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -1361,19 +1358,7 @@ func linkPair(t *testing.T, ctx context.Context, entry, worker *Core, workerAddr
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
-		// Dial "succeeded" — but which node answered? Poll briefly for the
-		// expected id; a stale listener's wrong-id conn expires and we redial.
-		regDeadline := time.Now().Add(2 * time.Second)
-		for entry.connFor(worker.node.id) == nil && time.Now().Before(regDeadline) {
-			time.Sleep(20 * time.Millisecond)
-		}
-		if entry.connFor(worker.node.id) != nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("peer %s never connected", worker.node.id)
-		}
-		time.Sleep(50 * time.Millisecond)
+		break
 	}
 
 	// Peer registration lands asynchronously: DialPeer returns once our hello

@@ -879,6 +879,17 @@ export function formatTaskEvent(type: string, rawData?: string): FormattedEvent 
         rawJson,
       }
     }
+    case 'remote_activity_cursor':
+    case 'agent_switch':
+    case 'recovery_assessment':
+    case 'trust_policy':
+    case 'contract_set':
+    case 'check_result':
+    case 'verdict':
+    case 'exec_agent_stop':
+    case 'agent_context':
+    case 'agent_session_affinity':
+      return { type, label: t('events.' + type), tags, rawJson, badgeClass: 'info', summary: str(data?.reason) || str(data?.detail) || undefined }
     case 'approve': {
       return { type, label: t('events.reviewApproved'), badgeClass: 'accent', tags, rawJson }
     }

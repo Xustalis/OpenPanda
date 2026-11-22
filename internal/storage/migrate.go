@@ -36,7 +36,13 @@ func Migrate(db *sql.DB) error {
 	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return fmt.Errorf("migrate: read user_version: %w", err)
 	}
-	latest := migrations[len(migrations)-1].Version
+	latest := 0
+	for _, m := range migrations {
+		if m.Version <= latest {
+			return fmt.Errorf("migrate: version %d out of order after %d", m.Version, latest)
+		}
+		latest = m.Version
+	}
 	if version > latest {
 		return fmt.Errorf("migrate: database schema version %d is newer than this binary's highest migration (%d) — upgrade the panda binary before starting it on this data directory", version, latest)
 	}
@@ -58,7 +64,11 @@ func Migrate(db *sql.DB) error {
 // directory's user_version before swapping binaries, so an update can never
 // install a build that would refuse to open the database at startup.
 func LatestVersion() int {
-	return migrations[len(migrations)-1].Version
+	latest := 0
+	for _, m := range migrations {
+		latest = max(latest, m.Version)
+	}
+	return latest
 }
 
 // migrationTx adapts a pinned *sql.Conn to the MigrationExec surface. The
