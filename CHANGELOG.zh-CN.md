@@ -40,11 +40,9 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ## [Unreleased]
 
-## [0.1.8] - 2026-11-24 — "Constellation"
+## [0.1.7] - 2026-11-23 — "Constellation"
 
 - 关闭控制台后更新包继续下载。控制台显示下载进度，支持取消和重试。命令行支持慢速网络；Unix 安装器在 HTTP/2 传输中断后会通过 HTTP/1.1 重试。
-
-## [0.1.7] - 2026-11-23 — "Constellation"
 
 ### 新增功能
 

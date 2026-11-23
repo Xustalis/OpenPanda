@@ -10,9 +10,9 @@ package version
 // Version is the semantic version of this build, and the default for a build
 // that does not go through release packaging.
 //
-// It tracks the source release target, currently v0.1.8. A local build
+// It tracks the source release target, currently v0.1.7. A local build
 // carrying this version does not establish that the tag has been published.
-var Version = "0.1.8"
+var Version = "0.1.7"
 
 // Codename is the release line's thematic name — "Constellation": the fleet
 // drawn as one sky. The workspace page renders every device as a plate on a

@@ -46,11 +46,9 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
-## [0.1.8] - 2026-11-24 — "Constellation"
+## [0.1.7] - 2026-11-23 — "Constellation"
 
 - Update downloads continue when the console closes. The console shows transfer progress and supports cancel and retry. The CLI allows slow transfers, and the Unix installer retries interrupted HTTP/2 transfers over HTTP/1.1.
-
-## [0.1.7] - 2026-11-23 — "Constellation"
 
 ### Added
 
