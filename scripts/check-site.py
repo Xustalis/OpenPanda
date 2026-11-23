@@ -311,16 +311,13 @@ check('changelog.html lists every 0.1.x release in CHANGELOG.md',
       bool(md_releases) and site_releases == md_releases,
       f'site={sorted(site_releases)} changelog={sorted(md_releases)}')
 
-# The "In development" section is a promise, not a heading. It once shipped
-# empty while this gate stayed green, so the block must carry the summary of
-# the work that has no version number yet, and it must point at the
-# repository's own [Unreleased] section rather than at a released version.
+# Keep the development summary in step with the canonical changelog as a
+# release moves its entries into a dated section.
 _unreleased_block = pages['changelog.html'].split('id="unreleased"', 1)[-1].split('</section>', 1)[0]
-unreleased_items = [k for k in re.findall(r'data-i18n="cl\.unreleased\.[a-z0-9]+"',
-                                         _unreleased_block)
-                    if k not in ('cl.unreleased.nav', 'cl.unreleased.t', 'cl.unreleased.d')]
-check('changelog.html lists the unreleased work, not only a heading',
-      len(unreleased_items) >= 5,
+unreleased_items = re.findall(r'<li data-i18n="cl\.unreleased\.[a-z0-9]+"', _unreleased_block)
+pending = re.search(r'^## \[Unreleased\]$([\s\S]*?)(?=^## |\Z)', changelog, re.M)
+check('changelog.html reflects whether there is unreleased work',
+      pending is not None and bool(unreleased_items) == bool(pending.group(1).strip()),
       f'unreleased items={len(unreleased_items)}')
 check('the unreleased section points at the repository CHANGELOG, not at a release',
       'CHANGELOG.md' in _unreleased_block and '[Unreleased]' in _unreleased_block

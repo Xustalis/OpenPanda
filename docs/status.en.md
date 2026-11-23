@@ -1,5 +1,7 @@
 # Project status
 
+> 2026-11-23 · The v0.1.7 candidate includes resumable conversation goals, confirmed plans and opt-in TaskSync collaboration. Existing databases migrate to schema 77. See the [release notes](../CHANGELOG.md) for compatibility with older peers.
+
 > 2026-11-14 release: v0.1.6 “Constellation”; GitHub Release provides official assets and signatures. Dated entries below retain the validation and deployment boundaries of each earlier run. This release also includes the latest main-branch fixes to model dispatch, directory discovery, repeated approval prompts and the console dock.
 
 > 2026-11-14 pre-release audit: fixed stale Web assets in source installs, fresh-HOME installation, missing voice/driver sync, old default packaging versions and omitted lite archive checks. A real entry call reproduced and verified the fix for literal replies being mistaken for source investigations. Installer tests now isolate service-manager calls so temporary HOME cannot affect real user services. Added the bilingual [v0.1.6 local test and release checklist](release-v0.1.6.en.md) and corrected loopback TCP/UDP/discovery documentation. Read coverage in the table below and local test evidence separately.

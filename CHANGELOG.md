@@ -46,6 +46,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-11-23 — "Constellation"
+
 ### Added
 
 - **Keyboard shortcuts.** Search by action or key, record a new binding, clear one with Backspace or restore defaults. Conflicts identify the action that already uses the combination. Bindings are saved in the browser.
@@ -83,6 +85,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - **Routing follows how hard the work is, not only what it costs.** The classifier's existing 0–1 complexity score is now a routing input: a light task carries the quick-edit and search vocabulary, a deep one carries reasoning, multi-file and refactoring, and the card's own `best_at` / `not_for` declarations decide — so a codebase sweep lands on opencode or dsh while a large refactor or a design-heavy front-end change lands on claude_code, codex or antigravity. Standard effort adds nothing, so ordinary tasks keep trading cost against capability exactly as before. The thresholds are the same 0.35 / 0.75 the context budget already used, named once and shared, so the agent chosen for a deep task is also the one handed the deep context budget. The model may also name a first-choice harness (`spec.preferred_agent`) and estimate the effort of a stage (`stage.complexity`); a preferred harness that cannot take the work still lets another permitted agent take over.
 
 ### Fixed
+
+- The console shows individual execution attempts, including agent launches that failed before work started. Actuator authorization and credential redaction have also been tightened.
 
 - **Native CLI configuration.** Restricted Claude Code now uses the model connection and aliases saved by CC Switch while keeping its read-only tool policy. OpenCode uses its configured model by default. Headless dsh uses its selected provider profile and applies a temporary provider override only during model injection.
 - **Recovery after a startup failure.** If authentication fails before work begins, an empty Claude session ID no longer stops recovery. Panda tries the remaining eligible harnesses with their native configuration, then can retry a compatible harness with its configured model when injection is enabled. Tool activity, billed usage and existing checkpoints protect work from a fresh replay.
