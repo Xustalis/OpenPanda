@@ -67,7 +67,7 @@ func (c *Core) RejudgeReviewed(ctx context.Context, taskID string) (Task, bus.Ta
 	}
 	policy, perr := objectives.FromSpecJSON(cur.SpecJSON)
 	if perr != nil {
-		return cur, bus.TaskResultPayload{}, fmt.Errorf("%w: task objectives are unreadable: %v", ErrConflict, perr)
+		return cur, bus.TaskResultPayload{}, fmt.Errorf("%w: task objectives are unreadable: %w", ErrConflict, perr)
 	}
 	if !objectives.HasMax(policy) {
 		return cur, bus.TaskResultPayload{}, fmt.Errorf("%w: task carries no objective contract to re-judge", ErrConflict)
@@ -79,7 +79,7 @@ func (c *Core) RejudgeReviewed(ctx context.Context, taskID string) (Task, bus.Ta
 	var stored bus.TaskResultPayload
 	if strings.TrimSpace(cur.ResultJSON) != "" {
 		if err := json.Unmarshal([]byte(cur.ResultJSON), &stored); err != nil {
-			return cur, bus.TaskResultPayload{}, fmt.Errorf("%w: decode stored result: %v", ErrConflict, err)
+			return cur, bus.TaskResultPayload{}, fmt.Errorf("%w: decode stored result: %w", ErrConflict, err)
 		}
 	}
 
@@ -143,7 +143,7 @@ func (s *TaskStore) UpdateReviewEvidence(ctx context.Context, taskID, attemptID 
 			if err := json.Unmarshal([]byte(raw), &payload); err != nil {
 				// A result the accept path would also refuse to decode: keep it
 				// untouched rather than replacing the operator's only evidence.
-				return fmt.Errorf("%w: stored result is unreadable: %v", ErrConflict, err)
+				return fmt.Errorf("%w: stored result is unreadable: %w", ErrConflict, err)
 			}
 		}
 		payload["verdict"] = status

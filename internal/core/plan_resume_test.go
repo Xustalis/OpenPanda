@@ -87,7 +87,7 @@ func TestPlanSweepDoesNotCancelRecoveringDependency(t *testing.T) {
 		t.Fatal(err)
 	}
 	child, _ = c.store.Get(ctx, next.TaskID)
-	if child.State != StateFailed {
+	if child.State != StateCancelled {
 		t.Fatalf("terminal failure did not propagate: %s", child.State)
 	}
 }
@@ -135,7 +135,11 @@ func TestPlanStopPreservesFailedDependencies(t *testing.T) {
 	}
 	for taskID, reason := range map[string]string{parent.TaskID: "agent unavailable", next.TaskID: "dependency work did not complete"} {
 		row, err := c.store.Get(ctx, taskID)
-		if err != nil || row.State != StateFailed || !strings.Contains(row.ResultJSON, reason) {
+		want := StateFailed
+		if taskID == next.TaskID {
+			want = StateCancelled
+		}
+		if err != nil || row.State != want || !strings.Contains(row.ResultJSON, reason) {
 			t.Fatalf("state=%s result=%s err=%v", row.State, row.ResultJSON, err)
 		}
 	}

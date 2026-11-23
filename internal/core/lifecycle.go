@@ -23,6 +23,27 @@ func (c *Core) goGuarded(name string, fn func()) {
 	guard.Go(c.logger, "core: "+name, nil, fn)
 }
 
+// A peer disconnect must not cancel accepted work. An explicit deadline still bounds it.
+func detachedRunContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	base := context.WithoutCancel(ctx)
+	if deadline, ok := ctx.Deadline(); ok {
+		return context.WithDeadline(base, deadline)
+	}
+	return context.WithCancel(base)
+}
+
+// goWork admits a detached database writer before shutdown starts its drain.
+func (c *Core) goWork(name string, fn func()) bool {
+	c.artMu.Lock()
+	defer c.artMu.Unlock()
+	if c.artClosing {
+		return false
+	}
+	c.workWG.Add(1)
+	c.goGuarded(name, func() { defer c.workWG.Done(); fn() })
+	return true
+}
+
 // goArtifact is goGuarded for the detached artifact work — replica pulls and
 // tree adoptions — that result handlers launch past their envelope's
 // lifetime. It is additionally tracked in artWG so WaitArtifacts can drain
@@ -531,6 +552,12 @@ func (c *Core) reconcileLocalWork(ctx context.Context) {
 
 // Shutdown marks the node offline and closes peers.
 func (c *Core) Shutdown(ctx context.Context) {
+	c.artMu.Lock()
+	if !c.artClosing && c.workStop != nil {
+		close(c.workStop)
+	}
+	c.artClosing = true
+	c.artMu.Unlock()
 	c.stopReachability(ctx)
 	c.mu.Lock()
 	for id, p := range c.peers {
@@ -556,17 +583,15 @@ func (c *Core) Shutdown(ctx context.Context) {
 	// shutdown deadline binds it too: a wedged transfer must not stretch a
 	// stop past the point the caller committed to, or the supervisor would
 	// SIGKILL at its own timeout with nothing logged.
-	c.artMu.Lock()
-	c.artClosing = true
-	c.artMu.Unlock()
 	done := make(chan struct{})
 	go func() {
+		c.workWG.Wait()
 		c.artWG.Wait()
 		close(done)
 	}()
 	select {
 	case <-done:
 	case <-ctx.Done():
-		c.logger.Warn("artifact transfers still in flight at shutdown deadline", "err", ctx.Err())
+		c.logger.Warn("background work still in flight at shutdown deadline", "err", ctx.Err())
 	}
 }

@@ -90,7 +90,7 @@ export function TaskRail(props: {
                     title={task.title || task.id}
                   >
                     <span class="task-rail-item-top">
-                      <StateBadge state={task.state} />
+                      <StateBadge state={task.state} blockedBy={task.blocked_by} />
                       {task.agent && <span class="task-rail-agent mono">{task.agent}</span>}
                       <span class="task-rail-jump">{t('rail.jump')} →</span>
                     </span>

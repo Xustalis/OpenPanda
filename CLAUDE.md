@@ -208,6 +208,8 @@ packages by subsystem.
   speak). Installed next to the binary; pure stdlib, no pip deps.
 - `extensions/voice/` — the voice extension scripts (`stt.py`, `tts.py`,
   `wake.py`) shipped alongside the adapters, consumed by `panda voice`.
+- `web-new/` — archived Next.js site prototype retained as a design reference.
+  The published site lives in `site/`.
 - `webui/app/` — Preact console (vite build, embedded via go:embed into
   `webui/panel/`; `webui/cmd/panel/` is the sidecar binary,
   `webui/push/` the Web Push/VAPID service). `views/execution-settings.tsx`
@@ -331,7 +333,7 @@ a unit test may not cover.
   `scripts/install.ps1`, `internal/install/services_windows.go`
   (`nodeTaskName`) and `docs/install.md`.
 - The PATH marker block `# >>> openpanda path >>>` /
-  `# <<< openpanda path <<<` is written and stripped by both the installers
+  `# <<< openpanda path <<<` is written and stripped by the Unix installer
   and `internal/install/path_unix.go`.
 - Auto-start unit names: `com.openpanda.node` (macOS launchd label) and
   `openpanda.service` (systemd user unit).
@@ -349,7 +351,7 @@ a unit test may not cover.
   `task_messages.consumed_at` (migration 58); `EvUserMsg` /
   `EvUserMsgConsumed` from `internal/core/trace.go` in **both**
   `visibleTraceTypes` (`webui/panel/panel.go`) and `traceEventTypes`
-  (`webui/panel/events.go`), with a case and five `events.*` strings in web
+  (`webui/panel/events.go`), with cases and localized `events.*` strings in web
   `components/event-parser.ts`; and `StreamCallbacks.OnSteerConsumed`
   (`internal/askengine/askengine.go`), which `webui/panel/sessions.go`
   turns into the SSE `steer` event that upgrades a "queued" note. A

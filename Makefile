@@ -254,7 +254,7 @@ staticcheck:
 # certificate handling) reachable through bus.Client.Dial on the pinned Go
 # 1.26.9 toolchain — a stdlib CVE that no amount of vetting our own code would
 # have surfaced, and that nothing in the gate was looking for. The `go` directive
-# in go.mod is now 1.26.10, which is the fixed release; this target is what keeps
+# in go.mod also includes the GO-2026-6859 HTTP fix; this target is what keeps
 # the next one from shipping silently.
 #
 # Like staticcheck it resolves through the module cache (`go run …@latest`), so

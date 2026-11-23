@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"time"
 
@@ -1112,6 +1113,9 @@ func (c *Core) retryLoop(ctx context.Context, taskID, intent string, required []
 				delay <<= 5
 			} else {
 				delay <<= uint(shift)
+			}
+			if delay > 0 {
+				delay = delay/2 + time.Duration(rand.Int64N(int64(delay/2)+1))
 			}
 		}
 		if !c.waitBackoff(ctx, taskID, delay) {

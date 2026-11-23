@@ -369,7 +369,7 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 	// written into a dying socket is a silent loss the outbox never saw, and
 	// the delegator's copy stays dispatched until its lease lies about a
 	// timeout. The goroutine is cheap — one indexed scan per hello.
-	c.goGuarded("outbox reconcile "+key, func() {
+	if !c.goWork("outbox reconcile "+key, func() {
 		defer c.outboxFlushDone(key)
 		flushCtx := context.WithoutCancel(ctx)
 		// Cancels go FIRST: a parked cancel always stands down the task's
@@ -423,9 +423,7 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 						c.logger.Debug("outbox: trust decline record failed", "task", e.taskID, "err", rerr)
 					}
 				}
-				c.goGuarded("outbox trust reroute "+e.taskID, func() {
-					c.rerouteDeclined(context.WithoutCancel(ctx), e.taskID)
-				})
+				c.rerouteDeclined(flushCtx, e.taskID)
 				continue
 			}
 			// §8.2 TTL: a bundle parked past its deadline is dead — delivering
@@ -565,7 +563,9 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 		// Verdict reconcile last: parked custody above is authoritative for
 		// its tasks, so the sweep for silently-lost results trails it.
 		c.resultReconcile(flushCtx, peer, destKeys)
-	})
+	}) {
+		fail()
+	}
 }
 
 // resultReconcileWindow bounds how far back the reconnect sweep re-pushes

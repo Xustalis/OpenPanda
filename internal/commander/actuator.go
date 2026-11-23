@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
@@ -110,6 +111,7 @@ func SubstituteActionSpec(p *Plan, spec *ledger.ActionSpec, intent string) error
 		}
 	}
 	p.Command, p.Args = cmd, args
+	p.Tier = max(p.Tier, defense.TierFromCommand(cmd, args...))
 	return nil
 }
 

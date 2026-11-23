@@ -40,3 +40,19 @@ func TestRedactLeavesNormalText(t *testing.T) {
 		t.Fatalf("Redact(%q) = %q, want unchanged", in, got)
 	}
 }
+
+func TestRedactJSONCredentialValues(t *testing.T) {
+	if got := Redact("secret=-----BEGIN PRIVATE KEY-----\nprivate-data\n-----END PRIVATE KEY----- after"); got != "secret=[redacted] after" {
+		t.Fatal(got)
+	}
+	raw := []byte(`{"n":9007199254740993,"items":["Invalid API key: sk-ant-api03-abcdefghijklmnop"],"password":"short"}`)
+	got := string(RedactJSON(raw))
+	for _, want := range []string{"9007199254740993", "Invalid API key: [redacted]", `"password":"[redacted]"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in %s", want, got)
+		}
+	}
+	if got := Redact("-----BEGIN PRIVATE KEY-----\nprivate-data\n-----END PRIVATE KEY----- after"); got != "[redacted] after" {
+		t.Fatal(got)
+	}
+}

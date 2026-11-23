@@ -62,12 +62,14 @@ function jobAgent(job: RoundJob) {
 }
 
 function JobSpeaker({ job, finished }: { job: RoundJob; finished?: boolean }) {
-  const agent = jobAgent(job)
+  const traces = useTraceForTask(job.id, job.task?.traces ?? emptyTraces)
+  const actual = dispatchAgent({ traces: traces.filter(e => e.type === 'adapter_execution_profile' && e.data?.attempt_id === job.task?.attempt_id) })
+  const agent = job.task?.blocked_by ? '' : actual || jobAgent(job)
   const state = job.task?.state
   // A stalled review is the more specific fact: the task stopped moving for a
   // reason, and saying which dependencies it waits for would read as progress.
   const waitingForDependencies = state === 'submitted' && job.task?.plan_meta?.needs
-  const stateLabel = job.task && isStalledReview(job.task)
+  const stateLabel = job.task?.blocked_by ? t('state.dependencySkipped', { stage: job.task.blocked_by }) : job.task && isStalledReview(job.task)
     ? t('detail.stalledReview')
     : t(waitingForDependencies ? 'sessions.round.waitingForDependencies'
       : state ? `state.${state}` : 'sessions.round.unknown')
@@ -155,8 +157,8 @@ function JobReport({ job, onOpenTask, onPreview, showProcess, hideTitle }: { job
 }
 
 function roundTally(round: TaskRound) {
-  return (['done', 'failed', 'cancelled', 'expired'] as const).flatMap(state => {
-    const n = round.jobs.filter(job => job.task?.state === state).length
+  return (['done', 'failed', 'cancelled', 'expired', 'skipped'] as const).flatMap(state => {
+    const n = round.jobs.filter(job => (job.task?.blocked_by ? 'skipped' : job.task?.state) === state).length
     return n ? [t(`sessions.runSummary.tally.${state}`, { n })] : []
   }).join(t('sessions.runSummary.sep'))
 }

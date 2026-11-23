@@ -518,8 +518,9 @@ func (c *Core) handleContextAck(ctx context.Context, env bus.Envelope) {
 	// the moment the sender closes or drops the link — an executor-side failure
 	// no caller asked for. WithoutCancel keeps the run alive; explicit cancels
 	// still reach it via the running map's CancelFunc.
-	runCtx := context.WithoutCancel(ctx)
-	c.goGuarded("context-resumed run "+p.TaskID, func() {
+	c.goWork("context-resumed run "+p.TaskID, func() {
+		runCtx, cancel := detachedRunContext(ctx)
+		defer cancel()
 		result, err := c.run(runCtx, p.TaskID, pc.intent, pc.required, nil)
 		if err != nil {
 			if errors.Is(err, ErrCancelled) {

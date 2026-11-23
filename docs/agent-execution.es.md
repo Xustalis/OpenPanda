@@ -34,6 +34,8 @@ delegation:
 
 La selección es nativa del CLI. Los modelos inyectados y las variables explícitas de modelo mantienen prioridad. El ejemplo usa `injection.model: never` y credenciales propias del CLI; no lo copies si necesitas credenciales de Panda. Usa `injection.agents` para cambiar endpoint y credenciales. Los CLI de un modelo usan el primer candidato; OpenCode consulta su catálogo. ZCode admite `provider/model`; las plantillas generic usan `{model}`.
 
+OpenCode y dsh en modo headless usan la configuración de su propia CLI. OpenCode usa la selección de Panda cuando se especifica un modelo, una lista de preferencias o `OPENPANDA_OPENCODE_AUTO_MODEL=1`. dsh aplica un parche temporal al proveedor solo al inyectar un modelo. Claude Code conserva la conexión del modelo de los ajustes del usuario y las herramientas de solo lectura en modo restringido.
+
 Guardar aplica al proceso actual inmediatamente; los otros procesos locales sincronizan aproximadamente cada segundo y antes de ejecutar. Las llamadas activas conservan su modelo.
 
 ```sh

@@ -12,6 +12,8 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+
+	"github.com/Xustalis/OpenPanda/internal/security"
 )
 
 // Level strings accepted from config.
@@ -42,8 +44,26 @@ func Setup(level string, w io.Writer) {
 	if w == nil {
 		w = os.Stdout
 	}
-	h := slog.NewJSONHandler(w, &slog.HandlerOptions{Level: ParseLevel(level)})
+	h := slog.NewJSONHandler(redactedLogWriter{w}, &slog.HandlerOptions{Level: ParseLevel(level)})
 	slog.SetDefault(slog.New(h))
+}
+
+// JSONHandler writes one complete record per call.
+type redactedLogWriter struct{ io.Writer }
+
+func (w redactedLogWriter) Write(p []byte) (int, error) {
+	clean := security.RedactJSON(p)
+	if len(clean) == 0 || clean[len(clean)-1] != '\n' {
+		clean = append(clean, '\n')
+	}
+	n, err := w.Writer.Write(clean)
+	if err == nil && n != len(clean) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		return 0, err
+	}
+	return len(p), nil
 }
 
 // SetupTTY is Setup for a process whose log sink IS the terminal the user is

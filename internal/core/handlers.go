@@ -577,7 +577,7 @@ func (c *Core) parkDelegateReview(ctx context.Context, env bus.Envelope, taskID 
 		c.nodeID, EvReview, map[string]any{"reason": reason}, ApprovalAdmissionReview)
 	if err == nil {
 		c.logger.Info("delegated task parked for admission review", "task", taskID)
-		c.holdReviewUpstream(taskID)
+		c.holdReviewUpstream(ctx, taskID)
 		return
 	}
 	// A park that failed to persist must not silently drop the delegate:
@@ -600,8 +600,8 @@ func (c *Core) parkDelegateReview(ctx context.Context, env bus.Envelope, taskID 
 // noteless so a long hold does not spam its audit trail. The loop exits when
 // the row leaves review — approval hands it to the queue (whose run renews
 // its own lease), a reject or cancel ends it.
-func (c *Core) holdReviewUpstream(taskID string) {
-	t, err := c.store.Get(context.Background(), taskID)
+func (c *Core) holdReviewUpstream(ctx context.Context, taskID string) {
+	t, err := c.store.Get(ctx, taskID)
 	if err != nil || t.State != StateReview || len(t.Chain) <= 1 {
 		return
 	}
@@ -612,30 +612,39 @@ func (c *Core) holdReviewUpstream(taskID string) {
 	if interval < minLeaseRenewInterval {
 		interval = minLeaseRenewInterval
 	}
-	beat := func(attemptID, note string) {
-		c.relayToParent(context.Background(), bus.MsgTaskProgress, t.Chain,
+	beat := func(ctx context.Context, attemptID, note string) {
+		beatCtx, cancel := context.WithTimeout(ctx, interval)
+		defer cancel()
+		c.relayToParent(beatCtx, bus.MsgTaskProgress, t.Chain,
 			bus.TaskProgressPayload{TaskID: taskID, AttemptID: attemptID, Note: note})
 	}
-	beat(t.AttemptID, "held for operator admission review (trust zone)")
-	c.goGuarded("review hold "+taskID, func() {
+	beat(ctx, t.AttemptID, "held for operator admission review (trust zone)")
+	if !c.goWork("review hold "+taskID, func() {
 		defer c.reviewHolds.Delete(taskID)
 		tk := time.NewTicker(interval)
 		defer tk.Stop()
 		// The hold is bounded: a review parked past a full day has become a
 		// stall, and the delegator's lease expiring then is the honest answer
 		// — not a custody claim that silently outlives the work's relevance.
-		deadline := time.Now().Add(defaultDTNTTL)
-		for range tk.C {
-			if time.Now().After(deadline) {
+		holdCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultDTNTTL)
+		defer cancel()
+		for {
+			select {
+			case <-tk.C:
+			case <-c.workStop:
+				return
+			case <-holdCtx.Done():
 				return
 			}
-			cur, gerr := c.store.Get(context.Background(), taskID)
+			cur, gerr := c.store.Get(holdCtx, taskID)
 			if gerr != nil || cur.State != StateReview {
 				return
 			}
-			beat(cur.AttemptID, "")
+			beat(holdCtx, cur.AttemptID, "")
 		}
-	})
+	}) {
+		c.reviewHolds.Delete(taskID)
+	}
 }
 
 // resumeReviewHolds restarts the upstream hold for every remote-origin task
@@ -652,7 +661,7 @@ func (c *Core) resumeReviewHolds(ctx context.Context) {
 	}
 	for _, t := range rows {
 		if len(t.Chain) > 1 {
-			c.holdReviewUpstream(t.TaskID)
+			c.holdReviewUpstream(ctx, t.TaskID)
 		}
 	}
 }
@@ -755,8 +764,9 @@ func (c *Core) proceedLocalDelegate(ctx context.Context, env bus.Envelope, taskI
 	// delegator saw a failure for work that was in fact still running. The
 	// task's own lifetime is governed by its lease, its deadline and
 	// cancelRunning — the transport is not a supervisor.
-	execCtx := context.WithoutCancel(ctx)
-	c.goGuarded("delegated exec "+taskID, func() {
+	if !c.goWork("delegated exec "+taskID, func() {
+		execCtx, cancel := detachedRunContext(ctx)
+		defer cancel()
 		result, err := c.execute(execCtx, taskID, p.Intent, required, release)
 		if err != nil {
 			if errors.Is(err, ErrCancelled) {
@@ -820,7 +830,9 @@ func (c *Core) proceedLocalDelegate(ctx context.Context, env bus.Envelope, taskI
 		} else {
 			c.outboxDrop(execCtx, env.From, taskID)
 		}
-	})
+	}) && release != nil {
+		release()
+	}
 }
 
 // reserveCapacity claims one execution slot for an incoming delegated task
@@ -1206,7 +1218,7 @@ func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p b
 			// The delegate is on the wire — drain the push custody now rather
 			// than waiting for the next sweep, so chunks follow the task into
 			// the same contact window.
-			c.goGuarded("outbox flush "+target, func() { c.outboxFlush(context.WithoutCancel(ctx), target) })
+			c.goWork("outbox flush "+target, func() { c.outboxFlush(context.WithoutCancel(ctx), target) })
 		}
 	}
 	// Persist the spent budget only once the hop is committed — sent or

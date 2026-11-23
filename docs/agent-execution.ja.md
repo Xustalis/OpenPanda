@@ -34,6 +34,8 @@ delegation:
 
 これはネイティブ CLI モデル選択です。注入モデルと明示的な CLI 環境変数が優先されます。例の `injection.model: never` は CLI 自身の認証を使います。Panda の認証情報が必要なノードではコピーしないでください。接続先と認証の上書きには `injection.agents` を使います。単一モデル CLI は最初の候補、OpenCode は利用可能な候補を選びます。ZCode は `provider/model`、generic コマンドは `{model}` に対応します。
 
+OpenCode とヘッドレスの dsh は、通常は各 CLI の設定を使用します。OpenCode はモデルや候補リストを指定した場合、または `OPENPANDA_OPENCODE_AUTO_MODEL=1` を設定した場合に Panda のモデル選択を使用します。dsh に一時的なプロバイダー設定を渡すのはモデル注入時だけです。制限モードの Claude Code はユーザー設定からモデル接続情報を読み込み、読み取り専用のツール制限を維持します。
+
 保存は現在のワーカーへ即時反映され、同じ設定の他ワーカーは約 1 秒ごと・実行前に同期します。進行中のモデルは変わりません。
 
 ```sh

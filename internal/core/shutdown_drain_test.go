@@ -50,3 +50,31 @@ func TestGoArtifactAfterShutdownRunsInline(t *testing.T) {
 		t.Fatal("goArtifact after Shutdown dropped the adoption instead of running it inline")
 	}
 }
+
+func TestShutdownDrainsAcceptedWork(t *testing.T) {
+	c := newCore(t, "work-drain")
+	finished := make(chan struct{})
+	if !c.goWork("persist final result", func() { <-c.workStop; close(finished) }) {
+		t.Fatal("work refused before shutdown")
+	}
+	c.Shutdown(context.Background())
+	select {
+	case <-finished:
+	default:
+		t.Fatal("shutdown returned before worker finished")
+	}
+	if c.goWork("late work", func() {}) {
+		t.Fatal("work admitted after shutdown")
+	}
+}
+
+func TestDetachedRunKeepsDeadline(t *testing.T) {
+	parent, cancel := context.WithTimeout(context.Background(), time.Minute)
+	child, stop := detachedRunContext(parent)
+	defer stop()
+	cancel()
+	want, _ := parent.Deadline()
+	if got, ok := child.Deadline(); !ok || !got.Equal(want) || child.Err() != nil {
+		t.Fatal("detached run lost its lifetime")
+	}
+}

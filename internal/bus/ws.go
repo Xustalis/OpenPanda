@@ -128,6 +128,9 @@ type Conn struct {
 	// rttNanos is the last measured ping/pong round trip (§4.1 link metric):
 	// nanoseconds, zero until the first pong answers a timestamped ping.
 	rttNanos atomic.Int64
+	pingMu   sync.Mutex
+	pingID   uint64
+	pingSent time.Time
 	// lastSeen is the unixnano timestamp of the last inbound proof-of-life —
 	// a pong, or any successfully read frame. Peer-registration uses it to
 	// tell a live same-id duplicate conn from a half-dead socket nobody has
@@ -295,14 +298,14 @@ func newConn(ws *websocket.Conn, logger *slog.Logger) *Conn {
 	c := &Conn{ws: ws, logger: logger, wake: make(chan struct{}, 1), done: make(chan struct{})}
 	ws.SetPongHandler(func(data string) error {
 		c.lastSeen.Store(time.Now().UnixNano())
-		// A ping written by writeLoop carries its send time as 8 bytes of
-		// big-endian nanos; answering it gives the link its RTT sample.
+		// Only an echo of the outstanding ping contributes a latency sample.
 		if len(data) == 8 {
-			if sent := int64(binary.BigEndian.Uint64([]byte(data))); sent > 0 {
-				if rtt := time.Since(time.Unix(0, sent)); rtt > 0 {
-					c.rttNanos.Store(int64(rtt))
-				}
+			c.pingMu.Lock()
+			if !c.pingSent.IsZero() && binary.BigEndian.Uint64([]byte(data)) == c.pingID {
+				c.rttNanos.Store(int64(time.Since(c.pingSent)))
+				c.pingSent = time.Time{}
 			}
+			c.pingMu.Unlock()
 		}
 		return ws.SetReadDeadline(time.Now().Add(pongWait))
 	})
@@ -372,7 +375,11 @@ func (c *Conn) writeLoop() {
 		switch {
 		case m.data == nil:
 			var ping [8]byte
-			binary.BigEndian.PutUint64(ping[:], uint64(time.Now().UnixNano()))
+			c.pingMu.Lock()
+			c.pingID++
+			binary.BigEndian.PutUint64(ping[:], c.pingID)
+			c.pingSent = time.Now()
+			c.pingMu.Unlock()
 			err = c.ws.WriteMessage(websocket.PingMessage, ping[:])
 		case m.binary:
 			err = c.ws.WriteMessage(websocket.BinaryMessage, m.data)

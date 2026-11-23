@@ -370,16 +370,22 @@ func (r *cborReader) head() (major byte, val uint64, err error) {
 
 func (r *cborReader) uint() (uint64, error) {
 	maj, v, err := r.head()
-	if err != nil || maj != 0 {
-		return 0, fmt.Errorf("cbor: expected uint, got major %d err %v", maj, err)
+	if err != nil {
+		return 0, err
+	}
+	if maj != 0 {
+		return 0, fmt.Errorf("cbor: expected uint, got major %d", maj)
 	}
 	return v, nil
 }
 
 func (r *cborReader) body(expect byte) ([]byte, error) {
 	maj, n, err := r.head()
-	if err != nil || maj != expect {
-		return nil, fmt.Errorf("cbor: expected major %d, got %d err %v", expect, maj, err)
+	if err != nil {
+		return nil, err
+	}
+	if maj != expect {
+		return nil, fmt.Errorf("cbor: expected major %d, got %d", expect, maj)
 	}
 	if n > uint64(len(r.data)) {
 		return nil, errors.New("cbor: truncated body")

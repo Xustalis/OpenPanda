@@ -6,6 +6,19 @@ import type { Task } from '../api/client.ts'
 import { expansion, rememberExpansion } from './execution-expansion.ts'
 import { mergeLive } from './task-live.ts'
 const event = (id: number, data: object, type = 'agent_event') => ({ id, ts: id, type, data: JSON.stringify(data) })
+test('native failure and injected rescue have separate outcomes within one task attempt', () => {
+ const launch = (id: string, injected: boolean) => ({ attempt_id: 'task', harness_attempt_id: id, profile: { agent: 'opencode', model_injection: injected } })
+ const outcome = (id: string, ok: boolean) => ({ attempt_id: 'task', harness_attempt_id: id, agent: 'opencode', ok, reason: ok ? '' : 'Reconnect OpenCode Console' })
+ const steps = taskSteps([
+  event(1, launch('native', false), 'adapter_execution_profile'),
+  event(2, outcome('native', false), 'harness_attempt_result'),
+  event(3, launch('rescue', true), 'adapter_execution_profile'),
+  event(4, outcome('rescue', true), 'harness_attempt_result'),
+ ])
+ assert.deepEqual(steps.map(step => step.status), ['failed', 'success'])
+ assert.equal(steps[0]!.output, 'Reconnect OpenCode Console')
+ assert.equal(steps[1]!.output, undefined)
+})
 test('tools pair within attempt executor and nested parent without losing long output', () => {
  const rows = [
   event(1, {ev:'tool_use', id:'same', name:'Bash', attempt_id:'a', executor_id:'mac', input:{command:'test'}}),

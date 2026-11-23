@@ -24,6 +24,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/util"
+	"gopkg.in/yaml.v3"
 )
 
 // Pre-dispatch model probing. AgentViable proves an agent is locally
@@ -528,14 +529,14 @@ func (r *Router) CheckAgent(name string, ag ledger.Agent) AgentCheck {
 	}
 	k, _ := agents.Lookup(name, ag.Adapter)
 	spec := r.agentTarget(name, ag)
+	dec := r.InjectionDecision(name, ag.Adapter)
 	switch {
+	case dec.Inject:
+		chk.ModelSrc, chk.Model = "injected", dec.Model
 	case k.SelfContainedModel:
 		chk.ModelSrc = "self"
 	default:
-		if dec := r.InjectionDecision(name, ag.Adapter); dec.Inject {
-			chk.ModelSrc = "injected"
-			chk.Model = dec.Model
-		} else if own, _ := probeAgentCredentials(name, ag.Adapter); own {
+		if own, _ := probeAgentCredentials(name, ag.Adapter); own {
 			chk.ModelSrc = "own"
 			chk.Model = spec.Model // the model the agent's config names
 		} else {
@@ -574,12 +575,38 @@ func firstCred(ps ...credPair) (string, bool) {
 // when the config names one, the wire API and model name, and any
 // credential-failure reason the harness recorded itself.
 type configuredTarget struct {
-	Endpoint string
-	APIKey   string
-	KeyDef   bool   // APIKey is the literal credential the run sends
-	APIType  string // overrides the registry API type when the config says so
-	Hint     string // secret-free recorded credential failure (see RejectionHint)
-	Model    string
+	NativeRoute bool // The harness resolves this profile's provider at runtime.
+	Endpoint    string
+	APIKey      string
+	KeyDef      bool   // APIKey is the literal credential the run sends
+	APIType     string // overrides the registry API type when the config says so
+	Hint        string // secret-free recorded credential failure (see RejectionHint)
+	Model       string
+}
+
+// New dsh builds compose the operator's headless profile at launch. A model
+// on that route need not belong to the registry's default DeepSeek endpoint.
+func dshProfileModel(dir string) (provider, model string) {
+	if dir == "" {
+		return "", ""
+	}
+	blob, err := os.ReadFile(filepath.Join(dir, "profiles", "headless", "cordis.patch.yml"))
+	if err != nil {
+		return "", ""
+	}
+	var patches []struct {
+		ID     string
+		Config struct{ Provider, Model string }
+	}
+	if yaml.Unmarshal(blob, &patches) != nil {
+		return "", ""
+	}
+	for _, p := range patches {
+		if p.ID == "agent-default-model" && p.Config.Provider != "" {
+			provider, model = p.Config.Provider, p.Config.Model
+		}
+	}
+	return provider, model
 }
 
 // agentConfiguredTarget reads the harness's own config files for the target
@@ -599,15 +626,19 @@ func agentConfiguredTarget(adapter string) configuredTarget {
 	}
 	switch adapter {
 	case "claude_code.py":
-		t.Endpoint = jsonStringAt(home, ".claude/settings.json", "env.ANTHROPIC_BASE_URL")
+		dir := claudeConfigDir(home)
+		if dir == "" {
+			break
+		}
+		t.Endpoint = jsonStringAt(dir, "settings.json", "env.ANTHROPIC_BASE_URL")
 		t.APIKey, t.KeyDef = firstCred(
-			credPair{jsonStringAt(home, ".claude/settings.json", "env.ANTHROPIC_API_KEY", "env.ANTHROPIC_AUTH_TOKEN"), true},
-			credPair{jsonStringAt(home, ".claude/config.json", "primaryApiKey"), true},
-			credPair{jsonStringAt(home, ".claude/.credentials.json", "claudeAiOauth.accessToken"), false},
+			credPair{jsonStringAt(dir, "settings.json", "env.ANTHROPIC_API_KEY", "env.ANTHROPIC_AUTH_TOKEN"), true},
+			credPair{jsonStringAt(dir, "config.json", "primaryApiKey"), true},
+			credPair{jsonStringAt(dir, ".credentials.json", "claudeAiOauth.accessToken"), false},
 		)
 		t.Model = firstNonEmpty(
-			jsonStringAt(home, ".claude/settings.json", "env.ANTHROPIC_MODEL"),
-			jsonStringAt(home, ".claude/settings.json", "model"))
+			jsonStringAt(dir, "settings.json", "env.ANTHROPIC_MODEL"),
+			jsonStringAt(dir, "settings.json", "model"))
 	case "codex.py":
 		dir := codexConfigDir(home)
 		if dir == "" {
@@ -643,22 +674,29 @@ func agentConfiguredTarget(adapter string) configuredTarget {
 		)
 		t.Model = tomlStringValue(home, ".grok/config.toml", "model")
 	case "deepseek_harness.py":
+		dir := nativeConfigDir(home, "DSH_HOME", ".dsh")
+		if dir == "" {
+			return t
+		}
+		if provider, model := dshProfileModel(dir); provider != "" {
+			return configuredTarget{NativeRoute: true, Model: model}
+		}
 		// dsh resolves everything under ~/.dsh: secrets live in
 		// .credentials.yaml's refs map (env-name → secret — the literal
 		// credential injected into the LLM env, so definitive), the model
 		// in settings.yaml's agent-default-model, and any custom provider
 		// base_url in settings/legacy config files.
 		t.Endpoint = firstNonEmpty(
-			yamlLineValue(home, ".dsh/settings.yaml", "base_url", "baseURL", "api_base"),
-			jsonStringAt(home, ".dsh/config.json", "base_url", "baseURL", "api_base", "endpoint"),
-			jsonStringAt(home, ".dsh/auth.json", "base_url", "baseURL"))
+			yamlLineValue(dir, "settings.yaml", "base_url", "baseURL", "api_base"),
+			jsonStringAt(dir, "config.json", "base_url", "baseURL", "api_base", "endpoint"),
+			jsonStringAt(dir, "auth.json", "base_url", "baseURL"))
 		t.APIKey, t.KeyDef = firstCred(
-			credPair{dotenvValue(home, ".dsh/.env", "DEEPSEEK_API_KEY", "OPENAI_API_KEY"), true},
-			credPair{yamlLineValue(home, ".dsh/.credentials.yaml", "DEEPSEEK_API_KEY", "OPENAI_API_KEY"), true},
-			credPair{jsonStringAt(home, ".dsh/auth.json", "api_key", "apiKey", "DEEPSEEK_API_KEY"), true},
-			credPair{jsonStringAt(home, ".dsh/auth.json", "token", "access_token"), false},
+			credPair{dotenvValue(dir, ".env", "DEEPSEEK_API_KEY", "OPENAI_API_KEY"), true},
+			credPair{yamlLineValue(dir, ".credentials.yaml", "DEEPSEEK_API_KEY", "OPENAI_API_KEY"), true},
+			credPair{jsonStringAt(dir, "auth.json", "api_key", "apiKey", "DEEPSEEK_API_KEY"), true},
+			credPair{jsonStringAt(dir, "auth.json", "token", "access_token"), false},
 		)
-		t.Model = yamlNestedValue(home, ".dsh/settings.yaml", "agent-default-model", "model")
+		t.Model = yamlNestedValue(dir, "settings.yaml", "agent-default-model", "model")
 	case "openclaw.py":
 		t.Endpoint = firstNonEmpty(
 			jsonStringAt(home, ".openclaw/config.json", "base_url", "baseURL", "endpoint"),

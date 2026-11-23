@@ -370,6 +370,9 @@ export type TraceKind =
   | 'progress'
   | 'agent_usage'
   | 'agent_fallback'
+  | 'agent_switch'
+  | 'adapter_execution_profile'
+  | 'harness_attempt_result'
   | 'judge_start'
   | 'supervise'
   | 'result'
@@ -496,6 +499,7 @@ export interface Task {
   executing?: boolean
   /** Adapter or native capability actually invoked in the current attempt. */
   call_name?: string
+  blocked_by?: string
   work_source?: { connectionId: string; taskKey: string; requestId: string }
   id: string
   parent_id: string
@@ -2601,6 +2605,7 @@ export async function fetchBlob(path: string): Promise<Blob> {
 }
 
 export interface PlanStage {
+  blocked_by?: string
   stage: string
   task_id: string
   title?: string

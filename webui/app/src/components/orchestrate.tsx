@@ -556,7 +556,7 @@ function OrchTask(props: {
         </button>
       </div>
       <div class="orch-detail-meta">
-        <StateBadge state={task.state} />
+        <StateBadge state={task.state} blockedBy={task.blocked_by} />
         {task.project && <span class="orch-detail-tag">{task.project}</span>}
         {task.owner && <span class="orch-detail-tag">@{task.owner}</span>}
         <span class="orch-detail-age">{t('time.ago', { d: fmtElapsed(task.updated_at) })}</span>

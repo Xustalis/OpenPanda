@@ -60,6 +60,7 @@ export function operationSteps(records: OperationActivity[]): ExecutionStep[] {
 export function taskSteps(events: TaskEvent[], active = false, suppressResultBody = false): ExecutionStep[] {
  const steps: ExecutionStep[] = []
  const calls = new Map<string, ExecutionStep>()
+ const launches = new Map<string, ExecutionStep>()
  const messages = new Map<string, ExecutionStep>()
  let round = 0
  let executor = ''
@@ -72,8 +73,19 @@ export function taskSteps(events: TaskEvent[], active = false, suppressResultBod
   } catch { /* legacy unstructured row */ }
   if (e.type === 'adapter_execution_profile') {
    const p = data.profile || {}
-   steps.push({ id: 'profile:' + (e.id || e.ts), title: t('activity.coordination'), status: 'info', ts: e.ts, executor: data.executor_id,
-    input: { agent: p.agent, [t('activity.coordination')]: t(p.coordination === 'IMMEDIATE' ? 'activity.immediate' : 'activity.roundEnd'), cwd: p.cwd }, raw: e.data })
+   const step: ExecutionStep = { id: 'profile:' + (e.id || e.ts), title: [p.agent, p.model_injection ? t('events.model_injection') : '', p.model_preference].filter(Boolean).join(' · ') || t('activity.coordination'), status: 'info', ts: e.ts, executor: data.executor_id,
+    input: { agent: p.agent, [t('activity.coordination')]: t(p.coordination === 'IMMEDIATE' ? 'activity.immediate' : 'activity.roundEnd'), cwd: p.cwd }, raw: e.data }
+   if (data.harness_attempt_id) launches.set(data.harness_attempt_id, step)
+   steps.push(step)
+   continue
+  }
+  if (e.type === 'harness_attempt_result') {
+   const launch = launches.get(data.harness_attempt_id)
+   const step: ExecutionStep = launch || { id: 'outcome:' + (e.id || e.ts), title: data.agent || data.adapter, status: 'unknown', ts: e.ts, executor: data.executor_id }
+   step.status = data.ok ? 'success' : 'failed'
+   step.output = data.reason || undefined
+   step.raw = launch ? JSON.stringify({ profile: launch.raw, outcome: data }, null, 2) : e.data
+   if (!launch) steps.push(step)
    continue
   }
   if (e.type === 'supervision_round' || e.type === 'exec_agent_start') { round++ }
@@ -81,7 +93,7 @@ export function taskSteps(events: TaskEvent[], active = false, suppressResultBod
   const f = formatTaskEvent(e.type, e.data)
   if (f.quiet || e.type === 'agent_usage') continue
   const b = f.agent
-  const domain = [data.attempt_id || data.attempt || '', data.executor_id || data.executor || '', data.round ?? round, b?.parent || ''].join(':')
+  const domain = [data.attempt_id || data.attempt || '', data.harness_attempt_id || '', data.executor_id || data.executor || '', data.round ?? round, b?.parent || ''].join(':')
   if (b?.ev === 'tool_result' && b.toolUseId) {
    const call = calls.get(domain + ':' + b.toolUseId)
    if (call) {

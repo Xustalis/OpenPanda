@@ -184,6 +184,24 @@ export function captionExtent(n: MemoryGraphNode): number {
   return Math.min(24, (widest * 10.6) / 2 + 4)
 }
 
+/** Reserve each visible caption's full rendered footprint beneath its dot. */
+export function visibleCaptions(nodes: Iterable<Placed>, showAll: boolean, hover: string | null, selected: string | null): Set<string> {
+  const visible = new Set<string>()
+  const boxes: { left: number; right: number; top: number; bottom: number }[] = []
+  const priority = (p: Placed) => p.id === hover ? 2 : p.id === selected ? 1 : 0
+  const candidates = [...nodes].filter(p => showAll || priority(p) > 0).sort((a, b) => priority(b) - priority(a))
+  for (const p of candidates) {
+    const lines = labelLines(p.label)
+    const half = Math.max(...lines.map(uwidth)) * 10.6 / 2 + 4
+    const top = p.y + nodeRadius(p) + 1
+    const box = { left: p.x - half, right: p.x + half, top, bottom: top + 12 * lines.length + 2 }
+    if (boxes.some(b => b.left < box.right && b.right > box.left && b.top < box.bottom && b.bottom > box.top)) continue
+    visible.add(p.id)
+    boxes.push(box)
+  }
+  return visible
+}
+
 /** The surface an entity belongs to: the strongest `mention` edge wins.
  *  Relations, not just node counts, decide where terms start out — a term
  *  mentioned mostly in one topic lands beside it instead of at a random

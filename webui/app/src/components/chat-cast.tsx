@@ -105,7 +105,7 @@ export function TaskCast({ task }: { task: Task }) {
             : t('sessions.castStage', { stage })}
         </span>
       )}
-      <StateChip state={task.state} label={isStalledReview(task) ? t('detail.stalledReview') : undefined} />
+      <StateChip state={task.state} label={task.blocked_by ? t('state.dependencySkipped', { stage: task.blocked_by }) : isStalledReview(task) ? t('detail.stalledReview') : undefined} />
     </div>
   )
 }
@@ -119,7 +119,7 @@ export function PlanCast({ plan }: { plan: PlanDetail }) {
         <li key={s.stage} class="msg-cast-row">
           <span class="msg-cast-stage mono">{s.stage}</span>
           <span class="msg-cast-title">{s.title || s.stage}</span>
-          <StateChip state={s.state} />
+          <StateChip state={s.state} label={s.blocked_by ? t('state.dependencySkipped', { stage: s.blocked_by }) : undefined} />
         </li>
       ))}
     </ul>

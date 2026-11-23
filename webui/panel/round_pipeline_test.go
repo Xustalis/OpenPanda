@@ -16,6 +16,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 )
 
@@ -86,7 +87,7 @@ func TestRoundPipelineBatchedToolsExecuteAndSummarize(t *testing.T) {
 	for _, turn := range got.Turns {
 		if turn.RoundID != "" {
 			count++
-			if !strings.Contains(turn.Text, "Round result: 2 tasks") {
+			if !strings.Contains(turn.Text, i18n.Tf(i18n.Detect(), "session.round.head", "total", "2")) {
 				t.Fatalf("incomplete round: %s", turn.Text)
 			}
 		}

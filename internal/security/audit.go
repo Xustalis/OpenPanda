@@ -63,6 +63,8 @@ func (a *Audit) SetSigner(pub ed25519.PublicKey, priv ed25519.PrivateKey) {
 // serializes the tx bodies — the second writer's head read always sees the
 // first writer's row.
 func (a *Audit) Record(ctx context.Context, e Entry) error {
+	e.Who, e.What, e.Target = Redact(e.Who), Redact(e.What), Redact(e.Target)
+	e.Result, e.Detail = Redact(e.Result), Redact(e.Detail)
 	ts := time.Now().Unix()
 	tx, err := a.db.BeginTx(ctx, nil)
 	if err != nil {

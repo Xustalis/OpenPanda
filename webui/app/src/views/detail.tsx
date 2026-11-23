@@ -216,7 +216,7 @@ export function DetailView({
               grey tokens of equal weight, and the reader had to scan all of
               them to find the two that mattered. */}
           <div class="dt-meta">
-            <StateBadge state={task.state} />
+            <StateBadge state={task.state} blockedBy={task.blocked_by} />
             {task.isolate && (
               <span class="badge blue" title={t('detail.isolateHint')}>{t('detail.isolated')}</span>
             )}

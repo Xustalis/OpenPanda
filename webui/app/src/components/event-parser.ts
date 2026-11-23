@@ -838,6 +838,7 @@ export function formatTaskEvent(type: string, rawData?: string): FormattedEvent 
       return {
         type,
         label: t('events.plan_stage'),
+        summary: str(data?.transition_error) || undefined,
         badgeClass: transition === 'completed' ? 'accent' : 'info',
         tags,
         rawJson,
@@ -879,6 +880,20 @@ export function formatTaskEvent(type: string, rawData?: string): FormattedEvent 
         rawJson,
       }
     }
+    case 'agent_switch':
+      return { type, label: t('events.agent_switch'), tags, rawJson, badgeClass: 'warn', summary: str(data?.note) || str(data?.reason) || undefined }
+    case 'harness_attempt_result':
+      return { type, label: [str(data?.agent), t(data?.ok ? 'activity.status.success' : 'activity.status.failed')].filter(Boolean).join(' · '), tags, rawJson, badgeClass: data?.ok ? 'info' : 'danger', summary: str(data?.reason) || undefined }
+    case 'remote_activity_cursor':
+    case 'recovery_assessment':
+    case 'trust_policy':
+    case 'contract_set':
+    case 'check_result':
+    case 'verdict':
+    case 'exec_agent_stop':
+    case 'agent_context':
+    case 'agent_session_affinity':
+      return { type, label: t('events.' + type), tags, rawJson, badgeClass: 'info', summary: str(data?.reason) || str(data?.detail) || undefined }
     case 'approve': {
       return { type, label: t('events.reviewApproved'), badgeClass: 'accent', tags, rawJson }
     }

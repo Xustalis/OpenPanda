@@ -1194,7 +1194,7 @@ func (c *Core) decorateExecCtx(execCtx, ctx context.Context, taskID string, task
 			// correction.
 			if kind == "agent_switch" {
 				if err := c.store.RecordEvent(context.WithoutCancel(ctx), taskID,
-					EvAgentSwitch, map[string]any{"note": note}); err != nil {
+					EvAgentSwitch, map[string]any{"note": note, "attempt_id": task.AttemptID, "executor_id": c.nodeID}); err != nil {
 					c.logger.Warn("record agent switch", "task", taskID, "err", err)
 				}
 				if len(task.Chain) > 0 {
@@ -1238,9 +1238,17 @@ func (c *Core) decorateExecCtx(execCtx, ctx context.Context, taskID string, task
 		// agent_event row so the display layer renders the delegation tree,
 		// not just a progress line. Durable history is complete; only the
 		// streaming preview is bounded independently by the display layer.
+		execCtx = commander.WithHarnessOutcomes(execCtx, func(out commander.HarnessOutcome) {
+			if err := c.store.RecordEvent(context.WithoutCancel(ctx), taskID, "harness_attempt_result", map[string]any{
+				"attempt_id": task.AttemptID, "executor_id": c.nodeID, "harness_attempt_id": out.ID,
+				"agent": out.Agent, "adapter": out.Adapter, "ok": out.OK, "exit_code": out.ExitCode, "reason": out.Reason,
+			}); err != nil {
+				c.logger.Warn("record harness outcome", "task", taskID, "err", err)
+			}
+		})
 		execCtx = commander.WithExecutionProfiles(execCtx, func(profile commander.AdapterExecutionProfile) {
 			if err := c.store.RecordEvent(context.WithoutCancel(ctx), taskID, "adapter_execution_profile", map[string]any{
-				"attempt_id": task.AttemptID, "executor_id": c.nodeID, "profile": profile,
+				"attempt_id": task.AttemptID, "executor_id": c.nodeID, "harness_attempt_id": profile.HarnessAttemptID, "profile": profile,
 			}); err != nil {
 				c.logger.Warn("record adapter execution profile", "task", taskID, "err", err)
 			}
@@ -1257,7 +1265,7 @@ func (c *Core) decorateExecCtx(execCtx, ctx context.Context, taskID string, task
 					c.logger.Warn("persist mid-run agent session", "task", taskID, "err", err)
 				}
 				c.EvTrace(context.WithoutCancel(ctx), taskID, "adapter_session_mint", map[string]any{
-					"session": ev.ID, "adapter": ev.Adapter,
+					"session": ev.ID, "adapter": ev.Adapter, "attempt_id": task.AttemptID, "harness_attempt_id": ev.HarnessAttemptID,
 				})
 				return
 			}
@@ -1269,7 +1277,7 @@ func (c *Core) decorateExecCtx(execCtx, ctx context.Context, taskID string, task
 				// too much for the timeline. Returned before the transcript
 				// archive so it never becomes an agent_event row.
 				data := map[string]any{
-					"adapter": ev.Adapter, "context_tokens": ev.ContextTokens,
+					"adapter": ev.Adapter, "context_tokens": ev.ContextTokens, "harness_attempt_id": ev.HarnessAttemptID,
 					"attempt_id": task.AttemptID, "executor_id": c.nodeID,
 				}
 				if ev.Model != "" {
@@ -1284,7 +1292,7 @@ func (c *Core) decorateExecCtx(execCtx, ctx context.Context, taskID string, task
 			// Fold the event into the round's evidence before the transcript
 			// archive: the judge uses a separate bounded evidence summary.
 			evidence.observe(ev)
-			data := map[string]any{"ev": ev.Ev, "attempt_id": task.AttemptID, "executor_id": c.nodeID}
+			data := map[string]any{"ev": ev.Ev, "attempt_id": task.AttemptID, "executor_id": c.nodeID, "harness_attempt_id": ev.HarnessAttemptID}
 			if ev.ID != "" {
 				data["id"] = ev.ID
 			}
@@ -1845,7 +1853,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			"agent":                plan.Agent,
 			"adapter":              plan.Adapter,
 			"ability":              plan.Ability,
-			"model":                activeModel,
+			"model":                injection.Model,
 			"node_name":            scheduler.NodeNamePart(c.nodeID),
 			"authorized":           task.Authorized && !restricted,
 			"restricted":           restricted,

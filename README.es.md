@@ -148,9 +148,7 @@ El detalle por capacidad —qué está verificado, qué solo compilado y los lí
 
 ---
 
-## 🚀 Inicio rápido
-
-### Paso 1: Instalación
+## 📦 Instalación
 
 **macOS / Linux:**
 ```bash
@@ -174,6 +172,8 @@ make build && ./bin/panda init
 ```
 
 ¿Ya lo tienes instalado? `panda update` lo actualiza en el sitio; tus datos se conservan.
+
+## 🚀 Inicio rápido
 
 ### Paso 2: Inicializar el nodo
 
@@ -230,6 +230,12 @@ Prueba la misma tarea en un equipo de compilación emparejado que ya tenga el en
 | `panda version` | Mostrar la versión del binario |
 
 ---
+
+## 🏗️ Arquitectura
+
+La consola web, la TUI y la CLI comparten el motor de tareas. `entry` clasifica la petición, `scheduler` elige un nodo según sus capacidades y la latencia, y `commander` ejecuta una acción nativa, delega en un agente o solicita intervención humana.
+
+`bus` conecta los nodos por WebSocket o UDP cifrado. `ledger` mantiene sus capacidades y `trust` determina qué se puede compartir con cada par. SQLite en modo WAL conserva las tareas y sus eventos.
 
 ## 📜 Historial de versiones
 

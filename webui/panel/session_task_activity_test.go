@@ -10,6 +10,8 @@ func TestSessionCallName(t *testing.T) {
 		{`{"attempt_id":"current","adapter":"claude_code.py"}`, "claude_code"},
 		{`{"attempt_id":"current","plan_kind":"native","ability":"proof:left"}`, "proof:left"},
 		{`{"attempt_id":"previous","agent":"codex"}`, ""},
+		{`{"attempt_id":"current","profile":{"agent":"deepseek_harness","adapter":"deepseek_harness.py"}}`, "deepseek_harness"},
+		{`{"attempt_id":"previous","profile":{"agent":"codex"}}`, ""},
 		{`{"agent":"codex"}`, ""},
 		{`{"attempt_id":"current","plan_kind":"manual"}`, ""},
 		{`not JSON`, ""},

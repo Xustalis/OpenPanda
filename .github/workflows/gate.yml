@@ -95,7 +95,7 @@ jobs:
   # real gap: GO-2026-6809 (crypto/x509 intermediate certificate handling) was
   # reachable from bus.Client.Dial on the previously pinned Go 1.26.9 toolchain,
   # and nothing in this workflow was asking. `go-version-file: go.mod` picks up
-  # the fixed 1.26.10 from the same declaration every other leg uses.
+  # the toolchain with both that fix and GO-2026-6859 from the shared declaration.
   vuln:
     runs-on: ubuntu-latest
     timeout-minutes: 10

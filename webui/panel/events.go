@@ -17,6 +17,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/security"
 )
 
 // eventsPollInterval is how often the SSE feed re-checks the task/node
@@ -45,25 +46,29 @@ var openEventStreams atomic.Int64
 // and the orbit pill can say what the task is *doing*, not only which stage
 // it reached. Consumers that only read orbit types ignore the rest.
 var traceEventTypes = map[string]bool{
-	"classify_result":      true,
-	"route_decision":       true,
-	"delegation_hop":       true,
-	"exec_agent_start":     true,
-	"skill_load":           true,
-	"prompt_context":       true,
-	"supervision_round":    true,
-	"tier2_triggered":      true,
-	"plan_stage_changed":   true,
-	"plan_intervention":    true,
-	"plan_adjustment_read": true,
-	"artifact_transfer":    true,
-	"agent_event":          true,
-	"progress":             true,
-	"agent_usage":          true,
-	"agent_fallback":       true,
-	"judge_start":          true,
-	"supervise":            true,
-	"result":               true,
+	"reasoning":                 true,
+	"classify_result":           true,
+	"route_decision":            true,
+	"delegation_hop":            true,
+	"exec_agent_start":          true,
+	"adapter_execution_profile": true,
+	"harness_attempt_result":    true,
+	"agent_switch":              true,
+	"skill_load":                true,
+	"prompt_context":            true,
+	"supervision_round":         true,
+	"tier2_triggered":           true,
+	"plan_stage_changed":        true,
+	"plan_intervention":         true,
+	"plan_adjustment_read":      true,
+	"artifact_transfer":         true,
+	"agent_event":               true,
+	"progress":                  true,
+	"agent_usage":               true,
+	"agent_fallback":            true,
+	"judge_start":               true,
+	"supervise":                 true,
+	"result":                    true,
 	// User messages, both halves: the post and the round that folded it. The
 	// live stream is where "queued" becomes "read" without a page reload, so a
 	// console that never subscribed here could only poll for it.
@@ -307,10 +312,10 @@ func (h *handler) pushTraceBatch(ctx context.Context, w http.ResponseWriter, wat
 		// data is already JSON; embed it as a decoded object so the browser
 		// reads {data:{...}}, not {data:"{...}"}.
 		var raw any
-		if err := json.Unmarshal([]byte(dataJSON), &raw); err == nil {
+		if err := json.Unmarshal(security.RedactJSON([]byte(dataJSON)), &raw); err == nil {
 			body["data"] = clipTraceData(raw)
 		} else {
-			body["data"] = dataJSON
+			body["data"] = security.Redact(dataJSON)
 		}
 		buf, err := json.Marshal(body)
 		if err != nil {

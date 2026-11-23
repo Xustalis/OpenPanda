@@ -72,6 +72,26 @@ func TestSubstituteActionSpec(t *testing.T) {
 	}
 }
 
+func TestSubstitutionPreservesStrictestTier(t *testing.T) {
+	for _, tc := range []struct {
+		command     string
+		floor, want int
+	}{{"rm", 1, 2}, {"echo", 2, 2}, {"echo", 1, 1}} {
+		p := Plan{ActuatorID: "hardware:test", Command: "{intent}", Args: []string{"-rf", "fixture"}, Tier: tc.floor}
+		if err := SubstituteActionSpec(&p, nil, tc.command); err != nil || p.Tier != tc.want {
+			t.Fatalf("%s with floor %d: tier %d, err %v", tc.command, tc.floor, p.Tier, err)
+		}
+		if tc.want == 2 {
+			p.Kind = "native"
+			router := NewRouter(actuatorCard(), NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
+			result := router.Execute(t.Context(), p, "", t.TempDir(), false)
+			if result.OK || !IsAuthorizationRefusal(result.Stderr) {
+				t.Fatalf("expected approval refusal, got %+v", result)
+			}
+		}
+	}
+}
+
 // TestSubstituteActionSpecRejectsSelfReference pins the DoS gate: a parameter
 // whose value is itself a placeholder used to make the fixed-point expansion
 // loop spin forever, holding the task's runner slot and actuator lock.

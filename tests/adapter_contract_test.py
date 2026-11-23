@@ -217,10 +217,8 @@ assert args[args.index("--model") + 1] == "selected-model", args
                 self.assertTrue(payload["ok"], payload)
 
         payload, _, _ = run_adapter("deepseek_harness.py", "dsh", r'''
-import pathlib, sys
-args = sys.argv[1:]
-patch = pathlib.Path(args[args.index("--patch") + 1]).read_text()
-assert 'model: "selected-model"' in patch, patch
+import sys
+assert "--patch" not in sys.argv
 print("dsh selected")
 ''', env={"OPENPANDA_AGENT_MODELS": '["selected-model"]'})
         self.assertTrue(payload["ok"], payload)
@@ -755,6 +753,7 @@ if sys.argv[1:2] == ["run"]:
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["result"], "done")
 
+    @mock.patch.dict(os.environ, {"OPENPANDA_OPENCODE_AUTO_MODEL": "1"})
     def test_opencode_v2_catalog_model_id_wins(self):
         """The v2 catalog carries the id twice; a run is handed `modelID`.
 
@@ -783,6 +782,7 @@ if sys.argv[1:2] == ["run"]:
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["result"], "on opencode/real-slug")
 
+    @mock.patch.dict(os.environ, {"OPENPANDA_OPENCODE_AUTO_MODEL": "1"})
     def test_opencode_probe_cache_across_processes(self):
         """Roster, catalog and flag probes survive between adapter processes.
 
@@ -1072,6 +1072,7 @@ if sys.argv[1:2] == ["models"]:
     sys.exit(0)
 '''
 
+    @mock.patch.dict(os.environ, {"OPENPANDA_OPENCODE_AUTO_MODEL": "1"})
     def test_opencode_auto_picks_most_capable_catalog_model(self):
         """No env pin: every run re-reads the roster and picks by capability —
         the 1M-context flagship with reasoning variants beats the flash tier
@@ -1093,6 +1094,7 @@ print(json.dumps({"type":"text","sessionID":"ses_p1","part":{"id":"px","type":"t
             progress,
         )
 
+    @mock.patch.dict(os.environ, {"OPENPANDA_OPENCODE_AUTO_MODEL": "1"})
     def test_opencode_auto_pick_slug_heuristic_without_catalog(self):
         """A build whose `api` subcommand fails still picks by slug heuristics:
         the coding-family model outranks the small/alpha entries."""
@@ -1117,6 +1119,7 @@ print(json.dumps({"type":"text","sessionID":"ses_p2","part":{"id":"px","type":"t
         )
         self.assertTrue(payload["ok"], payload)
 
+    @mock.patch.dict(os.environ, {"OPENPANDA_OPENCODE_AUTO_MODEL": "1"})
     def test_opencode_catalog_is_the_roster_when_models_is_empty(self):
         """v2 builds answer `opencode models` with an empty list. The catalog
         probe must then be the roster: an unpinned run still picks a model and
@@ -1148,6 +1151,7 @@ print(json.dumps({"type":"text","sessionID":"ses_c1","part":{"id":"px","type":"t
             progress,
         )
 
+    @mock.patch.dict(os.environ, {"OPENPANDA_OPENCODE_AUTO_MODEL": "1"})
     def test_opencode_billing_failure_falls_back_to_free_model(self):
         """A paid model the account cannot pay for is not a roster rotation:
         the adapter retries the same task on the best free model instead of
@@ -1176,6 +1180,7 @@ print(json.dumps({"type":"text","sessionID":"ses_b1","part":{"id":"px","type":"t
             progress,
         )
 
+    @mock.patch.dict(os.environ, {"OPENPANDA_OPENCODE_AUTO_MODEL": "1"})
     def test_opencode_go_models_need_a_credential(self):
         """The subscription roster without a stored login cannot serve:
         its models are disqualified so the pick lands on the free Zen tier
@@ -1569,6 +1574,7 @@ print(json.dumps({"type":"text","sessionID":"ses_i2","part":{"id":"px","type":"t
         )
         self.assertTrue(payload["ok"], payload)
 
+    @mock.patch.dict(os.environ, {"OPENPANDA_OPENCODE_AUTO_MODEL": "1"})
     def test_opencode_auto_pick_effort_maps_to_variant(self):
         """A requested reasoning effort rides the model's declared variant
         (provider/model#variant); an undeclared level leaves the bare id."""
@@ -1625,6 +1631,7 @@ if sys.argv[1:3] == ["api", "model.list"]:
     sys.exit(0)
 '''
 
+    @mock.patch.dict(os.environ, {"OPENPANDA_OPENCODE_AUTO_MODEL": "1"})
     def test_opencode_simple_task_prefers_free_models(self):
         """Free is the default tier. A paid entry is selected automatically
         only when the operator opted in (OPENPANDA_OPENCODE_ALLOW_PAID=1);
@@ -1688,6 +1695,7 @@ print(json.dumps({"type":"text","sessionID":"ses_f3","part":{"id":"px","type":"t
         )
         self.assertTrue(payload["ok"], payload)
 
+    @mock.patch.dict(os.environ, {"OPENPANDA_OPENCODE_AUTO_MODEL": "1"})
     def test_opencode_simple_task_free_preference_without_catalog(self):
         """Without catalog coverage the provider id is the cost tell: only
         opencode's own provider counts as the free tier."""
@@ -1710,6 +1718,7 @@ print(json.dumps({"type":"text","sessionID":"ses_f4","part":{"id":"px","type":"t
         )
         self.assertTrue(payload["ok"], payload)
 
+    @mock.patch.dict(os.environ, {"OPENPANDA_OPENCODE_AUTO_MODEL": "1"})
     def test_opencode_reprobes_roster_and_retries_on_rejected_model(self):
         """Every dispatch identifies the served models first — and when the
         roster rotates mid-flight (the picked model retired between probe and
@@ -2041,10 +2050,7 @@ assert "--format" not in args
 assert args[:2] == ["run", "--print-logs=false"]
 assert "--dangerously-skip-permissions" in args
 assert "--auto" not in args
-# The plain path always carries a resolvable model: with no env model set it
-# must be the built-in default, never the empty string.
-assert "--model" in args
-assert args[args.index("--model") + 1] == "opencode/deepseek-v4.1-flash-free"
+assert "--model" not in args and "--standalone" not in args, args
 print("plain opencode answer")
 ''',
         )
@@ -2062,6 +2068,7 @@ print("plain opencode answer")
 import json, sys
 args = sys.argv[1:]
 assert "--agent" in args and args[args.index("--agent") + 1] == "plan", args
+assert "--model" not in args and "--standalone" not in args, args
 assert "--auto" in args, args
 print(json.dumps({"type":"message.part.updated","properties":{"part":{"id":"p","type":"text","text":"readonly run"}}}))
 ''',
@@ -2158,6 +2165,7 @@ import sys
 assert sys.argv[1:] == ["--profile", "headless", "contract prompt"]
 print("dsh answer")
 ''',
+            env={"DEEPSEEK_MODEL": "ambient", "OPENPANDA_AGENT_MODELS": '["unused"]'},
         )
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["result"], "dsh answer")
@@ -2184,7 +2192,7 @@ assert "maxTokens: 131072" in patch
 assert args[-1] == "contract prompt"
 print("dsh injected answer")
 ''',
-            env={"DEEPSEEK_MODEL": "glm-5.3-flash"},
+            env={"DEEPSEEK_MODEL": "glm-5.3-flash", "OPENPANDA_INJECTED_MODEL": "1"},
         )
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["result"], "dsh injected answer")
@@ -3043,6 +3051,35 @@ class HarnessContractTest(unittest.TestCase):
         self.assertEqual(payload["result"], "invalid request JSON")
         self.assertEqual(payload["exit_code"], 2)
         self.assertEqual(proc.returncode, 0)
+
+    def test_all_bundled_adapters_reject_invalid_requests(self):
+        for adapter in sorted(ADAPTERS.glob("*.py")):
+            if adapter.name.startswith("_"):
+                continue
+            with self.subTest(adapter=adapter.name):
+                proc = subprocess.run([sys.executable, str(adapter)], input="invalid",
+                                      capture_output=True, text=True, timeout=10, check=True)
+                result = json.loads(proc.stdout)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["exit_code"], 2)
+
+    def test_plain_runner_bounds_both_pipes_and_keeps_the_ends(self):
+        script = "import sys; data = b'START' + b'x' * 2000000 + b'END'; sys.stdout.buffer.write(data); sys.stderr.buffer.write(data)"
+        payload, _ = run_harness(
+            "import sys; rc, out, err = _harness.run_plain([sys.executable, '-c', %r]); "
+            "_harness.emit(True, str(all(s.startswith('START') and s.endswith('END') "
+            "and len(s) < 810000 and _harness.TRUNCATION_MARKER in s for s in (out, err))), rc)" % script)
+        self.assertEqual(payload["result"], "True")
+
+    def test_plain_runner_times_out_with_unread_stdin(self):
+        payload, _ = run_harness(
+            "import subprocess, sys\n"
+            "try:\n"
+            "    _harness.run_plain([sys.executable, '-c', 'import time; time.sleep(30)'], "
+            "timeout=0.25, input=b'x' * 2000000)\n"
+            "except subprocess.TimeoutExpired:\n"
+            "    _harness.emit(True, 'timed out', 0)")
+        self.assertEqual(payload["result"], "timed out")
 
     def test_run_simple_passes_exit_code_through(self):
         with tempfile.TemporaryDirectory() as td:

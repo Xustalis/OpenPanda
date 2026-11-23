@@ -36,13 +36,13 @@ func (h *handler) attachSessionTaskActivity(ctx context.Context, session string,
 	// call name, rather than racing a separate read against a new start.
 	rows, err = h.db.QueryContext(ctx, `SELECT t.task_id,e.type,e.data_json
 		FROM tasks t JOIN task_events e ON e.id=(SELECT id FROM task_events
-		 WHERE task_id=t.task_id AND type IN (?,?,?,?,?,?) ORDER BY id DESC LIMIT 1)
+		 WHERE task_id=t.task_id AND type IN (?,?,?,?,?,?,'adapter_execution_profile') ORDER BY id DESC LIMIT 1)
 		WHERE t.session_id=? AND t.state=?`, core.EvExecAgentStart, core.EvExecAgentStop,
 		core.EvRetry, core.EvSubmit, core.EvReview, core.EvSupervise, session, core.StateRunning)
 	if err == nil {
 		for rows.Next() {
 			var id, event, data string
-			if rows.Scan(&id, &event, &data) == nil && event == core.EvExecAgentStart {
+			if rows.Scan(&id, &event, &data) == nil && (event == core.EvExecAgentStart || event == "adapter_execution_profile") {
 				if task := byID[id]; task != nil && task.State == core.StateRunning {
 					task.CallName, task.Executing = sessionCall(data, task.AttemptID)
 				}
@@ -56,7 +56,7 @@ func (h *handler) attachSessionTaskActivity(ctx context.Context, session string,
 func (h *handler) attachSessionCallNames(ctx context.Context, session string, tasks map[string]*taskJSON) {
 	rows, err := h.db.QueryContext(ctx, `SELECT t.task_id,e.data_json
 		FROM tasks t JOIN task_events e ON e.id=(SELECT id FROM task_events
-		 WHERE task_id=t.task_id AND type=? ORDER BY id DESC LIMIT 1)
+		 WHERE task_id=t.task_id AND type IN (?,'adapter_execution_profile') ORDER BY id DESC LIMIT 1)
 		WHERE t.session_id=?`, core.EvExecAgentStart, session)
 	if err != nil {
 		return
@@ -79,12 +79,22 @@ func sessionCall(data, attempt string) (string, bool) {
 		Adapter string `json:"adapter"`
 		Ability string `json:"ability"`
 		Kind    string `json:"plan_kind"`
+		Profile struct {
+			Agent   string `json:"agent"`
+			Adapter string `json:"adapter"`
+		} `json:"profile"`
 	}
 	if json.Unmarshal([]byte(data), &start) != nil || attempt == "" || start.Attempt != attempt {
 		return "", false
 	}
 	if start.Kind == "native" {
 		return start.Ability, true
+	}
+	if start.Profile.Agent != "" {
+		return start.Profile.Agent, true
+	}
+	if start.Profile.Adapter != "" {
+		return strings.TrimSuffix(start.Profile.Adapter, ".py"), true
 	}
 	if start.Agent != "" {
 		return start.Agent, true

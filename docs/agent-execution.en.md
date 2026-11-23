@@ -36,6 +36,8 @@ delegation:
 
 These are native CLI model choices, not new endpoint/key injection. Existing precedence is preserved: injected models and explicit CLI model environment pins outrank the candidate list. The example opts into native credentials with `injection.model: never`; do not copy that setting onto a node that requires Panda-supplied credentials. Keep using `injection.agents` for endpoint/credential overrides. Single-model CLIs use the first candidate; OpenCode resolves candidates against its live catalogue. ZCode accepts `provider/model`; an unqualified model needs an existing provider selection. Custom generic command templates need a `{model}` placeholder.
 
+Native OpenCode and headless dsh runs use their own CLI configuration. OpenCode uses Panda model selection when a model or preference list is specified, or when `OPENPANDA_OPENCODE_AUTO_MODEL=1`. The dsh adapter applies a temporary provider patch only for model injection. Restricted Claude Code runs carry the model connection from user settings while retaining read-only tools.
+
 Saving updates this embedded worker immediately. Other local workers sharing the configuration refresh approximately every second and before execution. In-flight calls keep their model snapshots.
 
 ```sh

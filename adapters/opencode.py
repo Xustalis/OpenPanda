@@ -20,9 +20,9 @@ usage, the cost and the session id a follow-up round resumes with
 conversation instead of cold-starting). CLIs too old for --format json
 degrade to the plain text mode. This adapter never prints secrets.
 
-OpenCode is model-agnostic, and the free-tier roster rotates constantly —
-between builds models are renamed, retired and replaced. So on every run the
-adapter re-reads the install's live roster (`opencode models` on older
+Native runs leave model selection to OpenCode. When the operator enables
+OPENPANDA_OPENCODE_AUTO_MODEL=1 or configures a Panda preference list, the
+adapter reads the install's live roster (`opencode models` on older
 builds, `opencode api model.list` on v2 where the bare list can be empty)
 and, when nothing pins a model, picks the most capable free entry itself: the
 catalog exposes each model's real metadata — context/output limits, tool
@@ -46,8 +46,7 @@ entry the install actually serves and can authenticate wins — including a
 paid or Go model, because naming it is an explicit choice. Entries that are
 not served, lack a Go login, or cannot call tools are skipped with a progress
 note, and the heuristic free-first pick covers the rest. Set OPENCODE_MODEL
-(or
-ANTHROPIC_MODEL) to a provider/model id (e.g. deepseek/deepseek-chat) to pin
+to a provider/model id (e.g. deepseek/deepseek-chat) to pin
 a custom model on both paths; a pinned id the roster no longer carries is
 substituted with the closest served model (a progress note names the swap) or
 refused with the roster in the diagnosis, because a stale id makes every run
@@ -974,14 +973,14 @@ def main():
     base = ["opencode", "run", "--print-logs=true"] + auto
     if flags["format"]:
         base += ["--format", "json"]
-    if flags["standalone"]:
+    if flags["standalone"] and os.environ.get("OPENPANDA_INJECTED_MODEL") == "1":
         # opencode v2 dispatches to a long-lived background service that serves
         # the config it started with: a provider, credential or roster change
         # made after that start never reaches the run, and a service wedged in
         # that state answers with no events at all — the harness sees a silent
         # pipe and reports "no output ever received". A run that owns its
         # server is the only shape whose config is what is on disk now, so
-        # every agent run takes it, not just the injected one.
+        # the injected run takes it to load its temporary provider.
         base.append("--standalone")
     model = ""
     # injected marks a run whose model endpoint panda overrode. That model lives
@@ -1009,7 +1008,7 @@ def main():
             # openai/ provider every injected request used to get.
             model = bare if "/" in bare else f"openai/{bare}"
     else:
-        model = os.environ.get("OPENCODE_MODEL") or os.environ.get("ANTHROPIC_MODEL", "")
+        model = os.environ.get("OPENCODE_MODEL", "")
         # A bare name was never passed on this path (it cannot resolve as a
         # provider); keep that, and let the plain path's default cover it.
         if model and "/" not in model:
@@ -1028,7 +1027,10 @@ def main():
     # carried over from the last run. `opencode models` is the historical
     # roster; `opencode api model.list` (v2) adds the catalog and, on builds
     # where the bare list is empty, is the roster itself.
-    if injected:
+    # No Panda routing preference means the CLI owns its complete selection,
+    # including project-local config and the model saved by its background service.
+    native_model = not (model or injected or _preferred_models() or os.environ.get("OPENPANDA_OPENCODE_AUTO_MODEL") == "1")
+    if injected or native_model:
         # The catalog describes this build's own providers, which says
         # nothing about the provider we just wrote — probing it only costs a
         # call.
@@ -1058,7 +1060,7 @@ def main():
         # swap it for a free model and drop the injection. The progress line
         # naming the model and dialect was already emitted above.
         pass
-    else:
+    elif not native_model:
         # The user's ordered preference list (routing.agent_models) wins over
         # the heuristic pick; an explicit choice may be a paid or Go model.
         preferred, pref_variants, notes, available = _preferred_fresh(available)
@@ -1159,7 +1161,7 @@ def main():
             untouched = not (st["texts"] or st["seen_tool"] or st["model_part"] or
                              any(usage.values()) or st["cost"])
             retry = ""
-            if not injected and untouched:
+            if not native_model and not injected and untouched:
                 if _looks_like_funds_failure(str(e)) and funds_tries < 2:
                     retry = _funds_retry(model, tried, available)
                     if retry:
@@ -1195,7 +1197,7 @@ def main():
         except FileNotFoundError:
             harness.emit(False, "opencode binary not found", 127)
             return
-        if not injected and not out["ok"]:
+        if not native_model and not injected and not out["ok"] and not out.get("session_id") and not out.get("tokens") and not out.get("cost"):
             retry = ""
             if _looks_like_funds_failure(out["result"]) and funds_tries < 2:
                 retry = _funds_retry(model, tried, available)
@@ -1228,7 +1230,8 @@ def _run_plain(prompt, cwd, timeout, resume, model, auto,
     # the injection, so it is skipped entirely. A pinned model that this build
     # still serves is not that case, and keeps the retry.
     injected = _injected_provider
-    if not model:
+    native_model = not (model or injected or _preferred_models() or os.environ.get("OPENPANDA_OPENCODE_AUTO_MODEL") == "1")
+    if not model and not native_model:
         # The user's ordered preference list still applies on this path.
         preferred, pref_variants, pref_notes, available = _preferred_fresh(
             _served_models())
@@ -1263,9 +1266,11 @@ def _run_plain(prompt, cwd, timeout, resume, model, auto,
             if note:
                 harness.progress(note)
     plain = ["opencode", "run", "--print-logs=false"]
-    if _cli_flags()["standalone"]:
+    if injected and _cli_flags()["standalone"]:
         plain.append("--standalone")
-    plain += auto + ["--model", model]
+    plain += auto
+    if model:
+        plain += ["--model", model]
     if agent_face:
         plain += ["--agent", agent_face]
     if resume:
@@ -1279,7 +1284,7 @@ def _run_plain(prompt, cwd, timeout, resume, model, auto,
     except FileNotFoundError:
         harness.emit(False, "opencode binary not found", 127)
         return
-    if not injected and returncode != 0:
+    if not native_model and not injected and returncode != 0:
         detail = "%s\n%s" % (err, text)
         tried = tried if tried is not None else set()
         if _looks_like_funds_failure(detail) and funds_tries < 2:

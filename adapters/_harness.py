@@ -1208,15 +1208,64 @@ def run_plain(cmd, cwd=None, timeout=DEFAULT_TIMEOUT,
     # The child's stdin is a binary pipe (no text=True above), so keep bytes on
     # the wire: encode a str request, pass bytes through untouched.
     payload = input.encode("utf-8") if isinstance(input, str) else input
+    streams = [proc.stdout, proc.stderr]
+    captured = ["", ""]
+    failures = []
+
+    def drain(index):
+        # Keep both ends, including the final diagnostic. Read fixed blocks
+        # even when the child writes a single line without a newline.
+        limit = MAX_RESULT_CHARS * 4 if index == 0 else STDERR_CAPTURE_LIMIT
+        half = limit // 2
+        head, tail = bytearray(), bytearray()
+        size = 0
+        try:
+            with streams[index] as stream:
+                while chunk := stream.read(65536):
+                    size += len(chunk)
+                    take = min(half - len(head), len(chunk))
+                    head.extend(chunk[:take])
+                    tail.extend(chunk[take:])
+                    if len(tail) > half:
+                        del tail[:-half]
+            if size <= limit:
+                captured[index] = decode_cli(head + tail)
+            else:
+                captured[index] = decode_cli(head) + TRUNCATION_MARKER + decode_cli(tail)
+        except Exception as exc:
+            failures.append(exc)
+
+    readers = [threading.Thread(target=drain, args=(i,), daemon=True) for i in range(2)]
+    def feed():
+        try:
+            with proc.stdin as stream:
+                stream.write(payload)
+        except BrokenPipeError:
+            pass  # The CLI finished before consuming the whole request.
+        except OSError as exc:
+            if proc.poll() is None:
+                failures.append(exc)
+
+    if payload is not None:
+        readers.append(threading.Thread(target=feed, daemon=True))
+    deadline = time.monotonic() + timeout
+    for reader in readers:
+        reader.start()
     try:
-        out, err = proc.communicate(input=payload, timeout=timeout)
-    except subprocess.TimeoutExpired:
+        proc.wait(timeout=timeout)
+        for reader in readers:
+            reader.join(max(0, deadline - time.monotonic()))
+            if reader.is_alive():
+                raise subprocess.TimeoutExpired(cmd, timeout)
+        if failures:
+            raise failures[0]
+    except BaseException:
         kill_tree(proc)
-        proc.communicate()  # reap + drain: the closed pipes return immediately
+        proc.wait()
         raise
     finally:
         stop_beat.set()
-    return proc.returncode, decode_cli(out or b""), decode_cli(err or b"")
+    return proc.returncode, captured[0], captured[1]
 
 
 def resolve_binary(candidates, default=None):

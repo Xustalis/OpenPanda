@@ -43,15 +43,21 @@ func (c *Core) deliverChildOutput(ctx context.Context, child Task, result bus.Ta
 		return nil
 	}
 	dst, err := c.childWorkspaceSource(ctx, child.ParentID)
-	if err != nil || dst == "" || !notHomeOrRoot(dst) {
-		return fmt.Errorf("parent workspace unavailable for child delivery: %v", err)
+	if err != nil {
+		return fmt.Errorf("parent workspace unavailable for child delivery: %w", err)
+	}
+	if dst == "" || !notHomeOrRoot(dst) {
+		return fmt.Errorf("parent workspace unavailable for child delivery")
 	}
 	if st, err := os.Stat(dst); err != nil || !st.IsDir() {
 		return fmt.Errorf("parent workspace no longer exists")
 	}
 	from, err := c.store.DispatchTarget(ctx, child.TaskID)
-	if err != nil || from == "" {
-		return fmt.Errorf("child executor unavailable for delivery: %v", err)
+	if err != nil {
+		return fmt.Errorf("child executor unavailable for delivery: %w", err)
+	}
+	if from == "" {
+		return fmt.Errorf("child executor unavailable for delivery")
 	}
 	if _, held := c.artifacts.Has(result.OutputArtifact); !held {
 		if _, err := c.FetchArtifact(ctx, from, child.TaskID, result.OutputArtifact); err != nil {
