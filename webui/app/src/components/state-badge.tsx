@@ -16,7 +16,8 @@ const STATE_CLASS: Record<string, string> = {
 }
 
 /** Canonical task-state badge; states are wire-stable (internal/core/state.go). */
-export function StateBadge({ state }: { state: string }) {
+export function StateBadge({ state, blockedBy }: { state: string; blockedBy?: string }) {
+  if (blockedBy) return <span class="badge">{t('state.dependencySkipped', { stage: blockedBy })}</span>
   const cls = STATE_CLASS[state] ?? ''
   return <span class={`badge${cls ? ` ${cls}` : ''}`}>{t(`state.${state}`, state)}</span>
 }

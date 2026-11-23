@@ -278,6 +278,13 @@ describe('castAgent', () => {
     assert.equal(castAgent(traces), 'claude_code')
   })
 
+  it('uses the actual adapter launch when a round switches harness twice', () => {
+    const traces = [{ type: 'exec_agent_start', data: { agent: 'opencode' } }]
+    const launches = ['opencode', 'deepseek_harness', 'codex'].map(agent => ({ type: 'adapter_execution_profile', data: { profile: { agent } } }))
+    assert.equal(castAgent([...traces, ...launches.slice(0, 2)]), 'deepseek_harness')
+    assert.equal(castAgent([...traces, ...launches]), 'codex')
+  })
+
   it('falls back to the adapter, then to nothing', () => {
     assert.equal(castAgent([{ type: 'exec_agent_start', data: { adapter: 'pi' } }]), 'pi')
     assert.equal(castAgent([{ type: 'progress', data: {} }]), '')

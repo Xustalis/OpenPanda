@@ -370,6 +370,7 @@ type ProgressFunc func(note, kind string)
 // a sub-agent (e.g. a Claude Task call), which is what lets the display
 // layer nest the delegation tree.
 type AgentEvent struct {
+	HarnessAttemptID string `json:"-"`
 	// Ev is the block kind: "text" | "thinking" | "tool_use" |
 	// "tool_result" | adapter-specific extensions.
 	Ev string `json:"ev"`
@@ -1160,9 +1161,58 @@ func adapterCredentialEnv(name, adapter string) []string {
 		keys = append(keys, "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL",
 			"ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
 			"ANTHROPIC_DEFAULT_HAIKU_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL")
+		if dir := claudeConfigDir(""); dir != "" {
+			out = append(out, "CLAUDE_CONFIG_DIR="+dir)
+		}
+	}
+	if adapter == "deepseek_harness.py" {
+		if dir := nativeConfigDir("", "DSH_HOME", ".dsh"); dir != "" {
+			out = append(out, "DSH_HOME="+dir)
+		}
+		keys = append(keys, "DEEPSEEK_BASE_URL")
+		if home, err := homeDir(); err == nil {
+			provider, _ := dshProfileModel(nativeConfigDir(home, "DSH_HOME", ".dsh"))
+			switch provider {
+			case "minimax-cn":
+				keys = append(keys, "MINIMAX_CN_API_KEY")
+			case "minimax":
+				keys = append(keys, "MINIMAX_API_KEY")
+			}
+		}
+	}
+	if adapter == "opencode.py" {
+		keys = append(keys, "OPENCODE_MODEL", "OPENPANDA_OPENCODE_AUTO_MODEL", "OPENPANDA_OPENCODE_ALLOW_PAID")
+		if path := os.Getenv("OPENCODE_CONFIG"); filepath.IsAbs(path) {
+			out = append(out, "OPENCODE_CONFIG="+path)
+		}
 	}
 	for _, key := range keys {
 		if value := os.Getenv(key); value != "" {
+			out = append(out, key+"="+value)
+		}
+	}
+	return out
+}
+
+// Restricted Claude ignores user settings.json. Carry only its model connection
+// into that child, without enabling user hooks, project settings or extra tools.
+func restrictedClaudeModelEnv() []string {
+	home, err := homeDir()
+	if err != nil {
+		return nil
+	}
+	dir := claudeConfigDir(home)
+	if dir == "" {
+		return nil
+	}
+	settings := readJSONFile(filepath.Join(dir, "settings.json"))
+	var out []string
+	for _, key := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL", "NO_PROXY", "no_proxy"} {
+		value := jsonFieldString(settings, "env."+key)
+		if key == "ANTHROPIC_MODEL" && value == "" {
+			value = jsonFieldString(settings, "model")
+		}
+		if value != "" && !strings.ContainsRune(value, 0) {
 			out = append(out, key+"="+value)
 		}
 	}
@@ -1686,10 +1736,7 @@ var transientStatusRE = regexp.MustCompile(`\b(?:500|502|503|504)\b`)
 // output is not a provider envelope. A CLI that reports neither still falls back
 // on the text patterns below, unchanged — there is nothing better to key on.
 func replayableFailure(ar AgentResult) bool {
-	if ar.OK || ar.WorkObserved || ar.SessionID != "" || ar.ExitCode == 124 {
-		return false
-	}
-	if ar.Tokens > 0 {
+	if ar.OK || ar.hasWorkEvidence() || ar.SessionID != "" || ar.ExitCode == 124 {
 		return false
 	}
 	return len(ar.Result) <= 4000
@@ -1893,6 +1940,11 @@ func (p *AgentSessions) turn(ctx context.Context, key, adapter string, req Adapt
 			sessionFallbackNote(ctx, "session process already exited")
 			return AgentResult{}, false
 		}
+		// A pooled CLI keeps its process, but its next turn belongs to the
+		// current harness attempt. Bind the sink before sending the new prompt.
+		s.stderr.mu.Lock()
+		s.stderr.evSink = AgentEvents(ctx)
+		s.stderr.mu.Unlock()
 		if err := s.send(req.Prompt); err != nil {
 			sessionFallbackNote(ctx, "session stdin is closed")
 			s.kill()

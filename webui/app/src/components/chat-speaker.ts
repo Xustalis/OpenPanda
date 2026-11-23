@@ -272,8 +272,8 @@ export function sharedTitlePrefix(titles: string[]): string {
 export function castAgent(traces?: { type: string; data?: any }[]): string {
   for (let i = (traces?.length ?? 0) - 1; i >= 0; i--) {
     const ev = traces![i]!
-    if (ev.type !== 'exec_agent_start') continue
-    const data = ev.data as Record<string, unknown> | undefined
+    if (ev.type !== 'exec_agent_start' && ev.type !== 'adapter_execution_profile') continue
+    const data = (ev.type === 'adapter_execution_profile' ? ev.data?.profile : ev.data) as Record<string, unknown> | undefined
     const agent = typeof data?.agent === 'string' ? data.agent : ''
     if (agent) return agent
     const adapter = typeof data?.adapter === 'string' ? data.adapter : ''

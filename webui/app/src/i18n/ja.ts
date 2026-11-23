@@ -328,6 +328,8 @@ const ja: Messages = {
   'state.review': '承認待ち',
   'state.done': '完了',
   'state.failed': '失敗',
+  'state.dependencySkipped': '依存先 {stage} のため未実行',
+  'sessions.runSummary.tally.skipped': '{n} 件未実行',
   'state.cancelled': 'キャンセル済み',
   'state.expired': '期限切れ',
 

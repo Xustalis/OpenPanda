@@ -43,7 +43,7 @@ export function recentAttemptSteps(events: LiveEvent[], attempt: string): LiveSt
   if (!attempt) return []
   const steps: LiveStep[] = []
   for (const event of events) {
-    if (event.type !== 'agent_event' && event.type !== 'progress') continue
+    if (event.type !== 'agent_event' && event.type !== 'progress' && event.type !== 'agent_switch') continue
     const data = eventData(event)
     if (data.attempt_id !== attempt) continue
     if (event.type === 'agent_event' && !['thinking', 'tool_use', 'tool_result', 'progress'].includes(String(data.ev))) continue
@@ -66,6 +66,7 @@ const LIVE_TYPES = new Set([
   'supervision_round',
   'agent_usage',
   'agent_fallback',
+  'agent_switch',
   'judge_start',
   'delegate_request',
   'result',

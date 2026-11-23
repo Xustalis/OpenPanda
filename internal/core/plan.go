@@ -439,9 +439,11 @@ func (c *Core) AdvancePlan(ctx context.Context, planID string) error {
 			continue
 		}
 		ready := true
+		blockedBy := ""
 		var inputErr error
 		for _, need := range st.Needs {
 			if failed[need] {
+				blockedBy = need
 				inputErr = fmt.Errorf("dependency %s did not complete", need)
 				break
 			}
@@ -462,7 +464,12 @@ func (c *Core) AdvancePlan(ctx context.Context, planID string) error {
 		if inputErr != nil {
 			// Fence a dependency failure against concurrent release or stop.
 			reason := map[string]any{"failed": inputErr.Error()}
-			err := c.store.applyTransition(ctx, t.TaskID, StateSubmitted, StateFailed, t.OwnerNode, t.AttemptID, EvResult, reason, reason, true, t.StateVersion)
+			state, transition, event := StateFailed, "failed", EvResult
+			if blockedBy != "" {
+				state, transition, event = StateCancelled, "skipped", EvCancel
+				reason = map[string]any{"blocked_by": blockedBy, "reason": inputErr.Error()}
+			}
+			err := c.store.applyTransition(ctx, t.TaskID, StateSubmitted, state, t.OwnerNode, t.AttemptID, event, reason, reason, true, t.StateVersion)
 			if errors.Is(err, ErrConflict) {
 				continue
 			}
@@ -472,7 +479,7 @@ func (c *Core) AdvancePlan(ctx context.Context, planID string) error {
 			failed[st.ID] = true
 			c.EvTrace(ctx, t.TaskID, EvPlanStageChanged, map[string]any{
 				"plan_id": planID, "stage_id": st.ID, "stage_title": t.Title, "stage_count": len(stages),
-				"transition": "failed", "needs_satisfied": []string{}, "transition_error": inputErr.Error(),
+				"transition": transition, "needs_satisfied": []string{}, "transition_error": inputErr.Error(),
 			})
 			c.logger.Warn("plan: stage blocked by dependency", "plan", planID, "stage", st.ID, "err", inputErr)
 			continue

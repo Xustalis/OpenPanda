@@ -328,6 +328,8 @@ const zhCN: Messages = {
   'state.review': '待审批',
   'state.done': '已完成',
   'state.failed': '已失败',
+  'state.dependencySkipped': '因依赖 {stage} 未运行',
+  'sessions.runSummary.tally.skipped': '{n} 项未运行',
   'state.cancelled': '已取消',
   'state.expired': '已过期',
 

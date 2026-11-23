@@ -854,7 +854,8 @@ type taskJSON struct {
 	Agent string `json:"agent,omitempty"`
 	// CallName is the current attempt's recorded adapter or native ability.
 	// It is included on session task lists without transferring the trace.
-	CallName string `json:"call_name,omitempty"`
+	CallName  string `json:"call_name,omitempty"`
+	BlockedBy string `json:"blocked_by,omitempty"`
 	// Requires is the capability set the task was routed with, including the
 	// `agent:<name>` pin when the submitter named one. The transcript's
 	// dispatch card reads it to name the employee the job was given to: a
@@ -1077,6 +1078,7 @@ func (h *handler) toTaskJSON(t core.Task) taskJSON {
 		State:        t.State,
 		Owner:        t.OwnerNode,
 		AttemptID:    t.AttemptID,
+		BlockedBy:    dependencyBlocker(t),
 		Intent:       t.Intent,
 		Spec:         t.SpecJSON,
 		Result:       t.ResultJSON,
@@ -1498,21 +1500,25 @@ func classifyReviewCause(dataRaw string) string {
 // whole point of the strip is "what is happening to this task right now", and
 // a queued or injected user note that never shows up reads as dropped input.
 var visibleTraceTypes = map[string]bool{
-	"reasoning":            true,
-	"classify_result":      true,
-	"route_decision":       true,
-	"delegation_hop":       true,
-	"exec_agent_start":     true,
-	"skill_load":           true,
-	"prompt_context":       true,
-	"supervision_round":    true,
-	"tier2_triggered":      true,
-	"plan_stage_changed":   true,
-	"plan_intervention":    true,
-	"plan_adjustment_read": true,
-	"artifact_transfer":    true,
-	"user_msg":             true,
-	"user_msg_consumed":    true,
+	"reasoning":                 true,
+	"classify_result":           true,
+	"route_decision":            true,
+	"delegation_hop":            true,
+	"exec_agent_start":          true,
+	"adapter_execution_profile": true,
+	"harness_attempt_result":    true,
+	"agent_switch":              true,
+	"agent_fallback":            true,
+	"skill_load":                true,
+	"prompt_context":            true,
+	"supervision_round":         true,
+	"tier2_triggered":           true,
+	"plan_stage_changed":        true,
+	"plan_intervention":         true,
+	"plan_adjustment_read":      true,
+	"artifact_transfer":         true,
+	"user_msg":                  true,
+	"user_msg_consumed":         true,
 }
 
 // afterCursor reads the ?after=<eventID> cursor an incremental read carries.
@@ -1583,7 +1589,12 @@ func (h *handler) getTask(w http.ResponseWriter, r *http.Request) {
 		// answer: that column stays empty for an agent that never mints a
 		// session handle, and it is free, while this lookup scans the task's
 		// events backwards.
-		if out.Agent == "" {
+		if ev := h.newestEvent(r.Context(), id, "adapter_execution_profile"); ev != nil && ev.Data != nil {
+			if data, ok := ev.Data.(map[string]any); ok && data["attempt_id"] == t.AttemptID {
+				out.Traces = []traceEventJSON{*ev}
+			}
+		}
+		if len(out.Traces) == 0 && out.Agent == "" {
 			if ev := h.newestEvent(r.Context(), id, core.EvExecAgentStart); ev != nil {
 				out.Traces = []traceEventJSON{*ev}
 			}

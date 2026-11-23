@@ -23,7 +23,7 @@ import (
 func cleanCredentialEnv(t *testing.T) string {
 	t.Helper()
 	for _, k := range []string{
-		"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "CODEX_HOME",
+		"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "DSH_HOME",
 		// Endpoint/model overrides feed the probe target too — a developer
 		// shell that exports them would otherwise leak into the assertions.
 		"ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "GROK_BASE_URL", "DEEPSEEK_BASE_URL",
@@ -645,6 +645,83 @@ func TestClaudeProviderRescueWithStartupSession(t *testing.T) {
 				}
 			} else if calls != 2 || !res.OK || !res.Injected {
 				t.Fatalf("expected injected recovery after startup 429: calls=%d result=%+v", calls, res)
+			}
+		})
+	}
+}
+
+func TestRestrictedClaudeUsesNativeConnection(t *testing.T) {
+	cleanCredentialEnv(t)
+	dir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	mustWrite(t, filepath.Join(dir, "settings.json"), `{"model":"user-selected","env":{"ANTHROPIC_AUTH_TOKEN":"fixture-token","ANTHROPIC_BASE_URL":"https://native.example","ANTHROPIC_DEFAULT_SONNET_MODEL":"custom-sonnet","BASH_ENV":"untrusted"}}`)
+	r := injectionRouter(flashModel, config.InjectionModelAuto)
+	ctx := WithRestricted(context.Background())
+	for _, withheld := range []bool{false, true} {
+		if withheld {
+			ctx = WithModelCredsWithheld(ctx)
+		}
+		r.SetAdapterProcessRunner(func(_ context.Context, _, _, _ string, env []string) AgentResult {
+			for _, want := range []string{"ANTHROPIC_AUTH_TOKEN=fixture-token", "ANTHROPIC_MODEL=user-selected", "ANTHROPIC_BASE_URL=https://native.example", "ANTHROPIC_DEFAULT_SONNET_MODEL=custom-sonnet"} {
+				if slices.Contains(env, want) == withheld {
+					t.Errorf("unexpected forwarding policy for %s", strings.SplitN(want, "=", 2)[0])
+				}
+			}
+			if slices.Contains(env, "OPENPANDA_INJECTED_MODEL=1") || slices.Contains(env, "BASH_ENV=untrusted") {
+				t.Fatal("native connection received unintended overrides")
+			}
+			return AgentResult{OK: true}
+		})
+		r.runAdapterDefault(ctx, "claude_code.py", "ping", "")
+	}
+}
+
+func TestBilledFailureWithoutSessionIsNeverReplayed(t *testing.T) {
+	for _, res := range []AgentResult{
+		{ExitCode: 127, Result: "provider failure: 503", Cost: 0.01},
+		{ExitCode: 127, Result: "provider failure: 503", Usage: &UsageDetail{InputTokens: 1}},
+	} {
+		if replayableFailure(res) || agentFallbackEligible(res) || providerRescueEligible(context.Background(), "claude_code.py", res) {
+			t.Fatal("billed failure was eligible for fresh execution")
+		}
+	}
+}
+
+func TestClaudeLoginRefusalFallsThroughBeforeWork(t *testing.T) {
+	cleanCredentialEnv(t)
+	t.Setenv("ANTHROPIC_API_KEY", "fixture")
+	for _, tc := range []struct {
+		name       string
+		alternates []string
+		work       bool
+		usage      *UsageDetail
+		resumed    bool
+		wantCalls  int
+	}{
+		{"use native alternate", []string{"codex"}, false, nil, false, 2},
+		{"inject when pinned", nil, false, nil, false, 2},
+		{"preserve tool effects", []string{"codex"}, true, nil, false, 1},
+		{"preserve billed work", nil, false, &UsageDetail{InputTokens: 1}, false, 1},
+		{"preserve resumed work", []string{"codex"}, false, nil, true, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := NewRouter(ledger.Card{Agents: map[string]ledger.Agent{"claude_code": {Adapter: "claude_code.py"}, "codex": {Adapter: "codex.py"}}}, NewExecutor(), flashModel, config.InjectionConfig{}, config.RoutingConfig{})
+			r.SetAgentProber(func(string, ledger.Agent) bool { return true })
+			calls := 0
+			r.SetAdapterProcessRunner(func(_ context.Context, adapter, _, _ string, env []string) AgentResult {
+				calls++
+				if calls == 1 {
+					return AgentResult{Result: "Not logged in · Please run /login", ExitCode: 1, SessionID: "session", WorkObserved: tc.work, Usage: tc.usage}
+				}
+				return AgentResult{OK: (len(tc.alternates) > 0 && adapter == "codex.py") || (adapter == "claude_code.py" && slices.Contains(env, "OPENPANDA_INJECTED_MODEL=1"))}
+			})
+			ctx := context.Background()
+			if tc.resumed {
+				ctx = WithResume(ctx, "session", "claude_code.py")
+			}
+			res := r.Execute(ctx, Plan{Kind: "agent", Agent: "claude_code", Adapter: "claude_code.py", Alternates: tc.alternates}, "ping", "", true)
+			if calls != tc.wantCalls || res.OK != (tc.wantCalls == 2) {
+				t.Fatalf("calls=%d result=%+v", calls, res)
 			}
 		})
 	}

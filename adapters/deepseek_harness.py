@@ -86,20 +86,14 @@ def main():
     binary = harness.resolve_binary(BINARIES, default="dsh")
     argv = [binary, "--profile", "headless"]
     patch = ""
-    model = harness.selected_model((os.environ.get("DEEPSEEK_MODEL") or "").strip())
+    model = os.environ.get("DEEPSEEK_MODEL", "").strip() if os.environ.get("OPENPANDA_INJECTED_MODEL") == "1" else ""
     if model:
         try:
             patch = model_patch(model)
             argv += ["--patch", patch]
         except OSError as ex:
-            if os.environ.get("OPENPANDA_INJECTED_MODEL") == "1":
-                harness.emit(False, "dsh: could not apply the injected model: %s" % ex, 1)
-                return
-            # An unwritable temp dir must not fail the task: run on dsh's own
-            # default model and say so, instead of reporting a model that was
-            # never applied.
-            harness.progress("dsh: model patch skipped (%s)" % ex)
-            patch = ""
+            harness.emit(False, "dsh: could not apply the injected model: %s" % ex, 1)
+            return
     if req.restricted:
         argv += ["--permission-mode", "read-only", "--approval-policy", "never"]
     argv += harness.prompt_argv(prompt)

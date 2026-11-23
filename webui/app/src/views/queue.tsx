@@ -1031,7 +1031,7 @@ function KanbanCard({
           )}
           {task.title || task.id}
         </span>
-        <StateBadge state={task.state} />
+        <StateBadge state={task.state} blockedBy={task.blocked_by} />
       </div>
       {/* The prompt behind the title — the TUI shows `intent:` as its own
           line, so a card whose title is a terse label still says what it

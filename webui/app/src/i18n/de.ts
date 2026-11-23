@@ -328,6 +328,8 @@ const de: Messages = {
   'state.review': 'Prüfung erforderlich',
   'state.done': 'fertig',
   'state.failed': 'fehlgeschlagen',
+  'state.dependencySkipped': 'Wegen Abhängigkeit {stage} nicht ausgeführt',
+  'sessions.runSummary.tally.skipped': '{n} übersprungen',
   'state.cancelled': 'abgebrochen',
   'state.expired': 'abgelaufen',
 

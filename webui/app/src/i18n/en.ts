@@ -330,6 +330,8 @@ const en: Messages = {
   'state.review': 'needs review',
   'state.done': 'done',
   'state.failed': 'failed',
+  'state.dependencySkipped': 'Skipped · dependency {stage}',
+  'sessions.runSummary.tally.skipped': '{n} skipped',
   'state.cancelled': 'cancelled',
   'state.expired': 'expired',
 

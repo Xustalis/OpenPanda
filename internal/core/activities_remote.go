@@ -13,7 +13,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
 )
 
-const activityTypesSQL = "'agent_event','reasoning','exec_agent_start','supervision_round','judge_start','adapter_execution_profile','spawn_child_task','child_spawned','artifact_transfer','project_sync'"
+const activityTypesSQL = "'agent_event','reasoning','exec_agent_start','exec_agent_stop','agent_switch','agent_fallback','supervision_round','judge_start','adapter_execution_profile','harness_attempt_result','spawn_child_task','child_spawned','artifact_transfer','project_sync'"
 const remoteActivityCursorEvent = "remote_activity_cursor"
 const maxActivityBatchBytes = 256 << 10
 

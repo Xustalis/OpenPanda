@@ -71,6 +71,11 @@ export function latestActivity(
   const data = last ? traceData(last) : {}
 
   switch (last?.type) {
+    case 'adapter_execution_profile': {
+      const profile = data.profile as { agent?: string } | undefined
+      return profile?.agent ? t('queue.live.exec', { agent: profile.agent }) : t('queue.live.execStart')
+    }
+    case 'agent_switch': return str(data.note) || t('events.agent_switch')
     case 'exec_agent_start': {
       const agent = str(data.agent) || str(data.adapter)
       return agent ? t('queue.live.exec', { agent }) : t('queue.live.execStart')

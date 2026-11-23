@@ -30,20 +30,21 @@ import (
 // fields are the ones that answer "did the training stage actually get the
 // script?", which is the question a pipeline view exists to answer.
 type planStageJSON struct {
-	Stage    string             `json:"stage"`
-	TaskID   string             `json:"task_id"`
-	Title    string             `json:"title,omitempty"`
-	State    string             `json:"state"`
-	Owner    string             `json:"owner,omitempty"`
-	Executor string             `json:"executor,omitempty"`
-	Target   string             `json:"target,omitempty"`
-	Final    bool               `json:"final,omitempty"`
-	Needs    []string           `json:"needs,omitempty"`
-	Inputs   []planArtifactJSON `json:"inputs,omitempty"`
-	Output   string             `json:"output_artifact,omitempty"`
-	Created  int64              `json:"created_at"`
-	Updated  int64              `json:"updated_at"`
-	Priority string             `json:"priority,omitempty"`
+	BlockedBy string             `json:"blocked_by,omitempty"`
+	Stage     string             `json:"stage"`
+	TaskID    string             `json:"task_id"`
+	Title     string             `json:"title,omitempty"`
+	State     string             `json:"state"`
+	Owner     string             `json:"owner,omitempty"`
+	Executor  string             `json:"executor,omitempty"`
+	Target    string             `json:"target,omitempty"`
+	Final     bool               `json:"final,omitempty"`
+	Needs     []string           `json:"needs,omitempty"`
+	Inputs    []planArtifactJSON `json:"inputs,omitempty"`
+	Output    string             `json:"output_artifact,omitempty"`
+	Created   int64              `json:"created_at"`
+	Updated   int64              `json:"updated_at"`
+	Priority  string             `json:"priority,omitempty"`
 }
 
 // planArtifactJSON names one tree a stage started from and the node it came from.
@@ -83,7 +84,8 @@ func (h *handler) getPlan(w http.ResponseWriter, r *http.Request) {
 	out := make([]planStageJSON, 0, len(stages))
 	for _, t := range stages {
 		st := planStageJSON{
-			Stage: t.StageID, TaskID: t.TaskID, Title: t.Title, State: t.State,
+			BlockedBy: dependencyBlocker(t),
+			Stage:     t.StageID, TaskID: t.TaskID, Title: t.Title, State: t.State,
 			Owner: t.OwnerNode, Needs: t.Needs, Output: t.OutputArtifact,
 			Created: t.CreatedAt, Updated: t.UpdatedAt, Priority: priorityLabel(t.Priority),
 		}
@@ -105,4 +107,25 @@ func (h *handler) getPlan(w http.ResponseWriter, r *http.Request) {
 		out = append(out, st)
 	}
 	writeJSON(w, map[string]any{"plan_id": id, "stages": out})
+}
+
+// Older plans stored the dependency outcome as a generic failure. Match only
+// the scheduler's exact diagnostic for a declared prerequisite.
+func dependencyBlocker(task core.Task) string {
+	if task.State != core.StateFailed && task.State != core.StateCancelled || len(task.Needs) == 0 {
+		return ""
+	}
+	var reason struct {
+		BlockedBy string `json:"blocked_by"`
+		Failed    string `json:"failed"`
+	}
+	if json.Unmarshal([]byte(task.ResultJSON), &reason) != nil {
+		return ""
+	}
+	for _, need := range task.Needs {
+		if reason.BlockedBy == need || reason.Failed == "dependency "+need+" did not complete" {
+			return need
+		}
+	}
+	return ""
 }

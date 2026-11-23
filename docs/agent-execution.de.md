@@ -34,6 +34,8 @@ delegation:
 
 Die Modellwahl ist CLI-nativ. Injizierte Modelle und explizite CLI-Modellvariablen behalten Vorrang. Das Beispiel nutzt mit `injection.model: never` eigene CLI-Anmeldedaten; nicht übernehmen, wenn Panda-Zugangsdaten benötigt werden. Für Endpoint und Zugangsdaten weiterhin `injection.agents` nutzen. Einmodell-CLIs wählen den ersten Kandidaten, OpenCode prüft seinen Katalog. ZCode unterstützt `provider/model`, generic-Vorlagen verwenden `{model}`.
 
+OpenCode und dsh im Headless-Modus verwenden ihre eigene CLI-Konfiguration. OpenCode verwendet die Panda-Modellauswahl bei einer Modellvorgabe, einer Präferenzliste oder mit `OPENPANDA_OPENCODE_AUTO_MODEL=1`. dsh erhält nur bei Modellinjektion einen temporären Provider-Patch. Claude Code übernimmt im eingeschränkten Modus die Modellverbindung aus den Benutzereinstellungen und behält die schreibgeschützten Werkzeuge bei.
+
 Speichern gilt im aktuellen Worker sofort. Andere lokale Worker synchronisieren etwa jede Sekunde und vor der Ausführung. Laufende Aufrufe behalten ihre Modellsnapshots.
 
 ```sh

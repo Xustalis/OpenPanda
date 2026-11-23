@@ -75,7 +75,14 @@ export function useTaskTrace(task: Task): TraceModel {
   const execEv = useMemo(() => lastEvent(traces, 'exec_agent_start'), [traces])
   const classify = (classifyEv?.data ?? null) as ClassifyData | null
   const route = (routeEv?.data ?? null) as RouteData | null
-  const exec = (execEv?.data ?? null) as ExecData | null
+  const exec = useMemo(() => {
+    const start = (execEv?.data ?? null) as ExecData | null
+    const profile = lastEvent(traces, 'adapter_execution_profile')
+    if (!profile || profile.id < (execEv?.id ?? 0) || (task.attempt_id && profile.data?.attempt_id !== task.attempt_id)) return start
+    const launch = profile.data?.profile
+    if (!launch?.agent) return start
+    return { ...start, agent: launch.agent, adapter: launch.adapter, model: launch.model_preference || undefined }
+  }, [execEv, traces, task.attempt_id])
   const supervision = useMemo(
     () => lastData<SupervisionData>(traces, 'supervision_round'),
     [traces],

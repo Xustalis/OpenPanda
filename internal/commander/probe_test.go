@@ -622,6 +622,24 @@ func TestDshEmptyRefsNotCredentials(t *testing.T) {
 	}
 }
 
+func TestDshSelectedProfileDelegatesProviderResolution(t *testing.T) {
+	cleanCredentialEnv(t)
+	dir := t.TempDir()
+	t.Setenv("DSH_HOME", dir)
+	t.Setenv("MINIMAX_CN_API_KEY", "profile-key")
+	mustWrite(t, filepath.Join(dir, "profiles", "headless", "cordis.patch.yml"), "- id: agent-default-model\n  config:\n    provider: minimax-cn\n    model: selected-model\n")
+	r := probeRouter(flashModel)
+	ag := usableAgent("deepseek_harness.py")
+	if r.InjectionDecision("deepseek_harness", ag.Adapter).Inject {
+		t.Fatal("overwrote native route")
+	}
+	spec := r.agentTarget("deepseek_harness", ag)
+	if spec.Model != "selected-model" || spec.Endpoint != "" || spec.APIKey != "" {
+		t.Fatal("synthetic endpoint for native profile")
+	}
+	assertEnv(t, adapterCredentialEnv("deepseek_harness", ag.Adapter), map[string]string{"MINIMAX_CN_API_KEY": "profile-key", "DSH_HOME": dir})
+}
+
 // TestDotenvCommentsNotCredentials: a .env of comments and empty
 // placeholders is not credentials — hermes ships exactly that template.
 func TestDotenvCommentsNotCredentials(t *testing.T) {

@@ -328,6 +328,8 @@ const es: Messages = {
   'state.review': 'pendiente de revisión',
   'state.done': 'completada',
   'state.failed': 'fallida',
+  'state.dependencySkipped': 'Sin ejecutar por dependencia {stage}',
+  'sessions.runSummary.tally.skipped': '{n} sin ejecutar',
   'state.cancelled': 'cancelada',
   'state.expired': 'expirada',
 

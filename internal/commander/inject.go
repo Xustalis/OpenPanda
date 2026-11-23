@@ -191,6 +191,9 @@ func (r *Router) InjectionDecision(name, adapter string) InjectionDecision {
 	}
 	// auto: agent-native credentials win.
 	if own, source := probeAgentCredentials(name, adapter); own {
+		if source == "selected headless provider profile" {
+			return InjectionDecision{Reason: "dsh resolves its selected headless provider at launch"}
+		}
 		return InjectionDecision{
 			Inject: false,
 			Reason: "agent carries its own model credentials (" + source + ")",
@@ -520,7 +523,15 @@ var homeDir = os.UserHomeDir
 // codexConfigDir is the same profile root for credential detection, probes and
 // the adapter. Never resolve an operator override against a task's directory.
 func codexConfigDir(home string) string {
-	if override := os.Getenv("CODEX_HOME"); override != "" {
+	return nativeConfigDir(home, "CODEX_HOME", ".codex")
+}
+
+func claudeConfigDir(home string) string {
+	return nativeConfigDir(home, "CLAUDE_CONFIG_DIR", ".claude")
+}
+
+func nativeConfigDir(home, variable, defaultDir string) string {
+	if override := os.Getenv(variable); override != "" {
 		if filepath.IsAbs(override) {
 			return filepath.Clean(override)
 		}
@@ -529,7 +540,7 @@ func codexConfigDir(home string) string {
 	if home == "" {
 		return ""
 	}
-	return filepath.Join(home, ".codex")
+	return filepath.Join(home, defaultDir)
 }
 
 // credentialManifest resolves the agent's credential manifest from the
@@ -559,18 +570,31 @@ func probeAgentCredentials(name, adapter string) (found bool, source string) {
 	}
 	k, _ := agents.Lookup(name, adapter)
 	if home, err := homeDir(); err == nil {
+		if k.Adapter == "deepseek_harness.py" {
+			if provider, _ := dshProfileModel(nativeConfigDir(home, "DSH_HOME", ".dsh")); provider != "" {
+				return true, "selected headless provider profile"
+			}
+		}
 		for _, rel := range files {
 			p := filepath.Join(home, filepath.FromSlash(rel))
 			source := "config file ~/" + rel
-			if k.Adapter == "codex.py" {
-				dir := codexConfigDir(home)
+			profileVar, profile := "", ""
+			switch k.Adapter {
+			case "codex.py":
+				profileVar, profile = "CODEX_HOME", ".codex"
+			case "claude_code.py":
+				profileVar, profile = "CLAUDE_CONFIG_DIR", ".claude"
+			case "deepseek_harness.py":
+				profileVar, profile = "DSH_HOME", ".dsh"
+			}
+			if profileVar != "" && os.Getenv(profileVar) != "" {
+				dir := nativeConfigDir(home, profileVar, profile)
 				if dir == "" {
 					continue
 				}
-				p = filepath.Join(dir, filepath.Base(rel))
-				if os.Getenv("CODEX_HOME") != "" {
-					source = "config file $CODEX_HOME/" + filepath.Base(rel)
-				}
+				path := strings.TrimPrefix(rel, profile+"/")
+				p = filepath.Join(dir, filepath.FromSlash(path))
+				source = "config file $" + profileVar + "/" + path
 			}
 			st, err := os.Stat(p)
 			if err != nil || st.Size() == 0 {

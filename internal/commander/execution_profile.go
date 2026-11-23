@@ -4,6 +4,7 @@ package commander
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
 	"os"
@@ -17,6 +18,7 @@ import (
 // about the CLI's effective model/tools/configuration. It intentionally excludes
 // prompts, argv templates, MCP bodies, provider URLs, env values and credentials.
 type AdapterExecutionProfile struct {
+	HarnessAttemptID     string               `json:"harness_attempt_id,omitempty"`
 	Coordination         string               `json:"coordination"`
 	Version              int                  `json:"version"`
 	Observation          string               `json:"observation"`
@@ -60,6 +62,42 @@ type ProfileCapabilities struct {
 
 type executionProfileKey struct{}
 
+type harnessAttemptKey struct{}
+type harnessOutcomeKey struct{}
+
+// A task attempt can run several harnesses, including a second attempt with
+// the same harness after model injection. Their IDs are independent of task leases.
+type HarnessOutcome struct {
+	ID, Agent, Adapter, Reason string
+	OK                         bool
+	ExitCode                   int
+}
+
+func WithHarnessOutcomes(ctx context.Context, sink func(HarnessOutcome)) context.Context {
+	return context.WithValue(ctx, harnessOutcomeKey{}, sink)
+}
+
+func (r *Router) runHarnessAttempt(ctx context.Context, adapter, prompt, cwd string, env []string) AgentResult {
+	id := rand.Text()
+	ctx = context.WithValue(ctx, harnessAttemptKey{}, id)
+	if sink := AgentEvents(ctx); sink != nil {
+		ctx = WithAgentEvents(ctx, func(ev AgentEvent) {
+			ev.HarnessAttemptID = id
+			sink(ev)
+		})
+	}
+	res := r.runProcess(ctx, adapter, prompt, cwd, env)
+	if sink, _ := ctx.Value(harnessOutcomeKey{}).(func(HarnessOutcome)); sink != nil {
+		out := HarnessOutcome{ID: id, Agent: AgentName(ctx), Adapter: adapter, OK: res.OK, ExitCode: res.ExitCode}
+		if !res.OK {
+			reason := []rune(security.Redact(describeAgentFailure(res)))
+			out.Reason = string(reason[:min(len(reason), 1000)])
+		}
+		sink(out)
+	}
+	return res
+}
+
 // WithExecutionProfiles installs a trusted process-boundary sink separately
 // from adapter-authored NDJSON. An adapter cannot spoof an authoritative
 // configuration observation by emitting an event with the same name.
@@ -69,6 +107,7 @@ func WithExecutionProfiles(ctx context.Context, sink func(AdapterExecutionProfil
 
 func emitExecutionProfile(ctx context.Context, p AdapterExecutionProfile) {
 	if sink, _ := ctx.Value(executionProfileKey{}).(func(AdapterExecutionProfile)); sink != nil {
+		p.HarnessAttemptID, _ = ctx.Value(harnessAttemptKey{}).(string)
 		sink(p)
 	}
 }
@@ -113,6 +152,9 @@ func adapterExecutionProfile(ctx context.Context, adapter string, req AdapterReq
 	p.NativeToolAccess = "native_unverified"
 	if req.Restricted {
 		p.NativeToolAccess = "restricted"
+		if adapter == "claude_code.py" {
+			p.NativeSettings = "restricted_user_settings_ignored"
+		}
 	} else if adapter == "claude_code.py" && req.ToolsPolicy != "extended" {
 		p.NativeToolAccess = "minimal_allowlist"
 	}

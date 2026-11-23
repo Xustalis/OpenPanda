@@ -1738,7 +1738,7 @@ function DeviceDetail({
                 onClick={() => navigate({ view: 'detail', id: task.id })}
               >
                 <span class="ws-work-badge">
-                  <StateBadge state={task.state} />
+                  <StateBadge state={task.state} blockedBy={task.blocked_by} />
                 </span>
                 <span class="ws-work-text">
                   <span class="ws-work-title">{task.title || t('sessions.untitled')}</span>

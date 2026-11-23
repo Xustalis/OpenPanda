@@ -36,6 +36,8 @@ delegation:
 
 这些选项选择 CLI 原生模型，不转发新的 endpoint 或 API key。保持项目原有优先级：注入模型和显式 CLI 模型环境变量优先于原生候选列表。示例使用 `injection.model: never`，明确采用 CLI 自身登录/配置；不要在需要 Panda 提供模型凭据的节点上直接照抄这一项。需要覆盖 endpoint/凭据时继续使用现有 `injection.agents`。单模型 CLI 使用列表第一项；OpenCode 继续按本机可用模型选择候选。ZCode 可写 `provider/model`；只写模型名需要现有 provider 选择。自定义 generic 适配器需在 command 中使用 `{model}` 占位符。
 
+普通 OpenCode 运行和 dsh 的 headless 运行使用 CLI 自己的配置。指定模型、设置候选列表或启用 `OPENPANDA_OPENCODE_AUTO_MODEL=1` 后，OpenCode 才使用 Panda 选模。dsh 仅在模型注入时应用临时 provider 补丁。Claude Code 的受限任务继承用户设置中的模型连接，同时保留只读工具限制。
+
 保存后立即更新当前嵌入式 worker；共享配置的其他本地 worker 通常在约 1 秒内刷新，并在执行前再读取。运行中的调用保留自己的模型快照。
 
 ```sh
