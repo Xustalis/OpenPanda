@@ -843,6 +843,8 @@ export interface DirectoryListing {
 
 /** GET /api/update — the self-update pipeline status snapshot. */
 export interface UpdateStatus {
+  downloaded_bytes?: number
+  total_bytes?: number
   stage: 'idle' | 'checking' | 'available' | 'downloading' | 'staged' | 'applying' | 'done' | 'error'
   current: string
   /** The running build's release codename (e.g. "Periapsis"), when known. */
@@ -2083,7 +2085,7 @@ export const api = {
   },
 
   downloadUpdate(): Promise<UpdateStatus> {
-    return request('POST', '/api/update/download')
+    return request('POST', '/api/update/download?background=1')
   },
 
   applyUpdate(): Promise<UpdateStatus> {

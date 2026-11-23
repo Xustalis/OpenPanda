@@ -26,15 +26,25 @@ import (
 // mutex; the long-running network steps (check, download) release the lock so
 // status polls are never blocked.
 type Manager struct {
-	mu             sync.Mutex
-	opts           Options
-	stage          Stage
-	latest         string
-	latestCodename string
-	notes          string
-	errMsg         string
-	staged         *stagedRelease
-	notified       string // last version OnAvailable fired for, so ticks don't repeat
+	mu              sync.Mutex
+	opts            Options
+	stage           Stage
+	latest          string
+	latestCodename  string
+	notes           string
+	errMsg          string
+	staged          *stagedRelease
+	checkGeneration uint64
+	transfer        *downloadJob
+	notified        string // last version OnAvailable fired for, so ticks don't repeat
+}
+
+type downloadJob struct {
+	ctx      context.Context
+	cancel   context.CancelFunc
+	version  string
+	received int64
+	total    int64
 }
 
 // stagedRelease is a downloaded-and-verified release waiting to be applied.
@@ -90,6 +100,10 @@ func (m *Manager) statusLocked(ctx context.Context) Status {
 		Error:           m.errMsg,
 		Idle:            m.opts.Idle(ctx),
 	}
+	if job := m.transfer; job != nil {
+		st.DownloadedBytes = job.received
+		st.TotalBytes = job.total
+	}
 	switch m.stage {
 	case StageAvailable, StageDownloading, StageStaged, StageApplying:
 		st.Available = true
@@ -104,6 +118,12 @@ func (m *Manager) statusLocked(ctx context.Context) Status {
 // set) fires once per version — the headless daemon's update notice.
 func (m *Manager) Check(ctx context.Context) error {
 	m.mu.Lock()
+	if m.transfer != nil || m.stage == StageChecking || m.stage == StageApplying || m.stage == StageStaged {
+		m.mu.Unlock()
+		return nil
+	}
+	m.checkGeneration++
+	generation := m.checkGeneration
 	m.stage = StageChecking
 	m.errMsg = ""
 	m.latest = ""
@@ -118,6 +138,9 @@ func (m *Manager) Check(ctx context.Context) error {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.stage != StageChecking || generation != m.checkGeneration {
+		return nil
+	}
 	if err != nil {
 		// Rate-limit (429 + 403-w/remaining=0) and access-denied (403/401/404 on
 		// a private repo) are conditions the panel must not paint as a red
@@ -166,47 +189,98 @@ func (m *Manager) Download(ctx context.Context) error {
 // DownloadForce fetches and verifies the latest release, staging it for Apply.
 // If force is true, it skips the check requiring version to be newer than current.
 func (m *Manager) DownloadForce(ctx context.Context, force bool) error {
-	m.mu.Lock()
-	version := m.latest
-	if version == "" || (!force && CompareVersion(version, m.opts.Current) <= 0) {
-		m.mu.Unlock()
-		return fmt.Errorf("no newer release is known; run a check first")
+	job, err := m.beginDownload(ctx, force, false)
+	if err != nil {
+		return err
 	}
+	return m.runDownload(job)
+}
+
+// StartDownload starts a panel-owned transfer. Repeated requests for the same
+// active or staged release return its current status through the polling API.
+func (m *Manager) StartDownload(ctx context.Context) error {
+	job, err := m.beginDownload(ctx, false, true)
+	if err != nil || job == nil {
+		return err
+	}
+	go m.runDownload(job)
+	return nil
+}
+
+func (m *Manager) beginDownload(ctx context.Context, force, background bool) (*downloadJob, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if background && (m.transfer != nil || m.stage == StageStaged) {
+		return nil, nil
+	}
+	if m.transfer != nil || m.stage == StageChecking || m.stage == StageApplying {
+		return nil, fmt.Errorf("update already in progress")
+	}
+	if m.latest == "" || (!force && CompareVersion(m.latest, m.opts.Current) <= 0) {
+		return nil, fmt.Errorf("no newer release is known; run a check first")
+	}
+	if m.staged != nil {
+		os.RemoveAll(m.staged.dir)
+		m.staged = nil
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	job := &downloadJob{ctx: ctx, cancel: cancel, version: m.latest}
+	m.transfer = job
 	m.stage = StageDownloading
 	m.errMsg = ""
-	m.mu.Unlock()
+	return job, nil
+}
 
+func (m *Manager) runDownload(job *downloadJob) error {
+	defer job.cancel()
 	dir, err := os.MkdirTemp("", "openpanda-update-")
+	var root string
+	if err == nil {
+		root, err = m.fetchAndExtract(job, dir)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if job.ctx.Err() != nil {
+		err = job.ctx.Err()
+	} else if m.transfer != job {
+		err = context.Canceled
+	}
 	if err != nil {
-		m.fail(err)
+		if dir != "" {
+			os.RemoveAll(dir)
+		}
+		if m.transfer == job {
+			m.transfer = nil
+			m.stage = StageError
+			m.errMsg = err.Error()
+		}
 		return err
 	}
-	archive, err := downloadRelease(ctx, m.opts.Repo, version, dir, m.opts.ReleaseKey, m.opts.AllowUnsigned, m.opts.DownloadBase)
+	m.transfer = nil
+	m.staged = &stagedRelease{dir: dir, root: root, version: job.version}
+	m.stage = StageStaged
+	return nil
+}
+
+func (m *Manager) fetchAndExtract(job *downloadJob, dir string) (string, error) {
+	progress := func(received, total int64) {
+		m.mu.Lock()
+		job.received = received
+		job.total = total
+		m.mu.Unlock()
+	}
+	archive, err := downloadRelease(job.ctx, m.opts.Repo, job.version, dir, m.opts.ReleaseKey, m.opts.AllowUnsigned, m.opts.DownloadBase, progress)
 	if err != nil {
-		os.RemoveAll(dir)
-		m.fail(err)
-		return err
+		return "", err
 	}
 	root, err := extractRelease(archive, dir)
 	if err != nil {
-		os.RemoveAll(dir)
-		m.fail(err)
-		return err
+		return "", err
 	}
-	if _, err := os.Stat(filepath.Join(root, "bin", exeName())); err != nil {
-		os.RemoveAll(dir)
-		m.fail(fmt.Errorf("release archive has no %s binary", exeName()))
-		return err
+	if _, err = os.Stat(filepath.Join(root, "bin", exeName())); err != nil {
+		return "", fmt.Errorf("release archive has no %s binary: %w", exeName(), err)
 	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.staged != nil {
-		os.RemoveAll(m.staged.dir)
-	}
-	m.staged = &stagedRelease{dir: dir, root: root, version: version}
-	m.stage = StageStaged
-	return nil
+	return root, nil
 }
 
 // StageLocal stages a locally built release tree for the same Apply path a
@@ -232,6 +306,10 @@ func (m *Manager) StageLocal(root, version string) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.transfer != nil || m.stage == StageApplying {
+		os.RemoveAll(dir)
+		return fmt.Errorf("update already in progress")
+	}
 	if m.staged != nil {
 		os.RemoveAll(m.staged.dir)
 	}
@@ -276,7 +354,7 @@ func copyTree(src, dst string) error {
 // busy (opts.Idle returns false), so an update never interrupts live work.
 func (m *Manager) Apply(ctx context.Context) error {
 	m.mu.Lock()
-	if m.staged == nil {
+	if m.transfer != nil || m.stage == StageApplying || m.staged == nil {
 		m.mu.Unlock()
 		return fmt.Errorf("nothing staged to apply")
 	}
@@ -308,6 +386,16 @@ func (m *Manager) Apply(ctx context.Context) error {
 func (m *Manager) Cancel() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.stage == StageApplying {
+		return
+	}
+	if job := m.transfer; job != nil {
+		job.cancel()
+		m.transfer = nil
+		m.stage = StageAvailable
+		m.errMsg = ""
+		return
+	}
 	if m.staged != nil {
 		os.RemoveAll(m.staged.dir)
 		m.staged = nil

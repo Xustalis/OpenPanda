@@ -46,6 +46,8 @@ const (
 // progress through check, download, and apply. Notes carries the latest
 // release's changelog digest once a check has found one.
 type Status struct {
+	DownloadedBytes int64  `json:"downloaded_bytes,omitempty"`
+	TotalBytes      int64  `json:"total_bytes,omitempty"`
 	Stage           Stage  `json:"stage"`
 	Current         string `json:"current"`
 	CurrentCodename string `json:"current_codename,omitempty"`

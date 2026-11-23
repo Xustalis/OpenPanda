@@ -171,7 +171,7 @@ func scrubURLError(err error) error {
 // network path can route around it. allowUnsigned also clears a configured
 // or baked-in key: the operator's opt-out covers self-hosted channels that
 // ship no signature at all.
-func downloadRelease(ctx context.Context, repo, version, destDir, releaseKey string, allowUnsigned bool, baseOverride string) (string, error) {
+func downloadRelease(ctx context.Context, repo, version, destDir, releaseKey string, allowUnsigned bool, baseOverride string, progress func(int64, int64)) (string, error) {
 	if allowUnsigned {
 		releaseKey = ""
 	} else if releaseKey == "" {
@@ -205,7 +205,7 @@ func downloadRelease(ctx context.Context, repo, version, destDir, releaseKey str
 		return "", fmt.Errorf("checksums.txt has no entry for %s", name)
 	}
 
-	archive, err := downloadFile(ctx, base+"/"+name, destDir)
+	archive, err := downloadFile(ctx, base+"/"+name, destDir, progress)
 	if err != nil {
 		return "", fmt.Errorf("fetch %s: %w", name, err)
 	}
@@ -317,7 +317,7 @@ func fetchText(ctx context.Context, rawURL string) (string, error) {
 // half-downloaded archive never sits at the final name — which is also what
 // makes a retry safe: a truncated attempt removes its temp file and the next
 // one starts clean.
-func downloadFile(ctx context.Context, rawURL, destDir string) (string, error) {
+func downloadFile(ctx context.Context, rawURL, destDir string, progress func(int64, int64)) (string, error) {
 	return withRetry(ctx, downloadAttempts, func(ctx context.Context) (string, error) {
 		// Release archives are ~35MB; a generous ceiling for slow links when
 		// the caller's context is open-ended, while ResponseHeaderTimeout
@@ -346,7 +346,12 @@ func downloadFile(ctx context.Context, rawURL, destDir string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if _, err := io.Copy(f, resp.Body); err != nil {
+		var body io.Reader = resp.Body
+		if progress != nil {
+			progress(0, resp.ContentLength)
+			body = io.TeeReader(body, &byteCounter{report: func(n int64) { progress(n, resp.ContentLength) }})
+		}
+		if _, err := io.Copy(f, body); err != nil {
 			f.Close()
 			os.Remove(tmp)
 			return "", scrubURLError(err)
@@ -361,6 +366,18 @@ func downloadFile(ctx context.Context, rawURL, destDir string) (string, error) {
 		}
 		return dst, nil
 	})
+}
+
+type byteCounter struct {
+	received int64
+	report   func(int64)
+}
+
+func (c *byteCounter) Write(p []byte) (int, error) {
+	n := len(p)
+	c.received += int64(n)
+	c.report(c.received)
+	return n, nil
 }
 
 // checksumFor parses checksums.txt ("<hash>  <name>" or "<hash> *<name>",

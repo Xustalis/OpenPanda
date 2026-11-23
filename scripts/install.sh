@@ -4,7 +4,7 @@
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh | sh
-#   sh install.sh --version 0.1.7             # pin a release (default: newest stable)
+#   sh install.sh --version 0.1.8             # pin a release (default: newest stable)
 #   sh install.sh --prefix /opt/openpanda    # custom install dir
 #   sh install.sh --lite                     # lite build (no web console/TUI; Pi & CLI nodes)
 #   sh install.sh --yes                      # also register auto-start (no prompt)
@@ -102,13 +102,24 @@ if [ -n "${GITHUB_TOKEN:-}" ]; then
     AUTH_HEADER="Authorization: Bearer ${GITHUB_TOKEN}"
 fi
 
+curl_asset() {
+    if [ -n "$AUTH_HEADER" ]; then
+        set -- -H "$AUTH_HEADER" "$@"
+    fi
+    curl -fL --retry 3 --progress-bar "$@"
+}
+
 download() { # <url> <dest> — retried, resumable asset download
     if command -v curl >/dev/null 2>&1; then
-        if [ -n "$AUTH_HEADER" ]; then
-            curl -fL --retry 3 -C - --progress-bar -H "$AUTH_HEADER" -o "$2" "$1"
-        else
-            curl -fL --retry 3 -C - --progress-bar -o "$2" "$1"
-        fi
+        curl_asset -C - -o "$2" "$1" && return 0
+        case $? in
+            16|18|56|92) # Broken stream: resume the partial file over HTTP/1.1.
+                curl_asset --http1.1 -C - -o "$2" "$1" && return 0
+                case $? in 33) ;; *) return 1 ;; esac ;;
+            33) ;; # Server does not support Range.
+            *) return 1 ;;
+        esac
+        curl_asset --http1.1 -o "$2" "$1"
     elif command -v wget >/dev/null 2>&1; then
         wget -c -q -O "$2" "$1"
     else
