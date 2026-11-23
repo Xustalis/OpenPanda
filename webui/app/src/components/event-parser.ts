@@ -113,6 +113,8 @@ export function imageRefOf(block: AgentBlock | undefined): ImageRef | null {
     for (const k of PATH_KEYS) {
       const v = m[k]
       if (typeof v === 'string') {
+        // A structured path may contain spaces. Keep the complete path when fetching it.
+        if (v.length <= 4096 && !/[\x00-\x1f]/.test(v) && IMAGE_EXT_RE.test(v)) return { path: v }
         const ref = pathRef(v)
         if (ref) return ref
       }

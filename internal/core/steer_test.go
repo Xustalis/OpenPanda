@@ -373,3 +373,26 @@ func TestConsumedNoteRefusesEdits(t *testing.T) {
 		t.Fatalf("edit of an unknown key = %v, want no-such-note", err)
 	}
 }
+
+func TestWatchRoundSteerInterruptsForAnotherProcess(t *testing.T) {
+	c := queueTestCore(t)
+	tk := steerTestTask(t, c)
+	roundCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go c.watchRoundSteer(roundCtx, tk.TaskID, msgSeen{}, cancel, done)
+
+	_, status, err := c.InjectUserNote(context.Background(), tk.TaskID, "inspect the screenshot first", nil)
+	if err != nil || status != "queued" {
+		t.Fatalf("remote inject = %q, %v", status, err)
+	}
+	select {
+	case <-roundCtx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("running round did not observe the durable inject")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("steer watcher did not stop after cancelling the round")
+	}
+}

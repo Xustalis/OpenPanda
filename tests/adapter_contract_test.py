@@ -217,9 +217,9 @@ assert args[args.index("--model") + 1] == "selected-model", args
                 self.assertTrue(payload["ok"], payload)
 
         payload, _, _ = run_adapter("deepseek_harness.py", "dsh", r'''
-import sys
+import json, sys
 assert "--patch" not in sys.argv
-print("dsh selected")
+print(json.dumps({"type":"final", "text":"dsh selected"}))
 ''', env={"OPENPANDA_AGENT_MODELS": '["selected-model"]'})
         self.assertTrue(payload["ok"], payload)
 
@@ -258,6 +258,7 @@ if os.name == "posix":
     assert os.path.samefile(os.environ["PWD"], os.getcwd())
 assert os.environ.get("ANTHROPIC_API_KEY") == "native-key"
 print(json.dumps({"type":"assistant", "message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"pwd"}}]}}))
+print(json.dumps({"type":"assistant", "message":{"content":[{"type":"tool_use","name":"Task","input":{"description":"inspect the image renderer"}}]}}))
 print(json.dumps({"type":"result", "is_error":False, "result":"claude answer", "session_id":"sess-123", "usage":{"input_tokens":3,"output_tokens":5,"cache_read_input_tokens":2,"cache_creation_input_tokens":1}, "total_cost_usd":0.25}))
 ''',
             env={"ANTHROPIC_API_KEY": "native-key", "CLAUDE_MODEL": "claude-test"},
@@ -273,6 +274,7 @@ print(json.dumps({"type":"result", "is_error":False, "result":"claude answer", "
             "cache_read_tokens": 2, "cache_write_tokens": 1,
         })
         self.assertTrue(any("Bash: pwd" in line for line in progress), progress)
+        self.assertTrue(any('"kind": "subagent"' in line for line in progress), progress)
 
     def test_claude_resume_and_extended_policy_contract(self):
         payload, _, _ = run_adapter(
@@ -598,6 +600,7 @@ print(json.dumps({"type":"session_meta","payload":{"id":"cs-1"}}))
 print(json.dumps({"type":"item.started","item":{"id":"i1","type":"command_execution","command":"ls -la","status":"in_progress"}}))
 print(json.dumps({"type":"item.completed","item":{"id":"i2","type":"reasoning","text":"pondering"}}))
 print(json.dumps({"type":"item.completed","item":{"id":"i1","type":"command_execution","command":"ls -la","status":"completed","aggregated_output":"total 0"}}))
+print(json.dumps({"type":"item.completed","item":{"id":"i4","type":"mcp_tool_call","server":"codex","tool":"spawn_agent","arguments":{"task":"inspect the UI"},"output":"started"}}))
 print(json.dumps({"type":"item.completed","item":{"id":"i3","type":"agent_message","text":"codex answer"}}))
 ''',
         )
@@ -608,7 +611,7 @@ print(json.dumps({"type":"item.completed","item":{"id":"i3","type":"agent_messag
         # "session" announces the minted conversation id the moment it is
         # known — Go latches it so a killed run can resume — ahead of the
         # transcript items.
-        self.assertEqual(kinds, ["session", "tool_use", "thinking", "tool_result", "text"])
+        self.assertEqual(kinds, ["session", "tool_use", "thinking", "tool_result", "tool_use", "tool_result", "text"])
         self.assertEqual(events[0]["id"], "cs-1")
         self.assertEqual(events[1]["name"], "shell")
         self.assertEqual(events[1]["input"], {"command": "ls -la"})
@@ -617,8 +620,10 @@ print(json.dumps({"type":"item.completed","item":{"id":"i3","type":"agent_messag
         self.assertEqual(events[3]["tool_use_id"], "i1")
         self.assertEqual(events[3]["content"], "total 0")
         self.assertFalse(events[3]["is_error"])
-        self.assertEqual(events[4]["text"], "codex answer")
-        self.assertEqual(events[4]["id"], "i3")
+        self.assertEqual(events[4]["name"], "mcp:codex.spawn_agent")
+        self.assertEqual(events[6]["text"], "codex answer")
+        self.assertEqual(events[6]["id"], "i3")
+        self.assertTrue(any('"kind": "subagent"' in line for line in lines), lines)
 
     def test_codex_updated_text_keeps_item_id_and_only_completion_is_delivered(self):
         payload, lines, _ = run_adapter(
@@ -696,6 +701,29 @@ print(json.dumps({"type":"text","sessionID":"s1","part":{"id":"px","type":"text"
         self.assertFalse(events[1]["is_error"])
         # First sighting wins — the update does not re-emit a second row.
         self.assertEqual(events[2]["text"], "half")
+
+    def test_delegation_across_streaming_adapters(self):
+        streams = [
+            ("opencode.py", "opencode", OC_HELP_CURRENT, [
+                {"type":"tool_use", "part":{"id":"t1", "type":"tool", "tool":"task", "state":{"status":"running"}}},
+                {"type":"text", "part":{"id":"m1", "type":"text", "text":"done"}},
+            ]),
+            ("pi.py", "pi", "", [
+                {"type":"tool_execution_start", "toolCallId":"t1", "toolName":"subagent", "args":{"task":"inspect"}},
+                {"type":"message_end", "message":{"role":"assistant", "content":[{"type":"text", "text":"done"}]}},
+            ]),
+            ("grok_build.py", "grok", "", [
+                {"type":"tool_call", "toolCallId":"t1", "toolName":"spawn_agent", "input":{"task":"inspect"}},
+                {"type":"tool_result", "toolCallId":"t1", "result":"ok"},
+                {"type":"text", "data":"done"}, {"type":"end"},
+            ]),
+        ]
+        for adapter, cli, prefix, events in streams:
+            with self.subTest(adapter=adapter):
+                body = prefix + "\n" + "\n".join("print(%r, flush=True)" % json.dumps(e) for e in events)
+                payload, lines, _ = run_adapter(adapter, cli, body)
+                self.assertTrue(payload["ok"], payload)
+                self.assertEqual(sum('"kind": "subagent"' in line for line in lines), 1, lines)
 
     def test_opencode_v2_tool_part_shape(self):
         """v2 renamed two tool-part fields: the tool is `name` (not `tool`),
@@ -2157,24 +2185,27 @@ print("grok legacy answer")
         self.assertNotIn("session_id", payload)
 
     def test_plain_adapters_keep_their_cli_contract(self):
-        # dsh / hermes / openclaw stay thin passthroughs: pin each command
-        # line so a future change is a deliberate contract edit.
+        # dsh streams structured activity; hermes / openclaw remain passthroughs.
         payload, _, _ = run_adapter(
             "deepseek_harness.py", "dsh", r'''
-import sys
-assert sys.argv[1:] == ["--profile", "headless", "contract prompt"]
-print("dsh answer")
+import json, sys
+assert sys.argv[1:] == ["--profile", "headless", "--json", "contract prompt"]
+for event in ({"type":"session","sessionId":"dsh-session"},
+              {"type":"text","text":"dsh answer"},
+              {"type":"final","sessionId":"dsh-session","text":"dsh answer"}):
+    print(json.dumps(event))
 ''',
             env={"DEEPSEEK_MODEL": "ambient", "OPENPANDA_AGENT_MODELS": '["unused"]'},
         )
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["result"], "dsh answer")
+        self.assertEqual(payload["session_id"], "dsh-session")
 
     def test_dsh_restricted_request_uses_read_only_preset(self):
         payload, _, _ = run_adapter("deepseek_harness.py", "dsh", """
 import sys
-assert sys.argv[1:] == ["--profile", "headless", "--permission-mode", "read-only", "--approval-policy", "never", "contract prompt"]
-print("read-only run")
+assert sys.argv[1:] == ["--profile", "headless", "--json", "--permission-mode", "read-only", "--approval-policy", "never", "contract prompt"]
+print('{"type":"final","text":"read-only run"}')
 """, extra_request={"restricted": True, "authorized": True})
         self.assertTrue(payload["ok"], payload)
 
@@ -2183,19 +2214,75 @@ print("read-only run")
             "deepseek_harness.py", "dsh", r'''
 import pathlib, sys
 args = sys.argv[1:]
-assert args[:2] == ["--profile", "headless"]
+assert args[:3] == ["--profile", "headless", "--json"]
+assert args[args.index("--session-id") + 1] == "dsh-prior" if "--session-id" in args else False
 patch = pathlib.Path(args[args.index("--patch") + 1]).read_text()
 assert "id: agent-default-model" in patch
 assert 'model: "glm-5.3-flash"' in patch
 assert "id: llm-deepseek" in patch
 assert "maxTokens: 131072" in patch
 assert args[-1] == "contract prompt"
-print("dsh injected answer")
+print('{"type":"final","sessionId":"dsh-session","text":"dsh injected answer"}')
 ''',
             env={"DEEPSEEK_MODEL": "glm-5.3-flash", "OPENPANDA_INJECTED_MODEL": "1"},
+            extra_request={"resume": "dsh-prior"},
         )
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["result"], "dsh injected answer")
+
+    def test_dsh_streams_subagent_calls_and_images(self):
+        payload, events, _ = run_adapter("deepseek_harness.py", "dsh", r'''
+import json
+for event in (
+  {"type":"session","sessionId":"s"},
+  {"type":"tool_call","callId":"q","tool":"list_subagent_models","input":{}},
+  {"type":"tool_call","callId":"c1","tool":"subagent","input":{"task":"inspect screenshot"}},
+  {"type":"tool_result","callId":"c1","status":"completed","result":"done"},
+  {"type":"tool_call","callId":"c2","tool":"read","input":{"path":"/tmp/shot.png"}},
+  {"type":"final","sessionId":"s","text":"done"},
+): print(json.dumps(event))
+''')
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(sum('"kind": "subagent"' in line for line in events), 1, events)
+        decoded = [json.loads(line) for line in events if line.startswith("{")]
+        self.assertTrue(any(e.get("ev") == "tool_use" and e.get("name") == "read" for e in decoded), decoded)
+
+    def test_dsh_requires_successful_terminal_event(self):
+        for event, diagnosis in [({"type":"error", "message":"provider unavailable"}, "provider unavailable"),
+                                 ({"type":"text", "text":"partial"}, "no final text")]:
+            with self.subTest(event=event):
+                script = "print('[]')\nprint(%r)" % json.dumps(event)
+                payload, _, _ = run_adapter("deepseek_harness.py", "dsh", script)
+                self.assertFalse(payload["ok"], payload)
+                self.assertIn(diagnosis, payload["result"])
+
+    def test_dsh_legacy_flag_rejection(self):
+        payload, _, _ = run_adapter("deepseek_harness.py", "dsh", r'''
+import sys
+if "--json" in sys.argv:
+    sys.exit("error: unknown option '--json'")
+assert "--permission-mode" in sys.argv
+print("legacy done")
+''', extra_request={"restricted": True, "authorized": True})
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "legacy done")
+
+    def test_codex_native_collab_items(self):
+        payload, lines, _ = run_adapter("codex.py", "codex", r'''
+import json
+for tool in ("spawn_agent", "wait"):
+    for phase in ("started", "completed"):
+        print(json.dumps({"type":"item." + phase, "item":{"type":"collab_tool_call", "id":tool,
+              "tool":tool, "receiver_thread_ids":["child"], "agents_states":{}}}))
+print('{"type":"item.completed","item":{"type":"agent_message","text":"done"}}')
+''')
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(sum('"kind": "subagent"' in line for line in lines), 1, lines)
+        calls = [json.loads(line) for line in lines if '"ev": "tool_result"' in line]
+        self.assertEqual([e["tool_use_id"] for e in calls], ["spawn_agent", "wait"])
+        self.assertEqual(json.loads(calls[0]["content"])["receiver_thread_ids"], ["child"])
+
+    def test_hermes_and_openclaw_plain_contracts(self):
         payload, _, _ = run_adapter(
             "hermes.py", "hermes", r'''
 import sys

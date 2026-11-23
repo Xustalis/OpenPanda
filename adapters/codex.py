@@ -32,6 +32,7 @@ The wire contract, watchdog timeout, process-tree cleanup and stderr
 diagnostics live in _harness.py; this file is only the codex difference:
 flags, the JSONL event shapes and the reduction to the final message.
 """
+import json
 import os
 
 import _harness as harness
@@ -248,6 +249,9 @@ def _emit_item_events(line, started):
             # result so the pair stays complete on the transcript.
             harness.emit_event("tool_use", id=iid, name=name, input=inp)
         out = item.get("aggregated_output") or item.get("output") or ""
+        if it == "collab_tool_call":
+            out = json.dumps({key: item[key] for key in ("receiver_thread_ids", "agents_states")
+                              if key in item}, ensure_ascii=False)
         status = str(item.get("status") or "")
         harness.emit_event("tool_result", tool_use_id=iid,
                            is_error=status in ("failed", "error")
@@ -259,6 +263,9 @@ def _emit_item_events(line, started):
 def _tool_call(item):
     """(name, input) for a codex tool-shaped item, or (None, None)."""
     it = item.get("type")
+    if it == "collab_tool_call":
+        return item.get("tool"), {key: item[key] for key in ("sender_thread_id", "receiver_thread_ids", "prompt")
+                                  if item.get(key) is not None}
     if it == "command_execution":
         return "shell", {"command": item.get("command") or ""}
     if it == "file_change":

@@ -1924,9 +1924,12 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			roundCtx := runCtx
 			var roundCancel context.CancelFunc
 			steerable := steerRounds < maxSteerRounds
+			var watcherDone chan struct{}
 			if steerable {
 				roundCtx, roundCancel = context.WithCancel(runCtx)
 				c.registerInterrupt(taskID, roundCancel)
+				watcherDone = make(chan struct{})
+				go c.watchRoundSteer(roundCtx, taskID, boardSeen, roundCancel, watcherDone)
 			}
 			roundAuthorized := task.Authorized
 			if taskPermissionMode(task.SpecJSON) == defense.ModePlan {
@@ -1941,6 +1944,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				c.clearInterrupt(taskID)
 				interrupted = roundCtx.Err() != nil && c.steerUnseen(execCtx, taskID, boardSeen)
 				roundCancel()
+				<-watcherDone
 			}
 			if interrupted || queueStopping(ctx) {
 				break

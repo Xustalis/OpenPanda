@@ -1409,9 +1409,11 @@ export function SessionsView({
    *  like any other attachment, and its mention is handed to the note. Refusing
    *  them (the old behaviour) meant the one gesture that most needs a note — "look
    *  at this while you work" — was the one gesture that could not be made. */
-  async function sendIntoRunningTurn(text: string, tray: PendingAttachment[]) {
+  const noteSending = useRef(false)
+  async function sendIntoRunningTurn(text: string, tray: PendingAttachment[], target?: string) {
     const sid = activeId
-    if (!sid || (!text && tray.length === 0)) return
+    if (!sid || (!text && tray.length === 0) || noteSending.current) return
+    noteSending.current = true
     const acknowledgeGoal = onMessageAccepted(sid)
     try {
       // Upload before the note so a failed upload leaves the draft intact.
@@ -1424,8 +1426,11 @@ export function SessionsView({
       // A workspace reference has no bytes to upload: its path rides with the
       // note as an attachment, the same shape an uploaded file's mention takes.
       const refs = tray.flatMap((p) => (p.ref ? [p.ref] : []))
-      const r = await api.sendSessionMessage(sid, text, false, [...mentions, ...refs])
+      const attachments = [...mentions, ...refs]
+      const r = target ? await api.sendTaskMessage(target, text, true, attachments)
+        : await api.sendSessionMessage(sid, text, false, attachments)
       acknowledgeGoal?.()
+      if (activeIdRef.current !== sid) return
       // Only clear once the server accepted it: a refused note is still the
       // user's text, and losing it to an optimistic clear costs more than the
       // round trip.
@@ -1436,10 +1441,12 @@ export function SessionsView({
       // The server's own words when it has a caveat (no queue consumer, or an
       // inject that could not interrupt), else the plain outcome.
       if (r.warning) toast(r.warning)
-      else toast(t('sessions.msgQueued'))
+      else toast(t(r.status === 'interrupted' ? 'detail.msgInjectedToast' : 'sessions.msgQueued'))
       void refreshNotes()
     } catch (err) {
       toastError(err)
+    } finally {
+      noteSending.current = false
     }
   }
 
@@ -1674,7 +1681,8 @@ export function SessionsView({
     // one ended without, so the busy guard (and its "type an addition" path)
     // does not apply — `busy` is still true in this closure's finally.
     if (fromComposer && (busy || inflight.current)) {
-      void sendIntoRunningTurn(raw, tray)
+      if (liveIds.length > 1) { toast(t('sessions.pickTaskForNote')); return }
+      void sendIntoRunningTurn(raw, tray, liveIds[0])
       return
     }
     // Snapshot the completion at send time so a goal that finishes during
@@ -1720,6 +1728,12 @@ export function SessionsView({
     }
 
     try {
+      if (id && fromComposer && goalText === null && planText === null) {
+        const targets = liveTaskIds(await api.tasks({ session: id, brief: true }))
+        if (ctrl.signal.aborted || activeIdRef.current !== origin) return
+        if (targets.length > 1) { toast(t('sessions.pickTaskForNote')); return }
+        if (targets.length === 1) { await sendIntoRunningTurn(raw, tray, targets[0]); return }
+      }
       let threadProject = draftProject || undefined
       if (!id && pickedDir) {
         threadProject = await projectForDir(pickedDir)

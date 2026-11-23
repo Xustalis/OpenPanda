@@ -1381,8 +1381,8 @@ export const api = {
    *  modes: queue (board context the agent reads at its next round) or
    *  inject (a steer that leads the next round, aborting the in-flight one
    *  when this console runs the task). */
-  sendTaskMessage(id: string, text: string, inject: boolean): Promise<TaskMessageResult> {
-    return request('POST', `/api/tasks/${encodeURIComponent(id)}/messages`, { text, inject })
+  sendTaskMessage(id: string, text: string, inject: boolean, attachments: string[] = []): Promise<TaskMessageResult> {
+    return request('POST', `/api/tasks/${encodeURIComponent(id)}/messages`, { text, inject, attachments })
   },
 
   /** The task's own board scope — queued user notes, steers and sibling

@@ -339,6 +339,8 @@ describe('buildRows pipeline grouping', () => {
       input: { file_path: 'C:\\Users\\x\\AppData\\Local\\Temp\\panda_verify\\t2-eating.png' },
     })
     assert.equal(shot?.path, 'C:\\Users\\x\\AppData\\Local\\Temp\\panda_verify\\t2-eating.png')
+    assert.equal(imageRefOf({ ev: 'tool_use', name: 'Read', input: { file_path: '/tmp/launch screenshots/shot 01.png' } })?.path,
+      '/tmp/launch screenshots/shot 01.png')
 
     // Relative paths resolve against the work dir server-side.
     assert.equal(imageRefOf({ ev: 'tool_use', name: 'Read', input: { path: 'shots/a.JPG' } })?.path, 'shots/a.JPG')

@@ -255,22 +255,25 @@ export function TaskQuickSend({ taskId, hint }: { taskId: string; hint?: Task | 
   const task = hint ?? fetched
   const [open, setOpen] = useState(false)
   const [text, setText] = useState('')
+  const [images, setImages] = useState<File[]>([])
   const [busy, setBusy] = useState(false)
 
   if (!task || ['done', 'failed', 'cancelled', 'expired'].includes(task.state)) return null
 
   async function deliver(inject: boolean) {
     const body = text.trim()
-    if (!body || busy) return
+    if ((!body && !images.length) || busy) return
     setBusy(true)
     try {
-      const r = await api.sendTaskMessage(taskId, body, inject)
+      const uploaded = images.length && task?.session_id ? await api.uploadSessionFiles(task.session_id, images) : null
+      const r = await api.sendTaskMessage(taskId, body, inject, uploaded?.files.map(file => file.mention) ?? [])
       toast(
         r.warning ||
           (r.status === 'interrupted' ? t('detail.msgInjectedToast') : t('detail.msgQueuedToast')),
         r.warning ? 'info' : 'success',
       )
       setText('')
+      setImages([])
       setOpen(false)
     } catch (e) {
       toastError(e)
@@ -288,6 +291,8 @@ export function TaskQuickSend({ taskId, hint }: { taskId: string; hint?: Task | 
   }
   return (
     <div class="task-quick-send">
+      {task.session_id && <input type="file" accept="image/*" multiple disabled={busy}
+        aria-label={t('detail.msgAttachImage')} onChange={e => setImages(Array.from(e.currentTarget.files ?? []))} />}
       <input
         class="input"
         type="text"
@@ -299,10 +304,10 @@ export function TaskQuickSend({ taskId, hint }: { taskId: string; hint?: Task | 
           if (e.key === 'Escape') setOpen(false)
         }}
       />
-      <button class="btn small" disabled={busy || !text.trim()} onClick={() => deliver(false)}>
+      <button class="btn small" disabled={busy || (!text.trim() && !images.length)} onClick={() => deliver(false)}>
         {t('detail.msgQueue')}
       </button>
-      <button class="btn small primary" disabled={busy || !text.trim()} onClick={() => deliver(true)}>
+      <button class="btn small primary" disabled={busy || (!text.trim() && !images.length)} onClick={() => deliver(true)}>
         {t('detail.msgInject')}
       </button>
     </div>

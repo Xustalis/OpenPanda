@@ -724,13 +724,7 @@ def _emit_assistant_events(ev):
             if len(arg) > 80:
                 arg = arg[:79] + "…"
             note = f"{name}: {arg}" if arg else name
-            # Claude's built-in Task tool spawns a sub-agent: surface it as a
-            # typed event so the Go harness records it distinctly from an
-            # ordinary tool call (the operator sees the delegation chain).
-            if name == "Task":
-                harness.progress_kind("subagent", note)
-            else:
-                harness.progress(note)
+            harness.progress(note)
 
 
 def _emit_user_events(ev):

@@ -134,14 +134,20 @@ def _stream_turn(cmd, cwd, timeout, stop_on_tool=None):
         if not line:
             return
         saw_event[0] = True
-        try:
-            ev = json.loads(line)
-        except ValueError:
+        ev = harness.parse_json_line(line)
+        if ev is None:
             return
         if ev.get("type") == "text":
             data = ev.get("data")
             if isinstance(data, str):
                 parts.append(data)
+        elif ev.get("type") == "tool_call" and not stop_on_tool:
+            name = ev.get("toolName") or ev.get("title") or "tool"
+            harness.emit_event("tool_use", id=str(ev.get("toolCallId") or ev.get("id") or ""),
+                               name=name, input=ev.get("input") or ev.get("arguments") or {})
+        elif ev.get("type") == "tool_result" and not stop_on_tool:
+            harness.emit_event("tool_result", tool_use_id=str(ev.get("toolCallId") or ev.get("id") or ""),
+                               is_error=bool(ev.get("isError")), content=ev.get("result") or ev.get("data") or "")
         elif ev.get("type") == "error":
             # grok reports a dropped connection, a bad key or an unreachable
             # endpoint as a terminal `error` event. Collecting only `text` made
@@ -158,11 +164,8 @@ def _stream_turn(cmd, cwd, timeout, stop_on_tool=None):
             return True
         if not stop_on_tool or called:
             return False
-        try:
-            ev = json.loads(line)
-        except ValueError:
-            return False
-        if ev.get("type") != "tool_call":
+        ev = harness.parse_json_line(line)
+        if ev is None or ev.get("type") != "tool_call":
             return False
         called.append(ev.get("title") or ev.get("toolName") or "a tool")
         return True

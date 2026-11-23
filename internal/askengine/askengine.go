@@ -758,7 +758,7 @@ func (e *Engine) SendTaskNote(ctx context.Context, taskID, text string, attachme
 		}
 		res.Sender, res.Seq, res.Status = msg.Sender, msg.SenderSeq, "queued"
 	}
-	res.Warning = e.noteWarning(ctx, taskID, inject, res.Status)
+	res.Warning = e.noteWarning(ctx, taskID)
 	return res, nil
 }
 
@@ -774,7 +774,7 @@ func (e *Engine) PromoteTaskNote(ctx context.Context, taskID, sender string) (st
 	if err != nil {
 		return "", "", err
 	}
-	return status, e.noteWarning(ctx, taskID, true, status), nil
+	return status, e.noteWarning(ctx, taskID), nil
 }
 
 // EditTaskNote rewrites a pending note. Errors carry the reason the store
@@ -791,24 +791,14 @@ func (e *Engine) DeleteTaskNote(ctx context.Context, taskID, sender string) erro
 	return core.NewSigningTaskStore(e.db, e.logger).DeleteUserNote(ctx, taskID, sender)
 }
 
-// noteWarning phrases the two ways a delivered note still fails to reach a
-// round: a queued task with no consumer, and an inject that could not abort
-// because the running round lives in another process.
-func (e *Engine) noteWarning(ctx context.Context, taskID string, inject bool, status string) string {
+// noteWarning reports a queued task with no worker available to consume it.
+func (e *Engine) noteWarning(ctx context.Context, taskID string) string {
 	t, terr := core.NewSigningTaskStore(e.db, e.logger).Get(ctx, taskID)
 	if terr != nil {
 		return ""
 	}
 	if t.State == core.StateQueued && !e.queueConsumerAlive(ctx) {
 		return i18n.T(e.Locale(), "cli.queue.noConsumer")
-	}
-	// An inject only aborts a round this process is running — the cancel
-	// handle lives in memory (steer.go). When the row is running somewhere
-	// else the note still queued for the next round, which is fine, but
-	// silently reporting the same "queued" a same-process inject reports
-	// would tell the user they cut the round short when nothing was cut.
-	if inject && status == "queued" && t.State == core.StateRunning {
-		return i18n.T(e.Locale(), "cli.task.send.injectNoInterrupt")
 	}
 	return ""
 }
