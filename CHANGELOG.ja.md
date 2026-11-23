@@ -40,6 +40,10 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-11-24 — "Constellation"
+
+- コンソールを閉じても更新のダウンロードが続きます。進捗の確認、キャンセル、再試行に対応しました。CLI は低速回線に対応し、Unix インストーラーは HTTP/2 の転送が中断すると HTTP/1.1 で再試行します。
+
 ## [0.1.7] - 2026-11-23 — "Constellation"
 
 ### 追加

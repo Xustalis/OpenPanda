@@ -23,11 +23,15 @@ func (h *handler) checkUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 // downloadUpdate fetches and verifies the latest release, staging it for
-// apply. It returns the fresh status on success (stage "staged"); on a network
-// or checksum failure it returns 500 with the reason, and the manager discards
-// any partial download so no residue is left behind.
+// apply in the background. GET /api/update reports progress and the outcome.
 func (h *handler) downloadUpdate(w http.ResponseWriter, r *http.Request) {
-	if err := h.updater.Download(r.Context()); err != nil {
+	var err error
+	if r.URL.Query().Get("background") == "1" {
+		err = h.updater.StartDownload(h.serviceCtx)
+	} else {
+		err = h.updater.Download(r.Context())
+	}
+	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}

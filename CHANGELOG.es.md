@@ -40,6 +40,10 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-11-24 — "Constellation"
+
+- Las descargas continúan al cerrar la consola. La consola muestra el progreso y permite cancelar y reintentar. La CLI admite conexiones lentas y el instalador de Unix reintenta las transferencias HTTP/2 interrumpidas mediante HTTP/1.1.
+
 ## [0.1.7] - 2026-11-23 — "Constellation"
 
 ### Añadido

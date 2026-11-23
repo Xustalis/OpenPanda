@@ -171,7 +171,7 @@ func TestDownloadReleaseBaseOverride(t *testing.T) {
 	cleanup := SetDownloadBaseForTest("http://127.0.0.1:1")
 	defer cleanup()
 
-	got, err := downloadRelease(context.Background(), "test/repo", version, t.TempDir(), "", true, srv.URL+"/mirror/releases/download/v"+version)
+	got, err := downloadRelease(context.Background(), "test/repo", version, t.TempDir(), "", true, srv.URL+"/mirror/releases/download/v"+version, nil)
 	if err != nil {
 		t.Fatalf("downloadRelease with base override: %v", err)
 	}

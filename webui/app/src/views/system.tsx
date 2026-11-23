@@ -193,7 +193,12 @@ function UpdateCard() {
       <span class="dim">{t('system.updateTitle')}</span>
 
       {stage === 'checking' && <p class="dim">{t('system.updateChecking')}</p>}
-      {stage === 'downloading' && <p class="dim">{t('system.updateDownloading')}</p>}
+      {stage === 'downloading' && <div class="update-actions">
+        <p class="dim">{t('system.updateDownloading')} {((status.downloaded_bytes ?? 0) / 1048576).toFixed(1)} MiB
+          {(status.total_bytes ?? 0) > 0 && ' / ' + ((status.total_bytes ?? 0) / 1048576).toFixed(1) + ' MiB'}
+        </p>
+        <button class="btn" disabled={busy} onClick={() => void act(() => api.cancelUpdate())}>{t('common.cancel')}</button>
+      </div>}
       {stage === 'applying' && <p class="dim">{t('system.updateApplying')}</p>}
       {stage === 'done' && (
         <>
@@ -236,6 +241,9 @@ function UpdateCard() {
             <p class="test-result bad">
               {t('system.updateError')} {error}
             </p>
+          )}
+          {stage === 'error' && status.latest && (
+            <button class="btn" disabled={busy} onClick={() => void act(() => api.downloadUpdate())}>{t('system.updateDownload')}</button>
           )}
           <button class="btn" disabled={busy} onClick={() => void act(() => api.checkUpdate())}>
             {t('system.updateCheck')}
