@@ -40,6 +40,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-11-23 — "Constellation"
+
 ### Hinzugefügt
 
 - **Tastenkürzel.** Aktionen und Tasten sind durchsuchbar. Kombinationen lassen sich aufnehmen, mit der Rücktaste löschen oder zurücksetzen. Bei Konflikten erscheint die belegende Aktion. Die Belegung wird im Browser gespeichert.
@@ -77,6 +79,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - **Die Wegewahl richtet sich nach dem Aufwand, nicht nur nach den Kosten.** Die 0-bis-1-Komplexität, die der Klassifizierer ohnehin ausgibt, ist jetzt eine Eingabe der Wegewahl: eine leichte Aufgabe trägt das Vokabular für schnelle Änderungen und Suche, eine schwere das für Schlussfolgern, mehrere Dateien und Refactoring, und die `best_at` / `not_for`-Angaben der Karte entscheiden. Ein Durchgang durch die Codebasis landet so bei opencode oder dsh, ein großer Umbau oder eine designlastige Frontend-Änderung bei claude_code, codex oder antigravity. Mittlerer Aufwand fügt nichts hinzu, gewöhnliche Aufgaben wägen also weiterhin Kosten gegen Können ab. Die Schwellen sind dieselben 0,35 / 0,75, die das Kontextbudget bereits nutzte — einmal benannt und geteilt, sodass der für eine schwere Aufgabe gewählte Ausführende auch das große Kontextbudget erhält. Das Modell kann außerdem einen bevorzugten Harness benennen (`spec.preferred_agent`) und den Aufwand einer Stufe einschätzen (`stage.complexity`); ein bevorzugter Harness, der die Arbeit nicht übernehmen kann, lässt einem anderen erlaubten Agenten weiterhin die Übernahme.
 
 ### Behoben
+
+- Die Konsole zeigt einzelne Ausführungsversuche, auch wenn der Agent schon beim Start scheitert. Die Berechtigungsprüfung für Aktoren und die Maskierung von Zugangsdaten wurden verschärft.
 
 - **Native CLI-Konfiguration.** Claude Code übernimmt im eingeschränkten Modus die von CC Switch gespeicherte Modellverbindung und die Modellaliase. Der schreibgeschützte Werkzeugzugriff bleibt erhalten. OpenCode nutzt standardmäßig sein konfiguriertes Modell. dsh verwendet im Headless-Modus das gewählte Anbieterprofil und überschreibt es nur bei einer Modellinjektion vorübergehend.
 - **Wiederherstellung nach Startfehlern.** Eine leere Claude-Sitzung, die vor einer fehlgeschlagenen Anmeldung angelegt wurde, blockiert die Wiederherstellung nicht mehr. Panda versucht zunächst die übrigen geeigneten Harnesses mit deren nativer Konfiguration. Ist die Modellinjektion erlaubt, kann Panda anschließend einen kompatiblen Harness mit dem in Panda konfigurierten Modell erneut starten. Werkzeugaufrufe, abgerechnete Nutzung und vorhandene Fortsetzungspunkte schützen bereits geleistete Arbeit vor einer erneuten Ausführung.

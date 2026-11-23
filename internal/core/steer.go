@@ -387,7 +387,7 @@ func (c *Core) takeRoundSteer(ctx context.Context, taskID string, seen msgSeen) 
 }
 
 func pendingRoundSteer(m TaskMessage, taskID string, seen msgSeen) bool {
-	if m.Grade != MsgGradeSteer || seen[msgSlotKey(m)] >= m.SenderSeq {
+	if m.Grade != MsgGradeSteer || m.ConsumedAt != 0 || seen[msgSlotKey(m)] >= m.SenderSeq {
 		return false
 	}
 	return isUserSender(m.Sender) || (m.Rcpt == taskID && strings.HasPrefix(m.Sender, planSenderPrefix) && m.ConsumedAt == 0)
@@ -410,6 +410,24 @@ func (c *Core) steerUnseen(ctx context.Context, taskID string, seen msgSeen) boo
 		}
 	}
 	return false
+}
+
+// watchRoundSteer wakes the executor when another local process posts a directive.
+func (c *Core) watchRoundSteer(ctx context.Context, taskID string, seen msgSeen, cancel context.CancelFunc, done chan<- struct{}) {
+	defer close(done)
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if c.steerUnseen(ctx, taskID, seen) {
+				cancel()
+				return
+			}
+		}
+	}
 }
 
 // registerInterrupt publishes the running round's cancel so an inject can

@@ -40,6 +40,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-11-23 — "Constellation"
+
 ### Añadido
 
 - **Atajos de teclado.** Se pueden buscar acciones o teclas, grabar combinaciones, borrarlas con Retroceso y restaurar los valores iniciales. Los conflictos indican qué acción ocupa la combinación. Los cambios se guardan en el navegador.
@@ -77,6 +79,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - **El enrutado mira cuánto cuesta el trabajo, pero también cuánto exige.** La puntuación de complejidad de 0 a 1 que el clasificador ya emitía ahora es una entrada del enrutado: una tarea ligera lleva el vocabulario de edición rápida y búsqueda, una profunda lleva razonamiento, múltiples archivos y refactorización, y deciden las declaraciones `best_at` / `not_for` de la tarjeta. Así un barrido del código recae en opencode o dsh, mientras que una refactorización grande o un cambio de front-end con peso de diseño recae en claude_code, codex o antigravity. La dificultad media no añade nada, de modo que las tareas ordinarias siguen sopesando coste y capacidad como antes. Los umbrales son los mismos 0,35 / 0,75 que ya usaba el presupuesto de contexto, nombrados una vez y compartidos: el ejecutor elegido para una tarea profunda es también el que recibe el presupuesto de contexto amplio. El modelo también puede nombrar un harness de primera opción (`spec.preferred_agent`) y estimar el esfuerzo de una etapa (`stage.complexity`); un harness preferido que no puede tomar el trabajo deja que otro agente permitido lo asuma.
 
 ### Corregido
+
+- La consola muestra cada intento de ejecución, incluso si el agente falla al iniciarse. Se reforzaron la autorización de actuadores y la ocultación de credenciales en los registros.
 
 - **Configuración nativa de las CLI.** En modo restringido, Claude Code usa la conexión y los alias de modelo guardados por CC Switch y mantiene las herramientas en modo de solo lectura. OpenCode usa por defecto su modelo configurado. En modo headless, dsh utiliza el perfil de proveedor seleccionado y solo lo sustituye temporalmente al inyectar un modelo.
 - **Recuperación tras un fallo de inicio.** Un ID de sesión vacío creado por Claude antes de un fallo de autenticación ya no impide la recuperación. Panda prueba los demás ejecutores disponibles con su configuración nativa. Si la inyección está habilitada, puede volver a intentar la tarea en un ejecutor compatible con el modelo configurado en Panda. Las llamadas a herramientas, el uso facturado y los puntos de reanudación existentes evitan que se repita el trabajo desde el principio.

@@ -928,6 +928,15 @@ def emit_event(ev, phase=None, **fields):
     startup-grace silence window open because no model has produced anything
     yet.
     """
+    if ev == "tool_use":
+        tool_name = str(fields.get("name") or "")
+        if tool_name.lower() in {"task", "agent", "subagent", "subagent_fork", "spawn_teammate",
+                                 "spawn_agent", "spawn_subagent", "delegate_task", "mcp:codex.spawn_agent"}:
+            detail = fields.get("input")
+            if isinstance(detail, dict):
+                detail = next((detail.get(key) for key in ("description", "task", "prompt", "name", "title") if detail.get(key)), "")
+            note = tool_name + (": " + str(detail) if detail else "")
+            progress_kind("subagent", note[:300])
     payload = {"type": "event", "ev": ev}
     if phase:
         payload["phase"] = phase

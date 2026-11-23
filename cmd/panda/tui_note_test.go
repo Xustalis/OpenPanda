@@ -173,11 +173,8 @@ func TestTUIQueueDefaultsToFocusedTask(t *testing.T) {
 	}
 }
 
-// TestTUIInjectQueuesHonestlyWhenAnotherProcessRunsIt is the semantic line
-// between the two modes. The abort handle lives in memory, so an inject can only
-// cut a round THIS process is running; when the row is running elsewhere the
-// note still lands (as a steer, so it leads that executor's next round) but the
-// confirmation must not claim an interrupt that never happened.
+// The executor watches the durable board from its own process. The sender
+// reports the queued steer until that executor observes it.
 func TestTUIInjectQueuesHonestlyWhenAnotherProcessRunsIt(t *testing.T) {
 	m, st, nodeID := newNoteTUI(t, true)
 	task := queueTestTask(t, st, nodeID, "inject target")
@@ -200,8 +197,8 @@ func TestTUIInjectQueuesHonestlyWhenAnotherProcessRunsIt(t *testing.T) {
 	if want := i18n.Tf(i18n.English, "cli.task.send.queued", "id", short); !strings.Contains(printed, want) {
 		t.Fatalf("/inject on a foreign round should report queued, got %q (want %q)", printed, want)
 	}
-	if want := i18n.T(i18n.English, "cli.task.send.injectNoInterrupt"); !strings.Contains(printed, want) {
-		t.Fatalf("a foreign round cannot be aborted — the note must say so, got %q (want %q)", printed, want)
+	if want := i18n.T(i18n.English, "cli.task.send.injectNoInterrupt"); strings.Contains(printed, want) {
+		t.Fatalf("the sender cannot rule out interruption by the executor: %q", printed)
 	}
 	if lie := i18n.Tf(i18n.English, "cli.task.send.interrupted", "id", short); strings.Contains(printed, lie) {
 		t.Fatalf("nothing was interrupted, so the interrupted confirmation is a lie: %q", printed)

@@ -348,23 +348,22 @@ func (h *handler) sessionStreaming(id string) bool {
 	return ok
 }
 
-// liveTaskFor returns the newest task a session still owes work to, or nil.
-// Newest row wins (ListBySession is created_at DESC) so a thread that spawned a
-// second task after the first settled still targets the current one.
-func (h *handler) liveTaskFor(ctx context.Context, sessID string) *core.Task {
+// liveTasksFor lists the boards that can still receive steering in this session.
+func (h *handler) liveTasksFor(ctx context.Context, sessID string) ([]core.Task, error) {
 	if h.store == nil {
-		return nil
+		return nil, nil
 	}
 	tasks, err := h.store.ListBySession(ctx, sessID)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	for i := range tasks {
-		if !taskSettled(tasks[i].State) {
-			return &tasks[i]
+	live := tasks[:0]
+	for _, task := range tasks {
+		if !taskSettled(task.State) {
+			live = append(live, task)
 		}
 	}
-	return nil
+	return live, nil
 }
 
 // sessionNote is one row of the composer's pending strip, whichever path it
@@ -410,7 +409,17 @@ func (h *handler) sendSessionMessage(w http.ResponseWriter, r *http.Request) {
 
 	// A live task linked to this thread takes the durable path first.
 	if eng := h.currentEngine(); eng != nil {
-		if t := h.liveTaskFor(r.Context(), sessID); t != nil {
+		tasks, err := h.liveTasksFor(r.Context(), sessID)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		if len(tasks) > 1 {
+			writeErr(w, http.StatusConflict, errors.New("multiple active tasks in this session: choose a task to receive the message"))
+			return
+		}
+		if len(tasks) == 1 {
+			t := tasks[0]
 			res, serr := eng.SendTaskNote(r.Context(), t.TaskID, req.Text, req.Attachments, req.Inject)
 			if serr != nil {
 				writeTaskMessageErr(w, serr)
@@ -460,10 +469,12 @@ func (h *handler) listSessionNotes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	notes := make([]sessionNote, 0, 8)
-	// Newest live task only: a settled row's leftovers are history, and two
-	// live tasks in one thread would make "which board does the composer type
-	// into" ambiguous.
-	if t := h.liveTaskFor(r.Context(), sessID); t != nil {
+	tasks, err := h.liveTasksFor(r.Context(), sessID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	for _, t := range tasks {
 		if msgs, merr := h.store.UserNotes(r.Context(), t.TaskID); merr == nil {
 			for _, m := range msgs {
 				notes = append(notes, sessionNote{
@@ -599,24 +610,28 @@ func (h *handler) promoteSessionNote(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// noteTaskID resolves the task a board key belongs to. The key is only unique
-// within one board, so the task comes from the session's live row rather than
-// from the key itself. A key that names no pending note on that row answers "".
+// A sender key is board-local. Resolve it only when one live board owns it.
 func (h *handler) noteTaskID(ctx context.Context, sessID, key string) string {
-	t := h.liveTaskFor(ctx, sessID)
-	if t == nil {
-		return ""
-	}
-	notes, err := h.store.UserNotes(ctx, t.TaskID)
+	tasks, err := h.liveTasksFor(ctx, sessID)
 	if err != nil {
 		return ""
 	}
-	for _, n := range notes {
-		if n.Sender == key {
-			return t.TaskID
+	var match string
+	for _, t := range tasks {
+		notes, err := h.store.UserNotes(ctx, t.TaskID)
+		if err != nil {
+			return ""
+		}
+		for _, n := range notes {
+			if n.Sender == key {
+				if match != "" {
+					return ""
+				}
+				match = t.TaskID
+			}
 		}
 	}
-	return ""
+	return match
 }
 
 // cleanAttachments normalizes the attachment list: trimmed, non-empty, and

@@ -10,9 +10,9 @@ package version
 // Version is the semantic version of this build, and the default for a build
 // that does not go through release packaging.
 //
-// It tracks the source release target, currently v0.1.6. A local build
+// It tracks the source release target, currently v0.1.7. A local build
 // carrying this version does not establish that the tag has been published.
-var Version = "0.1.6"
+var Version = "0.1.7"
 
 // Codename is the release line's thematic name — "Constellation": the fleet
 // drawn as one sky. The workspace page renders every device as a plate on a
@@ -33,7 +33,7 @@ var Codename = "Constellation"
 // Version and Codename when a release is cut, and left empty for ad-hoc
 // builds that never had a release day. The console's profile page prints it
 // as "发布于 …" and falls back to omitting the line when it is empty.
-var ReleaseDate = "2026-11-14"
+var ReleaseDate = "2026-11-23"
 
 // Build provenance classes — which channel produced a binary. They ride the
 // wire as hello/heartbeat `prov`. The unset default normalizes to

@@ -234,6 +234,28 @@ func TestSessionMessageTargetsLiveTask(t *testing.T) {
 	}
 }
 
+func TestSessionMessageRequiresTargetForConcurrentTasks(t *testing.T) {
+	store, mux, first, sessionID := parkedTaskThread(t)
+	ctx := context.Background()
+	second, err := store.Create(ctx, "", "", "parallel work", "worker", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetSessionID(ctx, second.TaskID, sessionID); err != nil {
+		t.Fatal(err)
+	}
+	rr := postSessionMessage(t, mux, sessionID, `{"text":"ambiguous note","inject":true}`)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("ambiguous send: %d %s", rr.Code, rr.Body.String())
+	}
+	for _, id := range []string{first, second.TaskID} {
+		notes, err := store.UserNotes(ctx, id)
+		if err != nil || len(notes) != 0 {
+			t.Fatalf("unexpected notes for %s: %v %v", id, notes, err)
+		}
+	}
+}
+
 // parkedTaskThread builds the shape the pending strip actually reads: a live
 // (parked) task linked to a session, plus the one-route mux. Parked rather than
 // running so it cannot settle mid-test.

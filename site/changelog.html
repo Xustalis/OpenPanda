@@ -88,7 +88,7 @@
       <p class="mono-label pg-kicker">RELEASE NOTES</p>
       <h1 class="pg-title" data-i18n="cl.h1">发布记录</h1>
       <p class="pg-lede" data-i18n="cl.lede">v0.1.x 优先打磨任务从派发、恢复到交付的全过程。下方按版本记录实际交付的改动，完整日志有五种语言。</p>
-      <p class="pg-meta">7 RELEASES · 0.1.0 → 0.1.6</p>
+      <p class="pg-meta">8 RELEASES · 0.1.0 → 0.1.7</p>
     </div>
   </header>
   <div class="wrap pg-layout">
@@ -97,6 +97,7 @@
         <nav aria-label="本页目录" data-i18n-aria="pg.toc.aria">
         <a href="#promise" data-i18n="cl.promise.t">版本兼容承诺</a>
         <a href="#unreleased" data-i18n="cl.unreleased.nav">开发中</a>
+        <a href="#v017" data-i18n="cl.v017.t">v0.1.7</a>
         <a href="#v016" data-i18n="cl.v016.t">v0.1.6</a>
         <a href="#v015" data-i18n="cl.v015.t">v0.1.5</a>
         <a href="#v014" data-i18n="cl.v014.t">v0.1.4</a>
@@ -112,7 +113,7 @@
         </nav>
         <div class="pg-toc-foot">
           <span class="mono-label">STABLE</span>
-          <b>v0.1.6</b>
+          <b>v0.1.7</b>
           <a href="download.html" data-i18n="pg.toc.dl">下载 →</a>
         </div>
       </aside>
@@ -124,22 +125,27 @@
 
       <section class="pg-section" id="unreleased">
         <h2 data-i18n="cl.unreleased.t">开发中（尚未发版）</h2>
-        <p class="pg-lead" data-i18n="cl.unreleased.d">v0.1.6 之后尚未发版的工作记录在仓库 CHANGELOG.md 的 [Unreleased] 段；本页在该版本发布时同步这一段的内容。</p>
-        <ul>
-          <li data-i18n="cl.unreleased.a">目标与计划成为会话的两种模式：目标跨轮次存在，可设预算并可暂停、恢复、停止与编辑；计划先给出带版本的提案，确认后才进入执行，运行中的计划可被评审修正，每一次决定都留下可查的审计。</li>
-          <li data-i18n="cl.unreleased.b">计划整图发布，阶段产物带因果元数据：合并时保留编辑与删除，后代覆盖祖先，并发分歧判为冲突；需要合并的计划只派给声明该能力的节点，旧节点被跳过而不是拖垮合并。</li>
-          <li data-i18n="cl.unreleased.c">业务协作与 TaskSync 进入 CLI、MCP 与 Web 控制台：新增 panda work 与 panda connection 两个命令、首次草稿授权、工作看板、签名交付与受控最终动作；控制台的实验性协作面默认关闭，可在设置中手动启用。</li>
-          <li data-i18n="cl.unreleased.j">MCP 改为精简目录：panda mcp --compact 只发布必要工具，其余通过 panda_tools / panda_tool_call 按需发现；技能可搜索并逐页读取（panda skill search|show|read，对应 MCP 的 panda_skill_search / panda_skill_read），预览不等于启用。</li>
-          <li data-i18n="cl.unreleased.e">执行可靠性：卡住的任务被明确命名并可重试或结束，失败按限流、输入被拒、供应商故障或模型配置分类，重试是一次明确动作；结果、交付、决定与最终动作进入带租约栅栏与退避的持久 outbox。</li>
-          <li data-i18n="cl.unreleased.f">安全边界：Windows 获得原生 AppContainer 沙箱，standard/strict 在后端缺失时拒绝运行而不是降级；入站同意在缺少密钥或签名时失败关闭；作用域外的改动不合并，共享工作区用租约互斥。</li>
-          <li data-i18n="cl.unreleased.g">路由与移交：任务难度参与执行器排序，失败的 harness 先交给下一个候选、注入兜底排在最后；只有完全没产生输出的任务才允许跨设备移交，重复执行不会重复工具副作用。</li>
-          <li data-i18n="cl.unreleased.h">控制台：可展开的执行步骤、验收徽章与批准等待时间、计划依赖图、键盘快捷键与可搜索的模型选择器；草稿跟随自己的线程，不再串进下一个会话。</li>
-          <li data-i18n="cl.unreleased.i">记忆与技能：长期记忆改为带类别与键的断言（记 user.name 而不是当前这个名字），含糊写入被拒绝；四个离线技能固定上游版本、许可证与资源哈希，可先读再启用。</li>
-        </ul>
+        <p class="pg-lead" data-i18n="cl.unreleased.d">v0.1.7 之后尚未发版的工作记录在仓库 CHANGELOG.md 的 [Unreleased] 段；本页在该版本发布时同步这一段的内容。</p>
       </section>
 
-      <article class="pg-release pg-release-current" id="v016">
-        <div class="pg-release-head"><span class="pg-release-ver">v0.1.6</span><span>2026-11-14</span><b>CONSTELLATION</b><em data-i18n="cl.current">当前稳定版</em></div>
+      <article class="pg-release pg-release-current" id="v017">
+        <div class="pg-release-head"><span class="pg-release-ver">v0.1.7</span><span>2026-11-23</span><b>CONSTELLATION</b><em data-i18n="cl.current">当前稳定版</em></div>
+        <ul>
+          <li data-i18n="cl.v017.a">目标与计划成为会话的两种模式：目标跨轮次存在，可设预算并可暂停、恢复、停止与编辑；计划先给出带版本的提案，确认后才进入执行，运行中的计划可被评审修正，每一次决定都留下可查的审计。</li>
+          <li data-i18n="cl.v017.b">计划整图发布，阶段产物带因果元数据：合并时保留编辑与删除，后代覆盖祖先，并发分歧判为冲突；需要合并的计划只派给声明该能力的节点，旧节点被跳过而不是拖垮合并。</li>
+          <li data-i18n="cl.v017.c">业务协作与 TaskSync 进入 CLI、MCP 与 Web 控制台：新增 panda work 与 panda connection 两个命令、首次草稿授权、工作看板、签名交付与受控最终动作；控制台的实验性协作面默认关闭，可在设置中手动启用。</li>
+          <li data-i18n="cl.v017.j">MCP 改为精简目录：panda mcp --compact 只发布必要工具，其余通过 panda_tools / panda_tool_call 按需发现；技能可搜索并逐页读取（panda skill search|show|read，对应 MCP 的 panda_skill_search / panda_skill_read），预览不等于启用。</li>
+          <li data-i18n="cl.v017.e">执行可靠性：卡住的任务被明确命名并可重试或结束，失败按限流、输入被拒、供应商故障或模型配置分类，重试是一次明确动作；结果、交付、决定与最终动作进入带租约栅栏与退避的持久 outbox。</li>
+          <li data-i18n="cl.v017.f">安全边界：Windows 获得原生 AppContainer 沙箱，standard/strict 在后端缺失时拒绝运行而不是降级；入站同意在缺少密钥或签名时失败关闭；作用域外的改动不合并，共享工作区用租约互斥。</li>
+          <li data-i18n="cl.v017.g">路由与移交：任务难度参与执行器排序，失败的 harness 先交给下一个候选、注入兜底排在最后；只有完全没产生输出的任务才允许跨设备移交，重复执行不会重复工具副作用。</li>
+          <li data-i18n="cl.v017.h">控制台：可展开的执行步骤、验收徽章与批准等待时间、计划依赖图、键盘快捷键与可搜索的模型选择器；草稿跟随自己的线程，不再串进下一个会话。</li>
+          <li data-i18n="cl.v017.i">记忆与技能：长期记忆改为带类别与键的断言（记 user.name 而不是当前这个名字），含糊写入被拒绝；四个离线技能固定上游版本、许可证与资源哈希，可先读再启用。</li>
+        </ul>
+        <a href="download.html" data-i18n="cl.more">下载这一版 →</a>
+      </article>
+
+      <article class="pg-release" id="v016">
+        <div class="pg-release-head"><span class="pg-release-ver">v0.1.6</span><span>2026-11-14</span><b>CONSTELLATION</b></div>
         <ul>
           <li data-i18n="cl.v016.a">完成判定、恢复与阶段契约跟着机器实际做过的工作走：已知未完成的工作不能靠批准收口，外部阻塞要改输入，部分或中断的执行既不报成功也不静默换 agent 重放；恢复策略有自己的名字，原生检查点在受限续跑与依赖释放中保留下来。</li>
           <li data-i18n="cl.v016.b">计划阶段带 acceptance、success_definition、tools_policy、max_turns 与 blocked 结果，独立分支并行、就绪阶段按加权关键路径排序；模型发现只读接入 CC Switch 等 Claude Code 中转，调度保留节点原生端点与设置；只读执行声明边界，关于仓库的回答必须有源码证据。</li>
@@ -261,7 +267,7 @@
       </section>
 
       <div class="pg-cta">
-        <a class="pg-cta-main" href="download.html" data-i18n="pg.cta.dl">下载 v0.1.6 →</a>
+        <a class="pg-cta-main" href="download.html" data-i18n="pg.cta.dl">下载 v0.1.7 →</a>
         <a href="status.html" data-i18n="pg.cta.st">看当前边界 →</a>
       </div>
     </div>
@@ -275,7 +281,7 @@
         <span>Open<b>Panda</b></span>
       </a>
       <p class="footer-tag" data-i18n="foot.tag">Local-first, forever.</p>
-      <p class="footer-version"><b>v0.1.6 Constellation</b> <span data-i18n="foot.channel">· 稳定版</span></p>
+      <p class="footer-version"><b>v0.1.7 Constellation</b> <span data-i18n="foot.channel">· 稳定版</span></p>
     </div>
     <div class="footer-col">
       <h4 data-i18n="foot.product">产品</h4>
@@ -312,7 +318,7 @@
     <span class="status-pill"><i aria-hidden="true"></i><span data-i18n="foot.green">main 分支全绿才允许合并</span></span>
     <span class="status-sep" aria-hidden="true">·</span>
     <span data-i18n="foot.checks">10 项必过检查 · 6 个发布目标 · 每周安全扫描</span>
-    <a class="status-link" href="download.html" data-i18n="foot.latest">v0.1.6 稳定版 <span aria-hidden="true">→</span></a>
+    <a class="status-link" href="download.html" data-i18n="foot.latest">v0.1.7 稳定版 <span aria-hidden="true">→</span></a>
   </div>
   <div class="wrap footer-bottom">
     <p class="footer-credit" data-i18n="foot.credit">影像：<a href="https://www.eso.org/public/images/eso0932a/" target="_blank" rel="noopener">ESO/S. Brunier 银河全景</a>（<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>；已裁剪、调色并与程序星点合成）；NASA Blue Marble、Black Marble DNB 与地球云层影像（公有领域）。代码以 AGPL-3.0-or-later 发布；闭源嵌入与托管修改可另行授权。</p>
