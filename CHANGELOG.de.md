@@ -40,11 +40,9 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
-## [0.1.8] - 2026-11-24 — "Constellation"
+## [0.1.7] - 2026-11-23 — "Constellation"
 
 - Updates werden nach dem Schließen der Konsole weitergeladen. Die Konsole zeigt den Fortschritt und erlaubt Abbruch und Wiederholung. Die CLI unterstützt langsame Verbindungen. Der Unix-Installer wiederholt unterbrochene HTTP/2-Downloads mit HTTP/1.1.
-
-## [0.1.7] - 2026-11-23 — "Constellation"
 
 ### Hinzugefügt
 
