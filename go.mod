@@ -4,14 +4,14 @@ go 1.26.11
 
 require (
 	github.com/charmbracelet/glamour v1.0.0
-	github.com/charmbracelet/x/ansi v0.11.9
+	github.com/charmbracelet/x/ansi v0.11.10
 	github.com/charmbracelet/x/term v0.2.2
-	github.com/chromedp/cdproto v0.160.1
-	github.com/chromedp/chromedp v0.23.0
+	github.com/chromedp/cdproto v0.160.7
+	github.com/chromedp/chromedp v0.24.0
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f
 	github.com/gorilla/websocket v1.5.3
 	github.com/muesli/termenv v0.16.0
-	golang.org/x/net v0.62.0
+	golang.org/x/net v0.63.0
 	golang.org/x/sys v0.50.0
 	golang.org/x/term v0.48.0
 	golang.org/x/text v0.44.0
