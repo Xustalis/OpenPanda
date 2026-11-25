@@ -6,6 +6,7 @@ import {
   ApiError,
   askSessionStream,
   isAbort,
+  type AgentInfo,
   type ClarifyAnswer,
   type ClarifySpec,
   type DevStatus,
@@ -42,6 +43,17 @@ import { rankWords } from '../components/fuzzy'
 import { goalArgument, goalBudget, goalCommand } from '../components/goal-command'
 import { composerIntent, reconcileTranscript, threadBusy, patchStreaming, slashAtCaret, slashWords, planArgument, type ComposerMode } from '../components/chatstate'
 import { atQuery, expandFileRefs, exportMarkdown, exportFilename, fileLabel, withAttachments } from '../components/attach'
+import {
+  clampEnabledIndex,
+  filterAndSortAgents,
+  formatAgentCompletionHint,
+  mergeMentionsIntoTeam,
+  planTeamMentionEdits,
+  shouldOfferAgentCompletion,
+  syncInputWithTeamChange,
+  syncTeamFromInput,
+} from '../components/composer-mentions'
+import { loadAgentRoster } from '../utils/agent-roster'
 import { isLiveSession } from '../components/session-guard'
 import { sortSessions, turnsChanged } from '../components/session-list'
 import { HoverPreview, Lightbox } from '../components/image-preview'
@@ -706,6 +718,24 @@ export function SessionsView({
   } = useComposerAttachments(composer, setInput, setCaret)
   // Filesystem rows for the @file completion menu (debounced query).
   const [atFiles, setAtFiles] = useState<FsFileEntry[]>([])
+  // Node agent roster for @agent completion and mention/team-card sync.
+  const [rosterAgents, setRosterAgents] = useState<AgentInfo[]>([])
+  useEffect(() => {
+    let alive = true
+    loadAgentRoster()
+      .then((list) => {
+        if (alive) setRosterAgents(list)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [])
+  const knownAgentNames = useMemo(() => rosterAgents.map((a) => a.name), [rosterAgents])
+  const installedAgentNames = useMemo(
+    () => rosterAgents.filter((a) => a.installed).map((a) => a.name),
+    [rosterAgents],
+  )
   // Whether the transcript is parked at the bottom. Autoscrolling on every
   // delta is right while you are watching the reply arrive and wrong the
   // moment you scroll up to re-read something, so follow only when pinned.
@@ -1293,15 +1323,67 @@ export function SessionsView({
     composer.current?.focus()
   }
 
-  /** Change the thread's roster. A new thread has nothing to store yet — the
-   *  pick rides createSession on the first send. An existing one is patched
-   *  immediately so the roster survives a reload and reaches a second device;
-   *  the ask also carries it every turn, so the patch failing (offline, a
-   *  restarting daemon) costs the memory, never the current turn. */
-  function pickTeam(names: string[]) {
+  /** Persist the thread's roster without modifying the composer text. */
+  function applyTeamState(names: string[]) {
     setTeam(names)
     if (!activeId) return
     api.patchSession(activeId, { team: names }).catch((err: unknown) => toastError(err))
+  }
+
+  /** Change the thread's roster from the team card and mirror the selection
+   *  into the composer's `@agent` mentions so both stay in sync. */
+  function pickTeam(names: string[]) {
+    const el = composer.current
+    if (el) {
+      const currentText = editorTextOf(el)
+      const { removals, additions } = planTeamMentionEdits(
+        currentText,
+        team,
+        names,
+        knownAgentNames,
+      )
+      for (const r of removals) {
+        removeEditorToken(el, r.start, r.end, false)
+      }
+      let nextText = editorTextOf(el)
+      if (removals.length > 0 && !nextText.trim()) {
+        editorClear(el)
+        nextText = ''
+      }
+      if (additions.length > 0) {
+        const prefix = !nextText || /\s$/.test(nextText) ? '' : ' '
+        const chunk = prefix + additions.map((tok) => `${tok} `).join('')
+        el.appendChild(el.ownerDocument.createTextNode(chunk))
+        nextText = editorTextOf(el)
+      }
+      setInput(nextText)
+      setCaret(nextText.length)
+      autoGrow(el)
+    } else {
+      const nextText = syncInputWithTeamChange(input, team, names, knownAgentNames)
+      setInput(nextText)
+      setCaret(nextText.length)
+    }
+    applyTeamState(names)
+  }
+
+  /** Keep the team roster aligned when the user types or deletes `@agent`
+   *  mentions directly in the composer. */
+  function handleComposerInput(nextText: string) {
+    const prevText = input
+    setInput(nextText)
+    if (knownAgentNames.length > 0 && prevText !== nextText) {
+      const nextTeam = syncTeamFromInput(
+        prevText,
+        nextText,
+        team,
+        knownAgentNames,
+        installedAgentNames,
+      )
+      if (nextTeam.length !== team.length || nextTeam.some((n, i) => n !== team[i])) {
+        applyTeamState(nextTeam)
+      }
+    }
   }
 
   /** Change the thread's permission policy. Saved on the session so it
@@ -1757,6 +1839,17 @@ export function SessionsView({
         if (dropScope) navigate({ view: 'sessions', id: created.id })
         else onOpenSession(created.id)
       }
+      const effectiveTeam =
+        installedAgentNames.length > 0
+          ? mergeMentionsIntoTeam(team, raw, installedAgentNames)
+          : team
+      if (
+        effectiveTeam.length !== team.length ||
+        effectiveTeam.some((n, i) => n !== team[i])
+      ) {
+        setTeam(effectiveTeam)
+        if (id) api.patchSession(id, { team: effectiveTeam }).catch(() => {})
+      }
       // Uploads land in the session's own uploads directory, so a brand-new
       // chat with attachments needs its thread up front — the same create the
       // send below would have made anyway, one step earlier.
@@ -1764,7 +1857,7 @@ export function SessionsView({
       // reference resolves from the prompt after the thread exists anyway.
       const uploads = tray.filter((p) => p.file)
       if (uploads.length > 0 && !id) {
-        const s = await api.createSession((raw || uploads[0]?.name || '').slice(0, 48), threadProject, team)
+        const s = await api.createSession((raw || uploads[0]?.name || '').slice(0, 48), threadProject, effectiveTeam)
         id = s.id
         openCreatedThread(s)
       }
@@ -1786,6 +1879,7 @@ export function SessionsView({
       const expanded = sidebarObjective !== undefined ? { prompt: raw, attached: [] } : await expandFileRefs(
         withAttachments(raw, [...mentions, ...refs]),
         (p) => api.fsRead(p),
+        (token) => knownAgentNames.includes(token),
       )
       prompt = expanded.prompt
       // The bubble lists what rode along, under paths the panel can resolve:
@@ -1804,7 +1898,7 @@ export function SessionsView({
       ]
       // No thread yet: create one titled after the first prompt.
       if (!id) {
-        const s = await api.createSession(prompt.slice(0, 48), threadProject, team)
+        const s = await api.createSession(prompt.slice(0, 48), threadProject, effectiveTeam)
         id = s.id
         // A mode picked before the first send has no row to live on until
         // now; persist it so reopening the thread does not silently widen it.
@@ -2032,7 +2126,7 @@ export function SessionsView({
         // The roster as the composer shows it, every turn: the pick can be
         // edited mid-thread, and the ask carries the answer rather than
         // trusting whatever the session stored before the edit landed.
-        team,
+        effectiveTeam,
         // The permission policy as the picker shows it. The session PATCH
         // keeps it across reloads; sending it here keeps this turn honest
         // even if the patch has not landed yet.
@@ -2436,9 +2530,25 @@ export function SessionsView({
     }
   }, [atTok?.token, atSession])
 
-  // Not memoized for the same reason as chatCommands — insertAtRef splices
-  // the token against the live input/caret, and a memoized item captures
+  // Not memoized for the same reason as chatCommands — insertAtRef/insertAtAgentRef
+  // splice the token against the live input/caret, and a memoized item captures
   // whichever render produced it.
+  const agentItems: CompletionItem[] =
+    atTok && shouldOfferAgentCompletion(input, caret, atTok)
+      ? filterAndSortAgents(rosterAgents, atTok.token, team).map((a) => ({
+          id: `agent:${a.name}`,
+          label: `@${a.name}`,
+          hint: formatAgentCompletionHint(a, {
+            onDuty: t('sessions.teamOnDuty'),
+            notInstalled: t('sessions.teamNotInstalled'),
+            roleLabel: (r) => t(`sessions.teamRole.${r}`),
+          }),
+          checked: team.includes(a.name),
+          disabled: !a.installed,
+          run: () => insertAtAgentRef(a),
+        }))
+      : []
+
   const fileItems: CompletionItem[] = atFiles.map((f) => ({
     id: `file:${f.path}`,
     label: f.name + (f.dir ? '/' : ''),
@@ -2456,26 +2566,19 @@ export function SessionsView({
   const completeShown: CompletionItem[] = (() => {
     if (input === completeDismissed) return []
     if (slashToken !== null) return rankWords(commands, slashToken.query, slashWords)
-    if (atTok) return fileItems
+    if (atTok) return [...agentItems, ...fileItems]
     return []
   })()
   // Ranking reorders on every keystroke; clamp instead of trusting the old
-  // index still points at a row.
-  const completeIdx = Math.min(completeCursor, Math.max(completeShown.length - 1, 0))
+  // index still points at a row, and skip disabled uninstalled agents.
+  const completeIdx = clampEnabledIndex(completeShown, completeCursor)
 
-  /** Replace the @token under the caret with the picked path; directories
-   *  keep the token open so the menu refetches one level deeper.
-   *
-   *  The DOM is the truth here: writing `next` into state left the editor
-   *  showing the old text while `input` already held the expanded path, so the
-   *  @menu never reopened and the completion looked dead. Select the token
-   *  span instead and let the browser's own insertion replace it. */
-  function insertAtRef(f: FsFileEntry) {
+  /** Replace the `@token` under the caret with `replacement`, keeping DOM and
+   *  state aligned without clobbering adjacent attachment pills. */
+  function replaceAtToken(replacement: string, nextCaretOffset: number) {
     const el = composer.current
     if (!el || !atTok) return
     el.focus()
-    // Replace the whole @token under the caret, not just insert at the caret:
-    //  the token's span is [atTok.start, caret).
     const end = caret
     const walker = editorTextWalker(el)
     let at = 0
@@ -2504,7 +2607,6 @@ export function SessionsView({
     }
     const range = document.createRange()
     if (!startNode || !endNode) {
-      // No text node to span the token (an empty editor): insert at the caret.
       const sel = document.getSelection()
       if (sel && sel.rangeCount > 0) range.setStart(sel.getRangeAt(0).startContainer, sel.getRangeAt(0).startOffset)
       else range.selectNodeContents(el)
@@ -2517,11 +2619,8 @@ export function SessionsView({
       sel.removeAllRanges()
       sel.addRange(range)
     }
-    // insertText replaces the selection, so the token goes and the path lands.
-    // A directory appends its separator to keep the menu open on the level.
-    editorInsertText(`@${f.path}${f.dir ? '/' : ' '}`)
-    // The caret after `field` is a space one shorter than the inserted text.
-    setCaret(atTok.start + f.path.length + (f.dir ? 2 : 2))
+    editorInsertText(replacement)
+    setCaret(nextCaretOffset)
     setCompleteDismissed('')
     requestAnimationFrame(() => {
       const now = editorTextOf(el)
@@ -2530,8 +2629,26 @@ export function SessionsView({
     })
   }
 
+  /** Replace the @token under the caret with the picked path; directories
+   *  keep the token open so the menu refetches one level deeper. */
+  function insertAtRef(f: FsFileEntry) {
+    if (!atTok) return
+    replaceAtToken(`@${f.path}${f.dir ? '/' : ' '}`, atTok.start + f.path.length + 2)
+  }
+
+  /** Replace the @token under the caret with `@<agent> ` and pin that agent
+   *  in the thread's roster so the team card and execution agree. */
+  function insertAtAgentRef(a: AgentInfo) {
+    if (!atTok || !a.installed) return
+    replaceAtToken(`@${a.name} `, atTok.start + a.name.length + 2)
+    if (!team.includes(a.name)) {
+      applyTeamState([...team, a.name])
+    }
+  }
+
   function acceptCompletion(item: CompletionItem) {
-    if (item.id.startsWith('file:')) { item.run(); return }
+    if (item.disabled) return
+    if (item.id.startsWith('agent:') || item.id.startsWith('file:')) { item.run(); return }
     const el = composer.current
     if (!el || !slashToken || editorTextOf(el) !== input) return
     removeEditorToken(el, slashToken.start, slashToken.end)
@@ -3145,7 +3262,7 @@ export function SessionsView({
               }
               completeShown={tourActive ? [] : completeShown}
               completeIdx={completeIdx}
-              setInput={setInput}
+              setInput={handleComposerInput}
               setCaret={setCaret}
               setCompleteCursor={setCompleteCursor}
               setCompleteDismissed={setCompleteDismissed}

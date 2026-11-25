@@ -10,11 +10,13 @@ import {
   range_or_append,
   useBrParagraphSeparator,
 } from '../../components/composer-editor'
+import { stepEnabledIndex } from '../../components/composer-mentions'
 import { t } from '../../i18n'
 
 /** One row in the composer's completion menu — a slash command, a palette
- *  destination, or a filesystem path. Palette `Command`s satisfy the shape:
- *  a run() that ignores the argument is still a valid (arg?) => void. */
+ *  destination, a roster agent, or a filesystem path. Palette `Command`s
+ *  satisfy the shape: a run() that ignores the argument is still a valid
+ *  (arg?) => void. */
 export interface CompletionItem {
   id: string
   label: string
@@ -25,6 +27,7 @@ export interface CompletionItem {
   /** The palette marks the live value with a check icon instead of a hint;
    *  here it degrades to the same ✓ the hint used to carry. */
   checked?: boolean
+  disabled?: boolean
   group?: string
   run(arg?: string): void
 }
@@ -67,12 +70,15 @@ export function ComposerInput({
               type="button"
               role="option"
               aria-selected={i === completeIdx}
-              class={`complete-item${i === completeIdx ? ' active' : ''}`}
+              aria-disabled={c.disabled ? 'true' : undefined}
+              disabled={c.disabled}
+              class={`complete-item${i === completeIdx ? ' active' : ''}${c.disabled ? ' disabled' : ''}`}
               onMouseDown={e => e.preventDefault()}
-              onMouseMove={() => setCompleteCursor(i)}
-              onClick={() => acceptCompletion(c)}
+              onMouseMove={() => { if (!c.disabled) setCompleteCursor(i) }}
+              onClick={() => { if (!c.disabled) acceptCompletion(c) }}
             >
               <span class="complete-label">{c.label}</span>
+              {c.checked && <span class="complete-check" aria-hidden="true">✓</span>}
               <span class="complete-hint">
                 {c.hint ?? (c.checked ? '✓' : c.group)}
               </span>
@@ -191,19 +197,28 @@ export function ComposerInput({
             // Tab/Enter accept, arrows move, Escape hides it until the
             // input changes again.
             if ((e.key === 'Tab' || e.key === 'Enter') && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
-              e.preventDefault()
               const cmd = completeShown[completeIdx]
-              if (cmd) acceptCompletion(cmd)
+              if (cmd && !cmd.disabled) {
+                e.preventDefault()
+                acceptCompletion(cmd)
+              } else if (e.key === 'Tab') {
+                e.preventDefault()
+              } else if (completeShown.some((item) => !item.disabled)) {
+                e.preventDefault()
+              } else {
+                // Only disabled completions are listed: don't insert an unresolvable name.
+                e.preventDefault()
+              }
               return
             }
             if (e.key === 'ArrowDown' || (e.ctrlKey && e.key === 'n')) {
               e.preventDefault()
-              setCompleteCursor((completeIdx + 1) % completeShown.length)
+              setCompleteCursor(stepEnabledIndex(completeShown, completeIdx, 1))
               return
             }
             if (e.key === 'ArrowUp' || (e.ctrlKey && e.key === 'p')) {
               e.preventDefault()
-              setCompleteCursor((completeIdx - 1 + completeShown.length) % completeShown.length)
+              setCompleteCursor(stepEnabledIndex(completeShown, completeIdx, -1))
               return
             }
             if (e.key === 'Escape') {

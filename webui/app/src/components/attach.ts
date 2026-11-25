@@ -106,6 +106,7 @@ export function withAttachments(text: string, mentions: string[]): string {
 export async function expandFileRefs(
   text: string,
   read: (path: string) => Promise<FsReadResult>,
+  skip?: (token: string) => boolean,
 ): Promise<{ prompt: string; attached: string[] }> {
   const blocks: string[] = []
   const attached: string[] = []
@@ -113,7 +114,7 @@ export async function expandFileRefs(
   for (const field of text.split(/\s+/)) {
     if (!field.startsWith('@')) continue
     const raw = field.slice(1).replace(/[.,;:!?)]+$/, '')
-    if (!raw || seen.has(raw)) continue
+    if (!raw || seen.has(raw) || skip?.(raw)) continue
     try {
       const f = await read(raw)
       seen.add(raw)

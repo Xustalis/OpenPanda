@@ -97,7 +97,7 @@ export function editorTextWalker(el: HTMLElement): TreeWalker {
 
 /** Remove just the command characters. Walking text nodes independently keeps
  * attachment pills and markup between those characters intact. */
-export function removeEditorToken(el: HTMLElement, start: number, end: number): void {
+export function removeEditorToken(el: HTMLElement, start: number, end: number, focus = true): void {
   const walker = editorTextWalker(el)
   const caret = el.ownerDocument.createRange()
   let offset = 0
@@ -122,7 +122,7 @@ export function removeEditorToken(el: HTMLElement, start: number, end: number): 
     }
     offset += visible
   }
-  if (anchored) {
+  if (anchored && focus) {
     el.focus()
     const selection = el.ownerDocument.getSelection()
     selection?.removeAllRanges()
