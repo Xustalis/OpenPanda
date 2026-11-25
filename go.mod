@@ -9,7 +9,7 @@ require (
 	github.com/chromedp/cdproto v0.160.7
 	github.com/chromedp/chromedp v0.24.0
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f
-	github.com/gorilla/websocket v1.5.3
+	github.com/gorilla/websocket v1.5.4-0.20240701034025-d67f41855da4
 	github.com/muesli/termenv v0.16.0
 	golang.org/x/net v0.63.0
 	golang.org/x/sys v0.50.0
