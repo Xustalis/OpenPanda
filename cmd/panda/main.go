@@ -291,7 +291,7 @@ func runDaemon(args []string) {
 			logger.Warn("native abilities dropped: command not found on this host",
 				"ids", strings.Join(dropped, ","))
 		}
-		// Same phantom-ability rule for §7.1 actuators: a declared driver
+		// Same phantom-ability rule for docs/design/execution-and-defense.md actuators: a declared driver
 		// that does not resolve would win the plan and fail at exec, so it
 		// leaves the card before peers ever see it.
 		if dropped := card.PruneUnavailableActuators(); len(dropped) > 0 {
@@ -335,7 +335,7 @@ func runDaemon(args []string) {
 	if cfg.SelfEvolution.Enabled {
 		coreNode.SetSelfEvolution(self.New(cfg.SelfEvolutionDir(), cfg.SelfEvolution.Repo, logger), false, cfg.SelfEvolution.Producers)
 	}
-	// Startup self-check (design §5): a self-built binary with no release
+	// Startup self-check: a self-built binary with no release
 	// fallback on disk has no signed escape hatch — say so loudly once per
 	// boot instead of letting the operator discover it mid-incident.
 	if versionpkg.ProvenanceClass() == versionpkg.ProvenanceSelf {
@@ -496,7 +496,7 @@ func runDaemon(args []string) {
 	coreNode.SetAcceptanceConfig(cfg.Execution.Acceptance)
 	coreNode.SetMessageBudget(cfg.Messages.Budget)
 
-	// Attach the memory layer (design §17/§8): daily logging that feeds the
+	// Attach the memory layer (docs/memory-lifecycle.md): daily logging that feeds the
 	// Dreaming engine, and skill progressive loading. Project memory is no
 	// longer injected into agent prompts (A1); the injector instead supplies
 	// the A3 memory-file manifest for selective loading. Character caps come
@@ -592,7 +592,7 @@ func runDaemon(args []string) {
 	// scheduler that is still recovering. Inert unless enabled.
 	startIntake(ctx, logger, coreNode, cfg.Intake)
 
-	// Dreaming (design §17.3): consolidate the daily logs into long-term memory
+	// Dreaming (docs/memory-lifecycle.md): consolidate the daily logs into long-term memory
 	// in the background — only while the node is idle, at most once per day.
 	// The same tick also enforces the daily-log retention windows (A4: the
 	// production wiring of daily.Prune, once per day, independently of the
@@ -671,7 +671,7 @@ func runDaemon(args []string) {
 	}))
 	updateNotice.StartAutoCheck(ctx, 6*time.Hour)
 
-	// Phase-4 coexistence (design §7 q3): after an official update landed and
+	// Phase-4 coexistence (docs/design/self-evolution.md): after an official update landed and
 	// the daemon restarted onto it, carry queued patch sets forward onto the
 	// repo's new HEAD — a conflict marks the set and the release binary stays
 	// in charge. Runs once per boot; a no-op when nothing is queued.
@@ -775,7 +775,7 @@ func runDaemon(args []string) {
 	// (webui/cmd/panel), never mounted here. See webui/README.md.
 
 	serveErr := make(chan error, 1)
-	// Fail-closed transport auth (design §16 / P0-1): without a shared secret no
+	// Fail-closed transport auth (docs/protocol.md): without a shared secret no
 	// peer can authenticate, so the WebSocket listener is not started at all —
 	// the node runs local-only rather than accepting unauthenticated peers.
 	// Reached only when the generation+persist above also failed.

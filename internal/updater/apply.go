@@ -49,7 +49,7 @@ func applyRelease(ctx context.Context, m *Manager, s *stagedRelease) error {
 		return fmt.Errorf("replace binary: %w", err)
 	}
 	// Keep the latest official-release binary on disk as the self-evolution
-	// rollback target (design §5): after every RELEASE-channel swap the fresh
+	// rollback target (docs/design/self-evolution.md): after every RELEASE-channel swap the fresh
 	// binary is copied beside the install as panda.release. A StageLocal
 	// (self-built) apply deliberately skips this — a self build overwriting
 	// the fallback would leave nothing signed to roll back to.

@@ -1677,7 +1677,7 @@ const en: Messages = {
   'card.raw.save': 'Save card',
   'card.raw.hint': 'The whole file replaces the card. Validation runs before anything is written; the previous card is kept as .bak.',
 
-  // — Decision orbit & fleet topology (P0 redesign, §4)
+  // — Decision orbit & fleet topology
   'orbit.step.classify': 'Intent classify',
   'orbit.step.route': 'Route match',
   'orbit.step.exec': 'Executing',

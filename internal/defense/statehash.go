@@ -18,7 +18,7 @@ import (
 
 // HashDir produces a deterministic content hash of the regular files under
 // root — the file-tree equivalent of the whitepaper's normalized project AST
-// fingerprint (§6.2): two trees with identical relative paths and identical
+// fingerprint (docs/design/execution-and-defense.md): two trees with identical relative paths and identical
 // content hash identically, regardless of mtimes or host. It feeds the
 // monotonic-progress check that detects "logical oscillation" — a mesh that
 // keeps revisiting a tree it already produced (agent B reverting agent A's
@@ -151,7 +151,7 @@ var errNotGitRepo = errors.New("defense: not a git work tree")
 // still separates A→B→A regressions without hashing an unbounded diff.
 const gitFingerprintDiffCap = 16 << 20
 
-// GitFingerprint fingerprints a git work tree for the §6.2 oscillation check
+// GitFingerprint fingerprints a git work tree for the docs/design/execution-and-defense.md oscillation check
 // when the directory walk exceeds maxFiles. It reads git's own index instead
 // of every file — HEAD, the full porcelain status listing (-uall names every
 // untracked file), and the staged + unstaged diff streams, so the actual

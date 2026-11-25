@@ -1643,7 +1643,7 @@ const de: Messages = {
   'card.raw.save': 'Karte speichern',
   'card.raw.hint': 'Die ganze Datei ersetzt die Karte. Vor dem Schreiben wird validiert; die alte Karte bleibt als .bak erhalten.',
 
-  // — Decision orbit & fleet topology (P0 redesign, §4)
+  // — Decision orbit & fleet topology
   'orbit.step.classify': 'Absichtsklassifikation',
   'orbit.step.route': 'Routing',
   'orbit.step.exec': 'Ausführung',

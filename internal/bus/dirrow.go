@@ -148,7 +148,7 @@ func CanonicalDirRowBytes(r *DirRow) []byte {
 }
 
 // DirRowContentHash is the change-detection digest the stamp table and
-// dir_digest compare (M1 §2): SHA-256 over the canonical row minus seen_at
+// dir_digest compare (docs/protocol.md): SHA-256 over the canonical row minus seen_at
 // and sig. Freshness churn (a re-minted seen_at) leaves the hash untouched,
 // so two peers holding the same CONTENT agree even when their copies were
 // signed at different instants.

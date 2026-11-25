@@ -1657,8 +1657,8 @@ const zhCN: Messages = {
   'card.raw.save': '保存能力卡',
   'card.raw.hint': '整个文件替换能力卡。写入前先校验；旧卡保留为 .bak。',
 
-  // — Decision orbit & fleet topology (P0 重设计 §4)
-  // — Design doc §4.1.1 hard requirement: 品牌身份词固定为「大总管」。
+  // — Decision orbit & fleet topology
+  // — docs/design/routing-and-scheduling.md hard requirement: 品牌身份词固定为「大总管」。
   // README 定位：「Panda 是你的设备与 Agent 大总管」，此词为识别锚点，
   // 不得替换为「系统」「Panda」等中性词。
   'orbit.step.classify': '意图分类',

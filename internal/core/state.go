@@ -202,7 +202,7 @@ type Task struct {
 	// layer populates it when an adapter can report the operation before execution.
 	OperationDecisionJSON string
 	// Authorized records whether the user consented to executing tier-2
-	// (irreversible) commands. It is server-side state (design §16 / P0-1), not
+	// (irreversible) commands. It is server-side state (docs/protocol.md), not
 	// wire-carried, so a delegated task cannot forge authorization.
 	Authorized bool
 	// AuthSig/AuthPub/AuthTs persist the origin node's Ed25519 consent grant
@@ -238,7 +238,7 @@ type Task struct {
 	Scheduled   bool
 	// AgentSessionID is the adapter's own conversation handle, persisted each
 	// round so an interrupted run (yield, restart, redelegation back here)
-	// resumes the agent's session instead of cold-starting (§5.2). The handle
+	// resumes the agent's session instead of cold-starting (docs/design/routing-and-scheduling.md). The handle
 	// only means something to the node that minted it — AgentSessionNode —
 	// so a delegator may offer it back to that node (ResumeSessionID on the
 	// wire) but must never adopt it for its own adapter or hand it onward.
@@ -283,15 +283,15 @@ type Task struct {
 
 	// Transport marks the transport mode for this task ("live" or "dtn").
 	Transport string
-	// DeadlineUnix is the absolute TTL expiration timestamp for DTN tasks (§8.2).
+	// DeadlineUnix is the absolute TTL expiration timestamp for DTN tasks (docs/protocol.md).
 	DeadlineUnix int64
-	// DelegationBudget is the remaining mesh-wide delegation quota (§6.1):
+	// DelegationBudget is the remaining mesh-wide delegation quota (docs/design/routing-and-scheduling.md):
 	// each forward hop decrements it, and a task that runs out may no longer
 	// be delegated — the mesh-wide convergence bound alongside MaxChainDepth.
 	DelegationBudget int
 	// SpawnDepth is the sub-agent generation this task sits at in its causal
 	// tree: a user-submitted root is 0, its PANDA_DELEGATE children 1, their
-	// children 2, and so on. It rides the wire's Depth field (whose §6.1
+	// children 2, and so on. It rides the wire's Depth field (whose docs/design/routing-and-scheduling.md
 	// comment already meant this) and persists here so every node a subtree
 	// walks through enforces the same delegation.max_depth — refusing a
 	// spawn needs the row's truth, not the spawning process's memory.
@@ -306,7 +306,7 @@ type Task struct {
 	// through a strict node.
 	SpawnCap int
 	// TokenBudget is the remaining LLM token quota the task may spend across
-	// the mesh (§6.1): 0 means unbounded (a legacy wire or a pre-budget row),
+	// the mesh (docs/design/routing-and-scheduling.md): 0 means unbounded (a legacy wire or a pre-budget row),
 	// a positive value is the spendable remainder, and -1 is the persisted
 	// exhaustion marker — an exhausted task may neither execute another
 	// metered round nor be delegated onward, since either would launder the
@@ -370,7 +370,7 @@ func (t Task) GetUserLocale() i18n.Locale {
 	return i18n.English
 }
 
-// TaskDetail is the entry-model-derived task metadata (design doc §6.1 tasks
+// TaskDetail is the entry-model-derived task metadata (docs/design/routing-and-scheduling.md tasks
 // schema). It is written once, shortly after creation, by SetDetail; the
 // fields stay zero/empty for tasks that predate the entry model or arrived
 // via a Phase 0 payload without detail. model_tier is intentionally absent —
@@ -401,7 +401,7 @@ func Terminal(s string) bool {
 }
 
 // CanTransition reports whether from -> to is legal per the Phase 0 state
-// table (design doc §5.3.1).
+// table.
 func CanTransition(from, to string) bool {
 	switch from {
 	case StateSubmitted:

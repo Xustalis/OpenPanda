@@ -9,7 +9,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 )
 
-// §6.1 token budget: the persisted quota is the mesh-wide remainder — 0 means
+// docs/design/routing-and-scheduling.md token budget: the persisted quota is the mesh-wide remainder — 0 means
 // legacy/unbounded, positive is spendable, -1 is the exhaustion sentinel a
 // wire hop must refuse to launder.
 func TestSpendTokensSemantics(t *testing.T) {
@@ -79,7 +79,7 @@ func TestTokenBudgetWire(t *testing.T) {
 }
 
 // TestCreateTaskStampsTokenBudget: a locally submitted top-level task must
-// not stay unbounded — §6.1's safety floor stamps the configured default at
+// not stay unbounded — docs/design/routing-and-scheduling.md safety floor stamps the configured default at
 // creation, and an explicit disable leaves the row untouched. Children are
 // skipped because plan.go assigns them the parent's remainder.
 func TestCreateTaskStampsTokenBudget(t *testing.T) {

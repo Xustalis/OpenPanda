@@ -3,7 +3,7 @@
 // Package panel serves the legacy PWA control panel (kept frozen as an optional
 // webui/ sidecar; the kernel daemon no longer mounts it): the static web app
 // under webui/web/pwa plus the JSON API that backs it — task queue, task detail,
-// and the human approval of reviewed tasks (design §14.2 Layer 4).
+// and the human approval of reviewed tasks (docs/design/execution-and-defense.md).
 package panel
 
 import (
@@ -105,7 +105,7 @@ type Deps struct {
 // the JSON API that backs it — task queue, task detail, ask (unified entry,
 // plain and streaming), chat sessions with worktree isolation, model settings,
 // projects, nodes, cancel/logs, the human approval of reviewed tasks (design
-// §14.2 Layer 4), and an SSE change feed. Push, when non-nil, additionally
+// docs/design/execution-and-defense.md Layer 4), and an SSE change feed. Push, when non-nil, additionally
 // serves the Web Push subscription endpoints. Token is the Bearer credential
 // guarding every /api/* route; the static files under / are served
 // unauthenticated (they carry no secrets, the API does). An empty token fails
@@ -148,7 +148,7 @@ func New(d Deps) http.Handler {
 	if h.taskFlow == nil && d.DB != nil && d.Cfg != nil {
 		h.taskFlow = taskflow.New(d.DB, d.Cfg.Storage.DBPath)
 	}
-	// Session summary finalizer (queue redesign §5): finished tasks fold
+	// Session summary finalizer: finished tasks fold
 	// their result into the linked chat as an assistant turn. Runs for the
 	// process lifetime; no-op without the sessions store. It runs on the
 	// handler's service context — the same one detached asks use — so the
@@ -222,7 +222,7 @@ func New(d Deps) http.Handler {
 	// LANs whose AP filters the discovery broadcast (see lanscan.go).
 	mux.HandleFunc("POST /api/pair/scan", h.scanPair)
 	mux.HandleFunc("GET /api/self", h.getSelf)
-	// Self-evolution (design doc §4.2): patch-set queue + diff preview for the
+	// Self-evolution (docs/design/self-evolution.md): patch-set queue + diff preview for the
 	// merge-review gate. Read-only — the approve/reject actions ride the
 	// existing task review endpoints since a proposal IS a review task.
 	mux.HandleFunc("GET /api/selfevo", h.getSelfEvo)
@@ -942,7 +942,7 @@ type taskJSON struct {
 	UpdatedAt     string      `json:"updated_at"`
 	Events        []eventJSON `json:"events,omitempty"`
 
-	// — Decision-orbit visibility (§5.2). traces are the subset of Events
+	// — Decision-orbit visibility (docs/design/routing-and-scheduling.md). traces are the subset of Events
 	// that belong to the 8-track set, decoded so the client avoids a second
 	// JSON.parse per row. delegation_chain and plan_meta aggregate data
 	// already on the task row so the orbit can render without a follow-up
@@ -950,7 +950,7 @@ type taskJSON struct {
 	Traces          []traceEventJSON    `json:"traces,omitempty"`
 	DelegationChain []delegationHopJSON `json:"delegation_chain,omitempty"`
 	PlanMeta        *planMetaJSON       `json:"plan_meta,omitempty"`
-	// — Structured extras (§3.3). supervision = the latest supervision_round's
+	// — Structured extras. supervision = the latest supervision_round's
 	// counters so the orbit paints round N/Budget badges; tier2_ops = every
 	// parked or executed irreversible operation summary (K5 visibility).
 	Supervision *supervisionJSON `json:"supervision,omitempty"`

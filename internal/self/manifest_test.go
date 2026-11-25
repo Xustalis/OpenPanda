@@ -294,7 +294,7 @@ index 1..2 100644
 
 func TestTouchesCriticalRecomputes(t *testing.T) {
 	// The merge side must never trust the manifest's claim: recompute reads
-	// the patch bodies themselves (design §2.3).
+	// the patch bodies themselves (docs/design/self-evolution.md).
 	dir := t.TempDir()
 	criticalPatch := `diff --git a/internal/trust/policy.go b/internal/trust/policy.go
 index 1..2 100644

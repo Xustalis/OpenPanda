@@ -28,7 +28,7 @@ func pollArtifact(t *testing.T, c *Core, hash string, want int64) {
 	t.Fatalf("artifact never landed: has=%v size=%d want=%d", ok, size, want)
 }
 
-// TestArtifactPushTransfersEndToEnd is the chunked fat-push (§8.3 v2) over a
+// TestArtifactPushTransfersEndToEnd is the chunked fat-push (v2; see docs/protocol.md) over a
 // real connection: custody enqueued on the sender, staged on the receiver,
 // verified into the pool, and the sender's row retired by the done verdict.
 // 3.5 MiB of incompressible content spans four chunks plus a partial — small
@@ -163,7 +163,7 @@ func TestArtifactPushResumesFromReceiverOffset(t *testing.T) {
 	t.Fatal("custody row never retired after resumed push")
 }
 
-// TestDtnTaskParksUntilPushedInputsArrive is the receiving side of §8.3: a
+// TestDtnTaskParksUntilPushedInputsArrive is the receiving side of docs/protocol.md: a
 // dtn delegate whose inputs are not yet local must not fail — the bundle
 // promises the payload follows — so the task parks in waiting_context and
 // resumes the moment the pushed artifact verifies.

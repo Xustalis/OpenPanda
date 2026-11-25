@@ -71,7 +71,7 @@ func newCoreWithAgentModel(t *testing.T, id string, model config.ModelConfig) *C
 
 // TestScopeDriftPausesAgent verifies that an agent that changes a file outside
 // its declared scope is intercepted and paused into review for human analysis,
-// not marked done or retried (design §14.2 signal A).
+// not marked done or retried (docs/design/execution-and-defense.md).
 func TestScopeDriftPausesAgent(t *testing.T) {
 	ctx := context.Background()
 	c := newCoreWithAgent(t, "drift-node")

@@ -8,7 +8,7 @@ import (
 )
 
 // Injector assembles the memory text injected into a given context (design
-// §17.2). It is the only sanctioned way to pull memory into a prompt; its two
+// docs/memory-lifecycle.md). It is the only sanctioned way to pull memory into a prompt; its two
 // methods are deliberately separate so Hermes and project memory can never mix.
 type Injector struct {
 	hermes   *Hermes

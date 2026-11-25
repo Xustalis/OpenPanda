@@ -1641,7 +1641,7 @@ const es: Messages = {
   'card.raw.save': 'Guardar tarjeta',
   'card.raw.hint': 'El archivo completo reemplaza la tarjeta. Se valida antes de escribir; la anterior se conserva como .bak.',
 
-  // — Decision orbit & fleet topology (P0 redesign, §4)
+  // — Decision orbit & fleet topology
   'orbit.step.classify': 'Clasificar intención',
   'orbit.step.route': 'Enrutado',
   'orbit.step.exec': 'Ejecutando',

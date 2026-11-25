@@ -2,7 +2,7 @@
 
 package core
 
-// Chunked proactive artifact delivery (whitepaper §8.3 fat-push, v2).
+// Chunked proactive artifact delivery (docs/protocol.md).
 //
 // The first-generation fat bundle inlined artifacts into the delegate
 // envelope — capped at 2 MiB by the frame limit, which put the doc's "push a
@@ -163,7 +163,7 @@ func (c *Core) streamArtifactPushes(ctx context.Context, keys []string, inst str
 	buf, release := getChunkBuf()
 	defer release()
 	for _, r := range pushes {
-		// §8.2 TTL: the bundle is dead, so its payload is dead weight — stop
+		// docs/protocol.md TTL: the bundle is dead, so its payload is dead weight — stop
 		// spending contact-window bandwidth on it.
 		if r.ttl > 0 && time.Now().Unix() > r.ttl {
 			c.pushRowDrop(ctx, []string{r.key}, inst, r.hash)
@@ -394,7 +394,7 @@ func (c *Core) handleArtifactPush(ctx context.Context, env bus.Envelope) {
 	// The artifact landing may unblock two kinds of downstream work: a task
 	// parked on this node waiting for its inputs, and a task this node
 	// already forwarded whose own push to the next hop was waiting for these
-	// same bytes (chained custody — §8.3).
+	// same bytes (chained custody; see docs/protocol.md).
 	c.wakeArtifactWaiters(ctx, m.Hash)
 	c.cascadePushToDispatchTarget(ctx, m.Hash)
 }

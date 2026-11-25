@@ -13,7 +13,7 @@ import (
 )
 
 // CapSessionAEAD is the hello capability that negotiates per-connection
-// frame encryption (design §16). When both sides advertise it and the mesh
+// frame encryption (docs/protocol.md). When both sides advertise it and the mesh
 // has a shared secret, every application frame after the hello exchange is
 // AEAD-sealed under a key derived from the secret and BOTH hello nonces —
 // so an on-path observer who only relays the handshake never learns the

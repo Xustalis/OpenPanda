@@ -17,7 +17,7 @@ func (s Stats) successRate() float64 {
 }
 
 // ShouldCreate reports whether a task class warrants a new skill, using the
-// MUSE quality gate (design §8.2): the class ran >=3 times with >=70% success.
+// MUSE quality gate (docs/design/execution-and-defense.md): the class ran >=3 times with >=70% success.
 // It is suppressed when an equivalent skill already exists, so a skill is
 // created once and then patched on discovery rather than duplicated.
 //

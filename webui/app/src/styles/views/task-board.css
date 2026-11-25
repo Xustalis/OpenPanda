@@ -128,7 +128,7 @@
   }
 }
 
-/* ---- Task kanban (queue view, design §11.2) ---- */
+/* ---- Task kanban (queue view) ---- */
 
 /* `auto-fit`, not four fixed tracks with viewport media queries. The old rule
    held four 230px minimums until the *window* dropped below 1100px — but the
@@ -935,7 +935,7 @@
   gap: 6px 14px;
 }
 
-/* Task thinking chain inside a chat bubble (design §5). The toggle opens a
+/* Task thinking chain inside a chat bubble. The toggle opens a
    fold, it does not act on the task, so it wears a link rather than a button:
    a bordered, raised pill next to a real action read as a form field. */
 .chain-toggle {

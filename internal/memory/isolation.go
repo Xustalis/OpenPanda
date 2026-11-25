@@ -9,7 +9,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
-// Isolation wall (design §17.2 and §17.5): Hermes memory must never enter a
+// Isolation wall (and; see docs/memory-lifecycle.md): Hermes memory must never enter a
 // project agent context, and project memory must never enter the conversation
 // prompt. The wall is structural rather than a runtime check — Conversation
 // (injector.go) reads only Hermes, and ContextPack below reads only the named

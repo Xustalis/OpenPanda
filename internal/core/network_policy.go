@@ -17,7 +17,7 @@ import (
 )
 
 // SetSharedSecret sets the shared secret used to authenticate inbound hello
-// messages (design §16 / P0-1). An empty secret is fail-closed: no peer can
+// messages (docs/protocol.md). An empty secret is fail-closed: no peer can
 // authenticate, so the WebSocket listener accepts no hello until a secret is
 // configured. Hot-reloadable: readers take netMu via sharedSecretValue, so a
 // settings save is safe against in-flight hellos, discovery and DTN traffic.

@@ -49,7 +49,7 @@ func (m *Manager) StageTree(ctx context.Context, wt, dst, version string) error 
 	}
 	args := []string{"build", "-trimpath", "-ldflags", ldflags}
 	// A lite node must stay lite: footprint table and the updater's asset-name
-	// selection both key on the build tag (design §5.2).
+	// selection both key on the build tag (docs/design/self-evolution.md).
 	if updater.LiteBuild() {
 		args = append(args, "-tags", "lite")
 	}

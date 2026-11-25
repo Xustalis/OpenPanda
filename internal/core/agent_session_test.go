@@ -18,7 +18,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
-// TestAgentSessionCheckpointResumesAcrossRounds exercises §5.2 breakpoint
+// TestAgentSessionCheckpointResumesAcrossRounds exercises docs/design/execution-and-defense.md breakpoint
 // mooring inside one run: the adapter's session handle is captured per round,
 // persisted to the task row, and threaded back through WithResume on the next
 // round so the agent continues its conversation instead of cold-starting.
@@ -183,7 +183,7 @@ func TestDelegateAdoptsResumeHint(t *testing.T) {
 	}
 }
 
-// TestAgentSessionAdapterAffinity: the §5.2 handle is adapter-affine, and the
+// TestAgentSessionAdapterAffinity: the docs/design/execution-and-defense.md handle is adapter-affine, and the
 // affinity gate is per ATTEMPT (buildAdapterRequest), not per round. A round
 // whose plan adapter differs may still fail over onto the adapter that minted
 // the session — that attempt has to receive the handle — so the core always

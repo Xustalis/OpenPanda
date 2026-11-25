@@ -50,7 +50,7 @@ func newCoreWithActuator(t *testing.T, id string) *Core {
 
 const echoServoSpec = `{"action_spec":{"target_actuator":"hardware:echo_servo","action":"rotate","parameters":{"angle":90}}}`
 
-// TestActuatorTaskExecutesDriverLocally is the single-node half of the §7.2
+// TestActuatorTaskExecutesDriverLocally is the single-node half of the docs/design/execution-and-defense.md
 // dispatch contract: a task requiring the actuator resolves to a native plan,
 // SubstituteActionSpec fills the argv template, and the driver really runs —
 // its stdout is the proof.

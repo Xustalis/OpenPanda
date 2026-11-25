@@ -3,7 +3,7 @@
 package main
 
 // `panda mcp` runs the node itself as an MCP stdio server: the agent tier's
-// self-management surface (§7 companion to the tools policy). Under
+// self-management surface (companion to the tools policy; see docs/design/execution-and-defense.md). Under
 // routing.tools_policy=extended the commander materializes a work-dir
 // .mcp.json pointing at this command, so MCP-capable agents get structured
 // OpenPanda tools — skill install, task submission, queue/mesh status —

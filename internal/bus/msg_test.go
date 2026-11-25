@@ -105,7 +105,7 @@ func TestEnvelopeEmptyPayload(t *testing.T) {
 }
 
 func TestHeartbeatPayloadCompact(t *testing.T) {
-	// Design doc §10.6: heartbeat uses short field names and stays tiny.
+	// docs/protocol.md: heartbeat uses short field names and stays tiny.
 	env, err := NewEnvelope(MsgHeartbeat, "opi", "msg-3", HeartbeatPayload{
 		Status:   "online",
 		Load:     0.15,

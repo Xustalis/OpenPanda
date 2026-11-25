@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-// udp.go is the farsky datagram plane (whitepaper §9.2): a UDP transport for
+// udp.go is the farsky datagram plane (docs/protocol.md): a UDP transport for
 // links where a TCP/WebSocket session cannot exist — NAT-bound peers punching
 // a pinhole, or lossy high-latency paths where the kernel's TCP machinery is
 // the thing that fails. Every datagram is either an HMAC-signed punch frame

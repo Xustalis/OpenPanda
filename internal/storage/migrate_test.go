@@ -475,7 +475,7 @@ func TestMigrateV11EntryCache(t *testing.T) {
 	}
 }
 
-// V20 lands the mesh-budget and weighted-routing columns (§4.1/§6.1) on both
+// V20 lands the mesh-budget and weighted-routing columns (docs/design/routing-and-scheduling.md) on both
 // paths: a fresh database and a v19-era file migrated forward.
 func TestMigrateV20Columns(t *testing.T) {
 	db, err := Open(":memory:")
@@ -615,7 +615,7 @@ func TestMigrateV50TasksSpawnDepth(t *testing.T) {
 	}
 }
 
-// V56 lands the cross-network mesh columns on employee_cache (design §6.2):
+// V56 lands the cross-network mesh columns on employee_cache (docs/protocol.md):
 // the X25519 identity peers seal transit to, advertised dial addresses and
 // relay services, plus the directory-gossip bookkeeping (learned_via,
 // seen_at, content_hash) P2 diffs against.

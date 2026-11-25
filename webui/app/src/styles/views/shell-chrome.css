@@ -6,7 +6,7 @@
    + orbit / fleet component chrome
    ========================================================================== */
 
-/* — D9: nav group headings (§4 Design System). Typed onto a <div> that sits
+/* — D9: nav group headings (System). Typed onto a <div> that sits
    between nav links of different sections: uppercase, small-tight, the 5th
    text tier (—text-disabled), and separated with top spacer-6 so it visually
    sticks to the items below, not above. */
@@ -117,7 +117,7 @@
 .orbit-action-btn:active {
   box-shadow: none;
 }
-/* — §4.2 Top-level soft banners (update status / onboarding).
+/* — docs/design/routing-and-scheduling.md Top-level soft banners (update status / onboarding).
      .banner + .banner-warn/info/error/good is the shared chip style.
      update-banner is painted by <UpdateBanner/> when the updater has
      backed off to idle (403 / rate-limit / network offline), or when
@@ -193,7 +193,7 @@
   background: var(--accent-2-tint-md);
 }
 
-/* — utility helpers: inline style migration (§2, P1 code-quality pass).
+/* — utility helpers: inline style migration (P1 code-quality pass).
      Only one- or two-attribute helpers so we don't invent Bootstrap. */
 .u-mt-16 { margin-top: var(--sp-4); }
 .u-flex-1 { flex: 1 1 auto; }

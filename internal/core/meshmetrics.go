@@ -4,7 +4,7 @@ package core
 
 import "sync/atomic"
 
-// Mesh counters (cross-network mesh design §8). They answer the questions an
+// Mesh counters (docs/protocol.md). They answer the questions an
 // operator actually asks about this plane — "is the relay carrying my
 // traffic", "is the directory converging", "is punching worth trying here" —
 // without a store write on the hot path. Every field is a monotonic total
@@ -24,7 +24,7 @@ type meshCounters struct {
 }
 
 // MeshMetrics is the exported snapshot (`panda metrics`, the console's mesh
-// page). Names match the design's §8 list where it has one.
+// page). Names match the design's docs/protocol.md list where it has one.
 type MeshMetrics struct {
 	TransitBytesTx int64 `json:"transit_bytes_tx"`
 	TransitBytesRx int64 `json:"transit_bytes_rx"`

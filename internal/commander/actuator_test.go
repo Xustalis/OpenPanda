@@ -29,7 +29,7 @@ func actuatorCard() ledger.Card {
 	}
 }
 
-// §7.1: an actuator with a declared driver resolves to a native plan whose
+// docs/design/execution-and-defense.md: an actuator with a declared driver resolves to a native plan whose
 // argv still holds its placeholders (the run path fills them).
 func TestRouteActuatorWithCommand(t *testing.T) {
 	r := NewRouter(actuatorCard(), NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})

@@ -1122,7 +1122,7 @@ func runTaskAdd(args []string) {
 		requiresList = append(requiresList, "agent:"+agentList[0])
 	}
 
-	// --action-spec carries the §7.2 actuator dispatch the model would emit in
+	// --action-spec carries the docs/design/execution-and-defense.md actuator dispatch the model would emit in
 	// spec.action_spec: the JSON is parsed into the canonical wire type (so a
 	// malformed shape is refused here, not at the executor) and marshalled
 	// back into spec_json. The context flips to "hardware" — a servo has no

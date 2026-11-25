@@ -22,7 +22,7 @@ type Check struct {
 	Note string `json:"note,omitempty"`
 }
 
-// Doctor runs the toolchain preflight (design §5.1): the gate's footprint is
+// Doctor runs the toolchain preflight (docs/design/self-evolution.md): the gate's footprint is
 // developer-grade — go, git, python3 for the adapter contract, a C toolchain
 // for the CGO race leg, and network on the first staticcheck fetch. The point
 // of the report is to answer "can this node self-evolve" before a proposal
@@ -89,7 +89,7 @@ func (m *Manager) Doctor(ctx context.Context) []Check {
 	// every merge approval before it pays it.
 	if runtime.GOOS == "darwin" {
 		out = append(out, Check{Name: "macOS signing", OK: true,
-			Note: "ad-hoc signed builds change cdhash each swap — LAN/TCC grants must be re-approved or a stable signing identity configured (design §5.2)"})
+			Note: "ad-hoc signed builds change cdhash each swap — LAN/TCC grants must be re-approved or a stable signing identity configured (docs/design/self-evolution.md)"})
 	}
 	return out
 }

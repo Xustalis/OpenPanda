@@ -14,7 +14,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/storage"
 )
 
-// dtn.go is the receiving half of the DTN plane (whitepaper §8.3, §9.1): a
+// dtn.go is the receiving half of the DTN plane (docs/protocol.md): a
 // dtn_bundle envelope carries a signed CBOR bundle whose inner payload is the
 // same task_delegate a live dispatch would carry. Verifying here — at the
 // trust boundary — is what lets a bundle arrive over a link that never
@@ -87,7 +87,7 @@ func (c *Core) handleDTNBundle(ctx context.Context, env bus.Envelope) {
 	}
 }
 
-// relayBundle takes custody of a bundle addressed past this node (§9.1).
+// relayBundle takes custody of a bundle addressed past this node (docs/protocol.md).
 // Delivery preference: the destination itself when a link is up; otherwise
 // the first hop of the cheapest advertised path toward it — the multi-hop
 // case, where custody moves to an online node closer to the destination and

@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-// shadow.go implements the §5.2 "影子工作副本" (shadow work copy): when
+// shadow.go implements the docs/design/execution-and-defense.md "影子工作副本" (shadow work copy): when
 // arbitration preempts a task mid-edit, the files it owns — the ones inside
 // its declared scope — are copied aside before the cancel lands. On the next
 // run the shadow is merged back over whatever the winning task produced:

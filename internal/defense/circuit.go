@@ -18,7 +18,7 @@ const (
 )
 
 // CircuitBreaker trips a circuit open after a run of failures and re-closes it
-// only after a cooldown and one successful trial (design doc §14 Layer 1, plan
+// only after a cooldown and one successful trial (docs/design/execution-and-defense.md Layer 1, plan
 // P2-27). Keyed by a dependency such as "agent:claude", it stops routing work
 // to something that is failing repeatedly, instead of failing the whole task
 // loop one request at a time.

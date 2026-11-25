@@ -5,7 +5,7 @@ package skills
 import "sync"
 
 // Tracker aggregates task execution history per class and, when a class clears
-// the create gate, generates a pending skill (design §8.2). It is the wiring
+// the create gate, generates a pending skill (docs/design/execution-and-defense.md). It is the wiring
 // that turns task history into procedural memory: the trigger (ShouldCreate)
 // and generator (Generate) both feed off the history it accumulates.
 type Tracker struct {
@@ -62,7 +62,7 @@ func (t *Tracker) Record(project string, abilities []string, title string, succe
 // exists reports whether a skill of this name already exists in the same scope
 // (and, for project/device scopes, the same key), so a class is distilled once
 // per scope rather than suppressed globally. A project skill never blocks the
-// same-named skill in another project (design §8.3).
+// same-named skill in another project (docs/design/execution-and-defense.md).
 func (t *Tracker) exists(scope Scope, key, name string) bool {
 	index, err := t.store.Index()
 	if err != nil {

@@ -180,7 +180,7 @@ type HookEntry struct {
 // enabled (a node cannot produce patches against a tree it cannot see).
 // RebaseOnUpdate lets a self-built node attempt to carry its queued patch
 // sets onto a freshly applied official release; conflicts mark the set
-// conflicted and the node stays on the release binary (design §7 q3).
+// conflicted and the node stays on the release binary (docs/design/self-evolution.md).
 // Producers bounds which manifest signers a merge proposal accepts: "self"
 // (only this node's own key) or "mesh" (any peer whose tier admits it — the
 // cross-node transfer is phase-5, the enum is reserved).
@@ -400,7 +400,7 @@ type RoutingConfig struct {
 	// extended-only. Nil means enabled; an explicit false closes both paths.
 	PandaTools *bool `yaml:"panda_tools"`
 	// Reputation opts node scoring into a local track-record term
-	// (trust_zones §9): each executor's smoothed success rate out of this
+	// (SECURITY.md): each executor's smoothed success rate out of this
 	// node's own delegation_metrics joins the DCPS weighted sum. Default
 	// off — it is a routing-behaviour change, and an opt-in one.
 	Reputation bool `yaml:"reputation"`
@@ -433,7 +433,7 @@ func (r RoutingConfig) NormalizedPandaTools() bool {
 	return r.PandaTools == nil || *r.PandaTools
 }
 
-// Default delegation bounds (whitepaper §4.2 sub-agent orchestration). They
+// Default delegation bounds (docs/design/routing-and-scheduling.md). They
 // are the runtime's compile-time fallback as well as the load-time fill for
 // a config that leaves the section empty.
 const (
@@ -552,7 +552,7 @@ type NodeConfig struct {
 
 // PeerEntry is one network.peers item. The scalar form ("host:port") is the
 // pre-trust-zones syntax and unmarshals to {Addr, ""}; the mapping form adds
-// a trust tier (trust_zone feature §3):
+// a trust tier (SECURITY.md):
 // "mesh" keeps today's full delegation, "guarded" narrows what delegates may
 // carry toward the peer, "open" admits the node to the directory but bars it
 // from task delegation entirely until the offer/bid market exists. Empty
@@ -659,7 +659,7 @@ type TrustConfig struct {
 }
 
 // TrustRelayConfig is the transit-relay permission surface (cross-network
-// mesh §4.2). Transit is the inbound table — whose relayed frames this node
+// mesh docs/protocol.md). Transit is the inbound table — whose relayed frames this node
 // will forward on; Serve is the outbound one — through which peers' relays
 // this node will route its own frames. Both default to the design's policy
 // (serve: mesh + guarded, use: mesh only), so a fleet that never touches
@@ -700,7 +700,7 @@ func (m TrustRelayMatrix) forLevel(l trust.Level) *bool {
 }
 
 // RelayAcceptFor answers "will this node relay a transit frame handed to it
-// by a peer at this tier" — the inbound half of §4.2's trust.relay.transit.
+// by a peer at this tier" — the inbound half of docs/protocol.md trust.relay.transit.
 func (t TrustConfig) RelayAcceptFor(l trust.Level) bool {
 	if v := t.Relay.Transit.forLevel(l); v != nil {
 		return *v
@@ -911,7 +911,7 @@ type NetworkConfig struct {
 	// reports the peer's observed IP, so most meshes never need a public
 	// STUN server.
 	STUNServers []string `yaml:"stun_servers"`
-	// Contacts is this node's DTN contact plan (whitepaper §8.4): scheduled
+	// Contacts is this node's DTN contact plan (docs/protocol.md): scheduled
 	// transmission windows toward peers that custody routing plans around.
 	// Nodes with only always-on links leave it empty — the plan is gossiped
 	// in heartbeats like the live adjacency.
@@ -1185,7 +1185,7 @@ const (
 	// agent budget on a corpse.
 	DefaultSilenceS = 240
 	// DefaultTaskTokenBudget is the per-task metered-token quota stamped at
-	// creation when nothing upstream set one (§6.1). Telemetry puts a heavy
+	// creation when nothing upstream set one (docs/design/routing-and-scheduling.md). Telemetry puts a heavy
 	// single-agent audit at ~0.3M input+output tokens per round; 2M covers
 	// roughly ten such rounds — generous for real work, lethal to a retry or
 	// resume loop re-running full explorations. It bounds only the adapter's
@@ -1234,7 +1234,7 @@ type TimeoutsConfig struct {
 	// default with "command timed out" and no way to extend it.
 	NativeS int `yaml:"native_s"`
 	// TaskTokenBudget is the per-task metered-token quota stamped on newly
-	// created local tasks (§6.1): agent rounds and judge calls draw it down,
+	// created local tasks (docs/design/routing-and-scheduling.md): agent rounds and judge calls draw it down,
 	// and an exhausted task parks in review instead of burning on. 0 uses
 	// DefaultTaskTokenBudget; a negative value leaves new tasks unbounded —
 	// the pre-budget legacy behaviour.
@@ -1507,7 +1507,7 @@ type SearchConfig struct {
 }
 
 // MCPConfig selects the stdio MCP server whose tools the ask engine may call
-// (design §7.3). Command is a space-separated argv (quotes honored), e.g.
+// (docs/design/execution-and-defense.md). Command is a space-separated argv (quotes honored), e.g.
 // `npx -y @modelcontextprotocol/server-filesystem /tmp`. Empty disables MCP;
 // a CLI --mcp flag overrides it.
 type MCPConfig struct {

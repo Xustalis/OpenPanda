@@ -188,7 +188,7 @@ func (c *Core) claimMsgID(env bus.Envelope) bool {
 }
 
 // stateWindowCap is the sliding window of recent tree states kept per
-// project/plan for the §6.2 monotonic-progress check. Five is the doc's
+// project/plan for the docs/design/routing-and-scheduling.md monotonic-progress check. Five is the doc's
 // window: long enough to catch A→B→A regressions, short enough that a slow
 // legitimate convergence never trips it.
 const stateWindowCap = 5
@@ -207,7 +207,7 @@ const (
 
 // stateOscillates records the content hash of a task's work tree and reports
 // whether the tree regressed to an earlier state — agent B undoing agent A's
-// fix — which is the "logical oscillation" the check exists to kill (§6.2).
+// fix — which is the "logical oscillation" the check exists to kill (docs/design/routing-and-scheduling.md).
 // A repeat of the *latest* state means the tree did not move at all: that is
 // stagnation, which the supervision loop's own detector adjudicates, so it is
 // deliberately not flagged here. key is per project or plan.

@@ -14,7 +14,7 @@ import (
 )
 
 // DreamDiary appends human-readable consolidation entries to DREAMS.md (OpenClaw
-// Dream Diary, design §17.3). The diary is for a human to read — it is not a
+// Dream Diary, docs/memory-lifecycle.md). The diary is for a human to read — it is not a
 // promotion source; only the Dreamer's Deep phase writes MEMORY.md.
 type DreamDiary struct {
 	path string

@@ -48,7 +48,7 @@ func waitForPeers(ctx context.Context, db *sql.DB, timeout time.Duration) {
 
 // toTaskInput translates the entry model's TaskSpec into the core's local
 // TaskInput. Intent is composed from the spec fields so the agent adapter
-// receives one actionable natural-language instruction (design doc §7.3: the
+// receives one actionable natural-language instruction (docs/design/execution-and-defense.md: the
 // refined intent is the spec from the same call — no separate refinement step
 // in MVP).
 func toTaskInput(spec *entry.TaskSpec, request string, loc ...i18n.Locale) core.TaskInput {

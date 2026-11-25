@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Package ctxstore implements the local context snapshot cache (design doc
-// §12.4): a hash→data KV store over the `context` table with LRU eviction.
+// docs/design/execution-and-defense.md): a hash→data KV store over the `context` table with LRU eviction.
 // Each node caches full context snapshots it has either packed locally or
 // fetched from a peer, keyed by SHA-256, so a repeated pointer delegation can
 // hit the cache and transfer nothing.
@@ -40,7 +40,7 @@ func New(db *sql.DB, max int) *Store {
 }
 
 // MaxEntriesForResourceClass maps a node resource class to its context-store
-// cap (design doc §12.4): Micro keeps few snapshots on constrained storage,
+// cap (docs/design/execution-and-defense.md): Micro keeps few snapshots on constrained storage,
 // Standard/Full keep more, and a Full node is effectively unbounded.
 func MaxEntriesForResourceClass(rc string) int {
 	switch rc {

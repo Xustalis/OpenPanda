@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// Lifecycle windows (design §8.5): an active skill that goes unused for
+// Lifecycle windows (docs/design/routing-and-scheduling.md): an active skill that goes unused for
 // dormantAfter becomes dormant; one unused for expireAfter becomes expired and
 // is pruned from matching. Pending skills (awaiting approval) are untouched.
 const (
@@ -54,7 +54,7 @@ func (sk *Skill) RecordUse(success bool, now time.Time) {
 }
 
 // Approve promotes a pending skill to active — the human sign-off step of the
-// approval flow (design §8.2). It errors if the skill is not pending.
+// approval flow (docs/design/routing-and-scheduling.md). It errors if the skill is not pending.
 func (s *Store) Approve(scope Scope, key, name string) error {
 	sk, err := s.mustLoad(scope, key, name)
 	if err != nil {

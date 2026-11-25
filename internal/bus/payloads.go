@@ -23,7 +23,7 @@ func unixNow() int64 { return time.Now().Unix() }
 // CapabilitySummary type. Sig is the HMAC-SHA256 (hex) of NodeID, Ts, and —
 // when present — Nonce under the shared secret, proving the identity was
 // minted by a node that holds the secret and bounding replay to MaxHelloAge
-// (design §16 / P0-1). Nonce makes every dial's signature unique even when two
+// (docs/protocol.md). Nonce makes every dial's signature unique even when two
 // hellos land inside the same second: the receiver's single-use replay cache
 // keys on signed fields only, so without it an honest same-second reconnect is
 // indistinguishable from a replay. Old peers send none and are verified
@@ -56,7 +56,7 @@ type HelloPayload struct {
 	SigB   string `json:"sig_b,omitempty"`    // HMAC over NodeID:To:Ts:Nonce
 	EdSigB string `json:"ed_sig_b,omitempty"` // Ed25519 over the same bytes
 	// XPub is the node's X25519 identity key (hex) — the second half of the
-	// dual-key identity (cross-network mesh design §3): Ed25519 signs,
+	// dual-key identity (docs/protocol.md): Ed25519 signs,
 	// X25519 agrees transit keys. It is self-asserted like UDPPort: only
 	// recorded after the hello's EdSig verified the claimed Ed25519 key, and
 	// a peer that lies about its own x_pub only breaks sealing TO itself.
@@ -131,12 +131,12 @@ type HeartbeatPayload struct {
 	// any previously published list".
 	BlockedAgents []string `json:"blocked_agents,omitempty"`
 	// Neighbors/Links refresh the sender's adjacency in the receiver's
-	// directory every beat (§4.1): hellos only arrive at dial time and card
+	// directory every beat (docs/protocol.md): hellos only arrive at dial time and card
 	// beats only at reload, but the link-state graph's edge set AND its
 	// measured weights have to track the live topology continuously.
 	Neighbors []string     `json:"neighbors,omitempty"`
 	Links     []LinkMetric `json:"links,omitempty"`
-	// Contacts carries the sender's advertised contact plan (§8.4): the
+	// Contacts carries the sender's advertised contact plan (docs/protocol.md): the
 	// scheduled transmission windows custody routing plans custody moves
 	// around. Semi-static — it changes on config reload, not per beat — but
 	// rides the same gossip channel so a peer's plan arrives without waiting
@@ -145,7 +145,7 @@ type HeartbeatPayload struct {
 	// peer directory's copy; a field absent outright is an old node's beat
 	// and leaves the stored plan alone.
 	Contacts []Contact `json:"contacts"`
-	// Projects carries the sender's advertised residence set (§6.3): the
+	// Projects carries the sender's advertised residence set (docs/protocol.md): the
 	// names of the projects it holds a checkout of. Semi-static like the
 	// contact plan — it changes when work lands, not per beat — and shares
 	// the same contract: a new node always emits it (empty = "no projects"),
@@ -176,7 +176,7 @@ type HeartbeatPayload struct {
 	EdgeLoad int `json:"edge_load,omitempty"`
 }
 
-// LinkMetric is the wire form of one measured edge weight (§4.1): the round-
+// LinkMetric is the wire form of one measured edge weight (docs/protocol.md): the round-
 // trip time in milliseconds toward a directly connected neighbor, sampled by
 // the transport's ping/pong. It duplicates ledger.LinkMetric's JSON shape so
 // the transport package stays decoupled from the capability directory — the
@@ -190,7 +190,7 @@ type LinkMetric struct {
 	Kind string `json:"kind,omitempty"`
 }
 
-// Contact is the wire form of one scheduled transmission window (§8.4),
+// Contact is the wire form of one scheduled transmission window (docs/protocol.md),
 // duplicating ledger.Contact's JSON shape for the same decoupling reason as
 // LinkMetric above. [Start, End) is the first window in unix seconds;
 // Period > 0 repeats it.
@@ -209,7 +209,7 @@ type Contact struct {
 const TransitMaxTTL = 6
 
 // TransitPayload is the outer shell of a transit frame (cross-network mesh
-// design M3/§3). A relay reads ONLY this: where the frame is headed, how
+// design M3/docs/protocol.md). A relay reads ONLY this: where the frame is headed, how
 // many hops it has left, which seal level wraps the body, and the sealed
 // body itself. Inner is the AEAD blob (nonce‖ciphertext, plus the ephemeral
 // key prefix under the x25519 level) carrying a transitInner — the original
@@ -289,7 +289,7 @@ type DirRowsPayload struct {
 	More   bool   `json:"more,omitempty"`
 }
 
-// DirRow is the canonical row shape for content hashing and signing (M1 §2).
+// DirRow is the canonical row shape for content hashing and signing (docs/protocol.md).
 // content_hash covers every field EXCEPT seen_at and sig — freshness churn
 // must not defeat the digest — while sig signs everything except itself
 // (seen_at included: a gossiped row's age is source-minted, not attacker-
@@ -309,8 +309,8 @@ type DirRow struct {
 	Sig       string          `json:"sig,omitempty"` // Ed25519 over canonical minus sig
 }
 
-// TaskDelegatePayload is the task handoff (design doc §10.3 example). The
-// context transfer fields (design doc §12.4) select how the executor obtains
+// TaskDelegatePayload is the task handoff (docs/protocol.md). The
+// context transfer fields (docs/protocol.md) select how the executor obtains
 // the task's full context:
 //   - context_level "pointer": context_hash references a snapshot the executor
 //     may already have; on miss it fetches from the source node.
@@ -368,7 +368,7 @@ type TaskDelegatePayload struct {
 	// off a node with no VRAM, and without this field the constraint would be
 	// lost at the first hop.
 	ResourceJSON string `json:"resource_json,omitempty"`
-	// Authorized carries the origin user's tier-2 consent (design §16) so a
+	// Authorized carries the origin user's tier-2 consent (docs/protocol.md) so a
 	// delegated task does not bounce at the executor's defense layer. It is
 	// only meaningful on an authenticated bus: the transport's shared-secret
 	// HMAC is what makes this unforgeable by non-peers, and the origin node
@@ -420,18 +420,18 @@ type TaskDelegatePayload struct {
 	ProjectDir  string `json:"project_dir,omitempty"`
 	// UserLocale carries the origin user's language preference across nodes.
 	UserLocale string `json:"user_locale,omitempty"`
-	// BundledArtifacts carries self-contained input artifacts for proactive push (whitepaper §8.3).
+	// BundledArtifacts carries self-contained input artifacts for proactive push (docs/protocol.md).
 	BundledArtifacts []FatBundleArtifact `json:"bundled_artifacts,omitempty"`
 	// Transport specifies whether the delegation travels via live streaming or DTN ("live" or "dtn").
 	Transport string `json:"transport,omitempty"`
-	// DeadlineUnix is the absolute task deadline for DTN tasks (§8.2): past
+	// DeadlineUnix is the absolute task deadline for DTN tasks (docs/protocol.md): past
 	// it the task is expired rather than lease-killed, because a
 	// store-and-forward path has no heartbeat to renew against. It is the
 	// origin's wall-clock intent carried inside the sealed payload — the
 	// bundle that wraps it converts the same bound to a relative lifetime
 	// (Bundle.LifetimeSec) for custody decisions at relays.
 	DeadlineUnix int64 `json:"deadline_unix,omitempty"`
-	// Causal-depth and budget fields (§6.1). Depth is Parent.Depth+1 at every
+	// Causal-depth and budget fields (docs/protocol.md). Depth is Parent.Depth+1 at every
 	// spawn hop, hard-capped by scheduler.MaxChainDepth. DelegationBudget is
 	// the remaining mesh-wide delegation quota: each forward decrements it,
 	// and a task that reaches zero may only execute or decline — never route
@@ -1033,7 +1033,7 @@ type ArtifactChunkPayload struct {
 // wire — comfortably under the cap even with the envelope around it.
 const ArtifactChunkBytes = 1 << 20
 
-// ArtifactPushPayload is one proactively-pushed artifact chunk (§8.3
+// ArtifactPushPayload is one proactively-pushed artifact chunk (docs/protocol.md
 // fat-push). It mirrors the pull-side chunk shape minus the answer fields:
 // Offset positions the bytes inside the archive named by Hash, and Total is
 // the archive's full size so the receiver can bound and complete the staged
@@ -1071,20 +1071,20 @@ type ArtifactPushDonePayload struct {
 	Reason string `json:"reason,omitempty"`
 }
 
-// FatBundleArtifact carries an inline artifact payload for proactive push-based DTN delivery (whitepaper §8.3).
+// FatBundleArtifact carries an inline artifact payload for proactive push-based DTN delivery (docs/protocol.md).
 type FatBundleArtifact struct {
 	Hash string `json:"hash"`
 	Data []byte `json:"data"`
 }
 
-// TargetScope defines the repository, file, and symbol scope for peer conflict negotiation (whitepaper §5.1).
+// TargetScope defines the repository, file, and symbol scope for peer conflict negotiation (docs/protocol.md).
 type TargetScope struct {
 	Repo   string `json:"repo,omitempty"`
 	File   string `json:"file"`
 	Symbol string `json:"symbol,omitempty"`
 }
 
-// AgentNegotiatePayload carries horizontal peer-to-peer conflict negotiation signaling (whitepaper §5.1).
+// AgentNegotiatePayload carries horizontal peer-to-peer conflict negotiation signaling (docs/protocol.md).
 type AgentNegotiatePayload struct {
 	FromNode      string      `json:"from_node"`
 	FromAgent     string      `json:"from_agent"`
@@ -1095,7 +1095,7 @@ type AgentNegotiatePayload struct {
 	ActionPreview string      `json:"action_preview,omitempty"`
 }
 
-// AgentGrantPayload carries lease-based lock authorization or yield acknowledgement (whitepaper §5.2).
+// AgentGrantPayload carries lease-based lock authorization or yield acknowledgement (docs/protocol.md).
 // Denied/Reason make an explicit negative verdict distinguishable from a
 // missing reply — older peers that always grant simply leave them zero.
 type AgentGrantPayload struct {
@@ -1113,7 +1113,7 @@ type AgentYieldPayload struct {
 	Reason    string      `json:"reason,omitempty"`
 }
 
-// DTNBundlePayload carries one CBOR-encoded DTN bundle (§8.3) verbatim. The
+// DTNBundlePayload carries one CBOR-encoded DTN bundle (docs/protocol.md) verbatim. The
 // receiver unmarshals, verifies signature+TTL, then feeds the inner payload
 // back through the normal message path — the bundle is a signed transport
 // container, not a second task protocol.
@@ -1122,7 +1122,7 @@ type DTNBundlePayload struct {
 }
 
 // PunchOfferPayload arranges a UDP pinhole between two NAT-bound nodes
-// (farsky §9.2). It travels as an envelope through the mesh — direct conn
+// (docs/protocol.md). It travels as an envelope through the mesh — direct conn
 // when one exists, link-state next-hop relay otherwise — carrying everything
 // the responder needs to start punching: the session nonce (which becomes
 // the pinhole proof inside every punch datagram) and the initiator's

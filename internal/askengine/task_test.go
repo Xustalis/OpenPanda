@@ -139,7 +139,7 @@ func TestToTaskInputCarriesExecutionOverrides(t *testing.T) {
 	}
 }
 
-// TestToTaskInputCarriesActionSpec pins the §7.2 wire contract: the model's
+// TestToTaskInputCarriesActionSpec pins the docs/design/execution-and-defense.md wire contract: the model's
 // action_spec rides inside spec_json so the executor's SubstituteActionSpec
 // sees exactly what the model emitted — on this node or after delegation.
 // It also pins the two normalizations an action_spec implies: context is

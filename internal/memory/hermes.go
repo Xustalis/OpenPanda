@@ -17,7 +17,7 @@ import (
 )
 
 // Hermes manages the Hermes personal-assistant memory store rooted at a
-// memory/ directory (design §17.2). Following Hermes Agent, personal memory is
+// memory/ directory (docs/memory-lifecycle.md). Following Hermes Agent, personal memory is
 // split into two files with distinct roles and caps:
 //
 //	USER.md   who the user is — role, preferences, communication style

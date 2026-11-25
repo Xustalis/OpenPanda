@@ -2,7 +2,7 @@
 
 package core
 
-// Blind transit relay — cross-network mesh design M3 / §3. When sendTo has
+// Blind transit relay — cross-network mesh design M3 / docs/protocol.md When sendTo has
 // no live track to a peer, the envelope is sealed end-to-end (the peer's
 // X25519 identity, or the member-level mesh seal for a peer that published
 // none) and carried inside a transit frame across ordinary member conns.
@@ -297,7 +297,7 @@ func (c *Core) handleTransit(ctx context.Context, conn *bus.Conn, env bus.Envelo
 		c.logger.Debug("transit: ttl exhausted", "from", env.From, "dest", p.Dest)
 		return
 	}
-	// Serving gate (§4.2): trust.relay.transit decides whose frames this node
+	// Serving gate (docs/protocol.md): trust.relay.transit decides whose frames this node
 	// forwards. It is checked only on the relaying path — a frame addressed
 	// to this node is delivery, not service, and must open regardless of how
 	// the operator fenced the sender.

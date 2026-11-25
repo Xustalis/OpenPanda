@@ -497,7 +497,7 @@ func (c *Core) AdvancePlan(ctx context.Context, planID string) error {
 		}
 		released++
 		// — Stage unlocked + input dependencies now satisfied.
-		// (design doc §3.1.1: transition ∈ {unlocked, started, completed})
+		// (transition ∈ {unlocked, started, completed}; see docs/protocol.md)
 		sat := make([]string, 0, len(st.Needs))
 		sat = append(sat, st.Needs...)
 		if len(sat) == 0 {
@@ -1021,7 +1021,7 @@ func (c *Core) sweepPlans(ctx context.Context) {
 }
 
 // SpawnChildTask creates a child task under parentID, implementing the Sub-MainAgent
-// recursive delegation model (whitepaper §4.2). The executing node promotes itself to
+// recursive delegation model (docs/design/routing-and-scheduling.md). The executing node promotes itself to
 // Sub-MainAgent, spawning child causal tasks with bounded depth.
 //
 // Each child starts its own network route. ParentID and SpawnDepth preserve
@@ -1092,7 +1092,7 @@ func (c *Core) SpawnChildTask(ctx context.Context, parentID string, in TaskInput
 }
 
 // DispatchChild routes a spawned child the way Submit routes a root task
-// (§4.2): the best-scored capable peer wins, with this node as an ordinary
+// (docs/design/routing-and-scheduling.md): the best-scored capable peer wins, with this node as an ordinary
 // candidate. A forwarded child is a normal delegation — its result returns
 // here via handleResult, where it both completes the local copy and unblocks
 // whatever spawned it. A local/declined child lands on the queue scheduler,
@@ -1200,7 +1200,7 @@ func (c *Core) DispatchChild(ctx context.Context, child Task, in TaskInput) erro
 }
 
 // delegateMarker is the wire-level protocol an agent uses to ask its
-// Sub-MainAgent runtime for a delegated sub-task (whitepaper §4.2). It is a
+// Sub-MainAgent runtime for a delegated sub-task (docs/design/routing-and-scheduling.md). It is a
 // line prefix rather than a structured channel because the only medium every
 // adapter shares is the agent's own stdout: claude_code, codex and any future
 // harness can all emit a plain line without adapter support.
@@ -1807,7 +1807,7 @@ type pendingChild struct {
 	title string
 }
 
-// delegateChild is the run()-time half of the promotion protocol (§4.2): it
+// delegateChild is the run-time half of the promotion protocol (docs/design/routing-and-scheduling.md): it
 // spawns the requested causal child, dispatches it to the best node, and
 // waits for the result so the caller can fold the product into the agent's
 // next prompt. The waiter is registered before dispatch so a fast local

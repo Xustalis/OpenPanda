@@ -91,7 +91,7 @@ web-gate:
 build-webui: web fmt-check vet
 	$(GO) build -ldflags "$(LDFLAGS_DEV)" -o $(BIN)-webui ./webui/cmd/panel
 
-# Cross-compile targets (design doc §4.4)
+# Cross-compile targets
 build-darwin-amd64: fmt-check vet
 	GOOS=darwin GOARCH=amd64 $(GO) build -ldflags "-s -w" -o $(BIN)-darwin-amd64 ./cmd/panda
 

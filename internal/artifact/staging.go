@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Staging is the on-disk landing zone for proactively pushed artifacts
-// (whitepaper §8.3 fat-push). A pull transfer can hold its target in a temp
+// (docs/protocol.md). A pull transfer can hold its target in a temp
 // file for the seconds a download lasts; a DTN push may span days of
 // contact windows, so the in-flight bytes have to live somewhere that
 // survives restarts — here, under <root>/.staging/<hash>, with a small JSON

@@ -12,7 +12,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 )
 
-// Join URI — the cold-start kernel of the cross-network design (§2). Zero
+// Join URI — the cold-start kernel of the cross-network design (docs/protocol.md). Zero
 // information means zero discovery, and that is physics rather than a defect:
 // a node that has never heard of the mesh needs one address to knock on.
 //
@@ -32,7 +32,7 @@ import (
 //	   human comparison left to skip.
 //
 // The scheme accepts both "panda" and "openpanda" (the design's open
-// question §12.4); parsing is deliberately tolerant so a URI outlives a
+// question docs/protocol.md); parsing is deliberately tolerant so a URI outlives a
 // rename.
 type JoinSpec struct {
 	// Bootstraps are contact addresses, dialable in their bare host:port or

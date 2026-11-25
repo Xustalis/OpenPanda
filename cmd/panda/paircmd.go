@@ -393,7 +393,7 @@ func runNodesInvite(args []string) {
 	printJoinGuide(i18n.Detect(), cfg)
 }
 
-// printJoinURI prints the one-line join form (cross-network mesh §2): the
+// printJoinURI prints the one-line join form (docs/protocol.md): the
 // contact address this node listens on plus its stable Ed25519 identity, so
 // the joiner can refuse a secret that does not come from THIS machine. The
 // shared secret is still never printed — the pairing ceremony carries it.

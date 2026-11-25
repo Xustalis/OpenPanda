@@ -381,7 +381,7 @@ export interface ScoreBreakdown {
   resource_efficiency: number
   scheduler_tier: number
   wait_time: number
-  // heartbeat_age is the wire-contract age in seconds (§3.1.1): 0 = brand-new
+  // heartbeat_age is the wire-contract age in seconds: 0 = brand-new
   // heartbeat, higher = stale. heartbeat_freshness is the internal (0,1]
   // weight used by routing; both are populated so the orbit can show either
   // a friendly age label ("12s ago") or a fitness bar.
@@ -394,7 +394,7 @@ export interface ScoreBreakdown {
 export interface ScoredCandidate {
   node_id: string
   node_name?: string
-  // total_score is the flat numeric ranking (§3.1.1 short path); consumers
+  // total_score is the flat numeric ranking (docs/design/routing-and-scheduling.md); consumers
   // that want the "why" read score_breakdown.*. Both are populated on the wire.
   total_score: number
   score_breakdown: ScoreBreakdown
@@ -608,9 +608,9 @@ export interface Task {
    *  the live line says what a mid-flight task is doing on first paint,
    *  before the SSE trace stream's first frame lands. */
   last_event?: TraceEvent
-  // Decision-orbit visibility (P0 redesign, §5.2). All optional.
+  // Decision-orbit visibility (docs/design/routing-and-scheduling.md). All optional.
   traces?: TraceEvent[]
-  // §3.3 extended visibility: structured delegation hops with per-hop
+  // extended visibility: structured delegation hops with per-hop
   // confirmation + round counters + tier-2 operation rollups.
   delegation_chain?: DelegationHop[]
   plan_meta?: PlanMeta

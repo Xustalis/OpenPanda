@@ -107,7 +107,7 @@ type TaskInput struct {
 	ClassifyKind string
 	// UserLocale records the user's language preference ("en", "zh-CN", etc.).
 	UserLocale i18n.Locale
-	// Transport specifies the transport mode ("live" or "dtn", whitepaper §8.2).
+	// Transport specifies the transport mode ("live" or "dtn"; see docs/protocol.md).
 	Transport string
 	// DeadlineUnix is an optional absolute deadline timestamp for DTN tasks.
 	DeadlineUnix int64
@@ -373,7 +373,7 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 			ResourceJSON:  in.ResourceJSON,
 			AttemptID:     t.AttemptID,
 			Authorized:    in.Authorized,
-			// First-hop forwards carry the origin's own policy too (§6.1):
+			// First-hop forwards carry the origin's own policy too (docs/design/routing-and-scheduling.md):
 			// a strict operator's depth bound must clamp even when the task
 			// starts life delegated to a more permissive worker.
 			Depth:    t.SpawnDepth,
@@ -446,7 +446,7 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 // healthy long task that is provably alive (renewals land every lease/3),
 // and it ignores the lease length the row actually carries. This loop fires
 // only once the stamped deadline has lapsed — the same criterion the
-// timeout monitor's ExpireTasks applies (review §7.2). A row without a
+// timeout monitor's ExpireTasks applies (docs/design/execution-and-defense.md). A row without a
 // lease falls back to the wait-start lease bound so an unstamped row can
 // never wedge the caller.
 func (c *Core) waitRemoteResult(ctx context.Context, cur Task, ch <-chan bus.TaskResultPayload, what string) (Task, bus.TaskResultPayload, error) {
@@ -548,7 +548,7 @@ func (c *Core) createTask(ctx context.Context, in TaskInput) (Task, string, stri
 			c.logger.Debug("touch project recency", "project", in.Project, "err", err)
 		}
 	}
-	// Persist the user's tier-2 consent as server-side state (design §16 / P0-1).
+	// Persist the user's tier-2 consent as server-side state (docs/protocol.md).
 	// execute/run read it from the DB, so the wire payload never needs to carry it.
 	if err := c.store.SetAuthorized(ctx, t.TaskID, in.Authorized); err != nil {
 		return fail(fmt.Errorf("set authorized: %w", err))
@@ -600,7 +600,7 @@ func (c *Core) createTask(ctx context.Context, in TaskInput) (Task, string, stri
 	if err := c.store.SetDetail(ctx, t.TaskID, d); err != nil {
 		return fail(fmt.Errorf("set detail: %w", err))
 	}
-	// §6.1 safety floor: a top-level task created here gets the node's default
+	// docs/design/routing-and-scheduling.md safety floor: a top-level task created here gets the node's default
 	// metered-token quota so a retry/resume loop cannot burn without bound.
 	// Children are skipped — plan.go overwrites them with the parent's budget;
 	// and an inbound delegate's wire budget (handlers) lands after creation,
@@ -621,7 +621,7 @@ func (c *Core) createTask(ctx context.Context, in TaskInput) (Task, string, stri
 	// before Submit's routing decision, before the queue scheduler claims an
 	// enqueued task, before anything runs. The orbit's Step-1 (意图分类) must
 	// lead the timeline, not trail the result it was supposed to explain
-	// (design doc §3.1.1: kind/note/stages_count; a single task is one stage).
+	// (kind/note/stages_count; a single task is one stage).
 	if in.ClassifyKind != "" {
 		c.EvTrace(ctx, t.TaskID, EvClassifyResult, map[string]any{
 			"kind":         in.ClassifyKind,
@@ -1012,7 +1012,7 @@ func (c *Core) resumeRemote(ctx context.Context, cur Task, target, answer string
 // retryLoop drives a task from its first execution outcome to a stable state:
 // a failed task is retried (with a fresh attempt) up to the loop detector's
 // budget; past that it is paused into review for human analysis rather than
-// left in failed or retried forever (design §14.2 signal C, plan P2-18). It is
+// left in failed or retried forever (plan; see docs/design/execution-and-defense.md). It is
 // shared by the synchronous Submit paths and the queue scheduler's runner.
 func (c *Core) retryLoop(ctx context.Context, taskID, intent string, required []string, result bus.TaskResultPayload, err error) (Task, bus.TaskResultPayload, error) {
 	// A second runner already owns this task: report the row untouched and

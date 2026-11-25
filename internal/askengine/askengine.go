@@ -903,7 +903,7 @@ type Result struct {
 	// so. The marker lives in the task's audit events (EvRouteFallback).
 	RouteFallback string
 	// Question carries the agent's clarification when the task parked in
-	// review on a PANDA_QUESTION marker (core §4.3): the surface should show
+	// review on a PANDA_QUESTION marker (docs/design/execution-and-defense.md): the surface should show
 	// it verbatim — it is the one thing standing between the task and done.
 	Question string
 	// QuestionSpec is the structured option set the agent offered alongside
@@ -3955,7 +3955,7 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 	// dropped before the row exists.
 	in.SpecJSON = restrictAcceptanceToProject(in.SpecJSON, workDir)
 	in.SpecJSON = appendUserAcceptance(in.SpecJSON, scope.Acceptance)
-	// Approval mode is the real tier-2 gate (design §16), resolved against the
+	// Approval mode is the real tier-2 gate (docs/design/execution-and-defense.md), resolved against the
 	// task's own project: a project approval_mode overrides the global mode;
 	// a remembered session/project decision answers before any prompt; an
 	// explicit session grant (/authorize on, --authorize) is the standing

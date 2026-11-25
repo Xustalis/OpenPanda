@@ -190,7 +190,7 @@ const selfRowRefresh = 30 * time.Second
 // capacitySnapshot returns the live capacity JSON (with the real active-task
 // count, not the static card value) plus the derived 0-1 load. The DCPS
 // weighted score and the TMB freshness discount on peers are only as good as
-// the capacity data heartbeats actually carry (review §4.3 "容量数据空转").
+// the capacity data heartbeats actually carry ("容量数据空转"; see docs/design/execution-and-defense.md).
 func (n *Node) capacitySnapshot(ctx context.Context) (string, float64) {
 	capacity := n.card.Capacity
 	var active int
@@ -254,7 +254,7 @@ func (n *Node) List(status, name string) ([]ledger.Node, error) {
 	return ledger.Query(n.db, status, name)
 }
 
-// LinkState represents the 3-state link classification (whitepaper §8.1):
+// LinkState represents the 3-state link classification (docs/design/routing-and-scheduling.md):
 // Live, Opportunistic, or Offline.
 type LinkState string
 
@@ -265,7 +265,7 @@ const (
 )
 
 // EvaluateLinkState calculates the link state towards targetNode based on
-// live connection status and heartbeat exponential freshness discount (whitepaper §8.1).
+// live connection status and heartbeat exponential freshness discount (docs/design/routing-and-scheduling.md).
 func (c *Core) EvaluateLinkState(ctx context.Context, targetNode string) LinkState {
 	conn := c.connFor(targetNode)
 	var lastSeen int64

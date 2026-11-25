@@ -206,7 +206,7 @@ func matchRankedLimit(index []IndexEntry, allowed func(IndexEntry) bool, primary
 			score += alwaysBaseScore
 		}
 		if e.Status == StatusDormant && !e.Always && score > 1 {
-			score /= 2 // lifecycle §8.5: dormant stays visible but deprioritized
+			score /= 2 // docs/design/execution-and-defense.md: dormant stays visible but deprioritized
 		}
 		if score <= 0 {
 			continue

@@ -252,7 +252,7 @@ func (c *Core) handleHeartbeat(ctx context.Context, env bus.Envelope) {
 		delete(c.peerBlocked, env.From)
 	}
 	c.mu.Unlock()
-	// Adjacency gossip (§4.1): the sender's edge set, its measured weights
+	// Adjacency gossip (docs/design/routing-and-scheduling.md): the sender's edge set, its measured weights
 	// and its contact plan ride every beat so the directory's view of the
 	// link-state graph — and the schedule it opens on — tracks reality
 	// instead of freezing at hello time.
@@ -377,7 +377,7 @@ func (c *Core) summary() ledger.CapabilitySummary {
 	for _, a := range card.Actuators {
 		s.ActuatorIDs = append(s.ActuatorIDs, a.ID)
 	}
-	// §9.3 link-state advertisement: the live peer set is this node's edge
+	// docs/design/routing-and-scheduling.md link-state advertisement: the live peer set is this node's edge
 	// list in the mesh routing graph. Published in the hello so every peer's
 	// directory learns the topology, not just this node's abilities.
 	s.Neighbors = c.livePeerIDs()
@@ -499,7 +499,7 @@ func (c *Core) selfAddrs() []string {
 }
 
 // linkMetrics reports the measured edge weight (ping/pong RTT) to each live
-// peer (§4.1). Peers without a sample yet are omitted — the weighted router
+// peer (docs/design/routing-and-scheduling.md). Peers without a sample yet are omitted — the weighted router
 // prices an absent metric at the unknown-link default instead of recording
 // a fake zero, which would make an unmeasured link look free.
 func (c *Core) linkMetrics() []ledger.LinkMetric {

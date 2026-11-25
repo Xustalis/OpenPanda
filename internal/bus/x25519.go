@@ -16,7 +16,7 @@ import (
 )
 
 // X25519 identity keys are the second half of the dual-key node identity
-// (cross-network mesh design §3): Ed25519 signs, X25519 agrees keys — one
+// (docs/protocol.md): Ed25519 signs, X25519 agrees keys — one
 // key, one job. The private half persists in the settings table next to the
 // Ed25519 key (core.nodeKeyPair); the public half rides the hello as x_pub
 // and lands in the directory for transit sealing.
@@ -46,7 +46,7 @@ const (
 	CapTransitRelay = "trnz"
 )
 
-// Transit seal levels (design §3). x25519 is end-to-end: the blob opens only
+// Transit seal levels (docs/protocol.md). x25519 is end-to-end: the blob opens only
 // under the destination's X25519 identity key, so relays see dest + size +
 // TTL and nothing else. mesh is the honest-degradation level for a peer that
 // never published x_pub: HKDF over the shared secret keeps the contents

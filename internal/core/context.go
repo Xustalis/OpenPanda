@@ -53,7 +53,7 @@ type pendingContext struct {
 
 // packContext builds and stores the full context snapshot for a local-origin
 // task, returning the wire hash and level. It is the MVP of pointer/summary/
-// full packing (design doc §12.3):
+// full packing (docs/design/execution-and-defense.md):
 //
 //   - A caller that already packed the snapshot (ContextHash set) is trusted
 //     and passed through.

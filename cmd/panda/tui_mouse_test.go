@@ -4,7 +4,7 @@
 
 package main
 
-// Regression cover for the mouse-ownership fix (§3.1): the terminal keeps the
+// Regression cover for the mouse-ownership fix: the terminal keeps the
 // mouse by default so drag-select and the
 // terminal's own copy shortcut work, while the transcript stays scrollable
 // through alternate scroll (wheel → Up/Down), PageUp/PageDown and ctrl+t.

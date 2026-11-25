@@ -11,7 +11,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
-// Scored-ranking weights (design doc §6.3, DCPS soft-penalty mapping):
+// Scored-ranking weights (DCPS soft-penalty mapping; see docs/design/routing-and-scheduling.md):
 // resource_efficiency 0.4 + user_priority 0.3 + scheduler_tier 0.2 +
 // wait_time 0.1. The sum is the node's raw desirability; the TMB freshness
 // factor then discounts it by heartbeat age.
@@ -47,7 +47,7 @@ const (
 )
 
 // freshnessHalfLife is the λ of the TMB delayed-discount attention mapping
-// (design doc §2.2: "心跳的时间衰减权重，5 分钟前比 2 小时前更有参考价值").
+// ("心跳的时间衰减权重，5 分钟前比 2 小时前更有参考价值"; see docs/design/routing-and-scheduling.md).
 // With a 30-minute half-life, a 5-minute-old heartbeat keeps ≈0.89 of its
 // weight while a 2-hour-old one keeps ≈0.06 — fresh heartbeats dominate
 // without a hard online/offline cutoff ever discarding a recoverable node.
@@ -129,7 +129,7 @@ func tierSignal(n ledger.Node) float64 {
 	return float64(t) / 10
 }
 
-// userPriority is the DCPS user-named-node signal (design §6.3): 1.0 when the
+// userPriority is the DCPS user-named-node signal (docs/design/routing-and-scheduling.md): 1.0 when the
 // node is the one the user (or the entry model) named — matched on id (the
 // routing key) or display name (what the device summary shows) — 0 otherwise.
 // Route still short-circuits a *capable* preferred node before ranking, so in
@@ -180,11 +180,11 @@ func linkQuality(n ledger.Node, selfID string, selfLinks map[string]int64) float
 	return 1 / (1 + float64(rtt)/100)
 }
 
-// score returns the node's weighted desirability (design §6.3), discounted by
+// score returns the node's weighted desirability (docs/design/routing-and-scheduling.md), discounted by
 // heartbeat freshness (TMB). user_priority enters as 1.0 for the user-named
 // preferred node; in practice Route honors a matching preferred node before
 // scoring runs, so the term mostly shows up in the breakdown the orbit renders
-// — but it is part of the §6.3 sum, so it belongs in the score. project is the
+// — but it is part of the docs/design/routing-and-scheduling.md sum, so it belongs in the score. project is the
 // task's project name: a node resident for it earns the context-cost term.
 // reputationSignal is the trust-zone track-record term: the candidate's
 // locally observed delegation success rate, annotated onto its row by the
@@ -235,7 +235,7 @@ func pickBestScored(nodes []ledger.Node, now int64, preferred, project, selfID s
 // LocalBonus is non-zero only for the entry node (see localBias in route.go).
 type ScoreBreakdown struct {
 	ResourceEfficiency float64 `json:"resource_efficiency"`
-	// UserPriority is the user-named-node signal (design §6.3, weight 0.3):
+	// UserPriority is the user-named-node signal (weight 0.3; see docs/design/routing-and-scheduling.md):
 	// 1 when this node is the one the user named, 0 otherwise. Route honors a
 	// capable preferred node before ranking, so on the winning path this
 	// mostly explains "why" in the orbit rather than flipping the ranking.
@@ -252,7 +252,7 @@ type ScoreBreakdown struct {
 	LinkLatency float64 `json:"link_latency,omitempty"`
 	// HeartbeatFreshness is the TMB decay weight in (0,1] — 1.0 = brand-new
 	// heartbeat, ≈0 = stale past the half-life. The wire shape mirrors the
-	// design doc §3.1.1 "heartbeat_age" (0..∞ seconds, lower is better) so
+	// docs/design/routing-and-scheduling.md "heartbeat_age" (0..∞ seconds, lower is better) so
 	// orbit Step-2 consumers can render age text directly. Both fields
 	// coexist: HeartbeatAge is what the wire contract demands, freshness is
 	// kept for internal callers that want the weight (e.g. route decisions).
@@ -268,7 +268,7 @@ type ScoreBreakdown struct {
 
 // ScoredCandidate is one routing candidate with its identity and score detail.
 // Returned ordered by total score desc so consumers can slice the top-N.
-// Both total_score (flat, §3.1.1 wire contract) and breakdown.total (nested
+// Both total_score (flat, wire contract; see docs/design/routing-and-scheduling.md) and breakdown.total (nested
 // copy) are populated — the orbit renders the short path, the route detail
 // drawer reads the full breakdown.
 type ScoredCandidate struct {
@@ -303,7 +303,7 @@ func scoreBreakdown(n ledger.Node, now int64, preferred, project, selfID string,
 		ProjectResidence:   pr,
 		LinkLatency:        ll,
 		Reputation:         rp,
-		HeartbeatAge:       ageSec, // design doc §3.1.1 wire contract
+		HeartbeatAge:       ageSec, // docs/design/routing-and-scheduling.md wire contract
 		HeartbeatFreshness: fresh,  // internal weight, still useful
 		Total:              raw * fresh,
 	}
@@ -313,7 +313,7 @@ func scoreBreakdown(n ledger.Node, now int64, preferred, project, selfID string,
 // online/capable) and returns them with full score breakdown. selfID (when
 // non-empty) receives the localBias add-on on top of its baseline score;
 // preferred (when non-empty) is the user-named node, whose user_priority term
-// reflects the §6.3 weight; project (when non-empty) feeds the residence
+// reflects the docs/design/routing-and-scheduling.md weight; project (when non-empty) feeds the residence
 // term; selfLinks is the self row's measured-RTT table feeding the
 // link_latency term. Callers should filter candidates (online, hardware fit,
 // not on chain) before passing them in — this function scores, it does not

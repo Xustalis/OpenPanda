@@ -170,7 +170,7 @@ func migrateV58(tx MigrationExec) error {
 	return err
 }
 
-// migrateV59 adds the gossip-layer columns directory sync (§2) serves from:
+// migrateV59 adds the gossip-layer columns directory sync (docs/protocol.md) serves from:
 // dir_row_json is the verbatim canonical row JSON as it arrived (or as we
 // minted it for ourselves), dir_sig its Ed25519 signature extracted for the
 // signed-beats-unsigned conflict compare. Serving the stored bytes keeps a
@@ -345,7 +345,7 @@ func migrateV37(tx MigrationExec) error {
 
 // migrateV36 re-keys every outbox destination from the peer's instance id to
 // its stable identity ("k:" + Ed25519 pub) wherever the directory already
-// holds a proven key (Batch-6 restart continuity, confirmed-issues §14). Rows
+// holds a proven key (Batch-6 restart continuity; see docs/design/execution-and-defense.md). Rows
 // whose peer is unknown or key-less keep their instance id — for those peers
 // the instance id IS the stable key, and they flush exactly as before. The
 // rewrite is INSERT OR REPLACE + DELETE rather than a blind UPDATE: a node
@@ -531,7 +531,7 @@ func migrateV29(tx MigrationExec) error {
 // contact plan — scheduled transmission windows (open/close/rate/period)
 // gossiped beside neighbors_json and links_json so custody routing can ask
 // "which path delivers earliest" over scheduled links, not just "which
-// online neighbor is cheapest" over live ones (whitepaper §8.4).
+// online neighbor is cheapest" over live ones (docs/design/routing-and-scheduling.md).
 func migrateV27(tx MigrationExec) error {
 	exists, err := tableExistsTx(tx, "employee_cache")
 	if err != nil {
@@ -569,7 +569,7 @@ func migrateV26(tx MigrationExec) error {
 
 // migrateV23 adds tasks.agent_session_id and tasks.agent_session_node: the
 // adapter's own conversation handle and the node that minted it (whitepaper
-// §5.2's "breakpoint mooring" — the round boundary is the checkpoint the
+// docs/design/routing-and-scheduling.md "breakpoint mooring" — the round boundary is the checkpoint the
 // current adapters support). A task interrupted by yield/restart/redelegation
 // resumes that session instead of cold-starting on the shadow copy alone.
 // The node column is what keeps the handle honest: a session id only means
@@ -588,7 +588,7 @@ func migrateV23(tx MigrationExec) error {
 }
 
 // migrateV22 adds task_outbox.via: the peer a relayed bundle arrived from
-// (whitepaper §8.3 multi-hop). A signed bundle cannot carry a hop list — a
+// (docs/protocol.md). A signed bundle cannot carry a hop list — a
 // relay must not re-wrap it — so the no-echo rule is kept as row state: when
 // a flush recomputes the next hop it excludes via, and a bundle can only
 // ever be parked back toward its sender, never sent.
@@ -601,7 +601,7 @@ func migrateV22(tx MigrationExec) error {
 }
 
 // migrateV21 adds artifact_push_outbox: the durable custody record for
-// chunked proactive artifact delivery (whitepaper §8.3 fat-push). The
+// chunked proactive artifact delivery (docs/protocol.md). The
 // receiver reports contiguous progress (acked_through); the sender streams
 // forward from that waterline and only retires a row on the receiver's done
 // verdict — so an artifact outlives process restarts and link drops the same
@@ -627,7 +627,7 @@ func migrateV21(tx MigrationExec) error {
 }
 
 // migrateV20 completes the mesh-budget and weighted-routing persistence
-// (whitepaper §4.1, §6.1):
+// (docs/design/routing-and-scheduling.md):
 //   - tasks.token_budget: the remaining LLM token quota a task may spend
 //     across the mesh. >0 is the remaining allowance, 0 means unbounded
 //     (every pre-v20 task and every task minted without a budget), and -1
@@ -658,7 +658,7 @@ func migrateV20(tx MigrationExec) error {
 }
 
 // migrateV19 gives the mesh/DTN machinery its durable fields (whitepaper
-// §6.1, §8.2, §8.3, §4.1):
+// docs/protocol.md, docs/protocol.md, docs/protocol.md, docs/protocol.md):
 //   - tasks.transport / deadline_unix / delegation_budget: the DTN mode flag,
 //     the absolute bundle TTL, and the remaining mesh-wide delegation budget
 //     were previously wire-only/struct-only — a restart forgot them.
@@ -689,7 +689,7 @@ func migrateV19(tx MigrationExec) error {
 	return nil
 }
 
-// migrateV18 adds task_outbox: universal relay outbox for DTN and store-and-forward tasks (whitepaper §8.2).
+// migrateV18 adds task_outbox: universal relay outbox for DTN and store-and-forward tasks (docs/protocol.md).
 // Unlike result_outbox which only holds terminal results, task_outbox buffers forward
 // delegation envelopes for non-live peers or opportunistic DTN relay.
 func migrateV18(tx MigrationExec) error {
@@ -1080,7 +1080,7 @@ func migrateV24(tx MigrationExec) error {
 }
 
 // migrateV25 adds dtn_relay_log: the durable form of the per-node loop bound
-// for store-and-forward custody (whitepaper §8.3). A signed bundle cannot
+// for store-and-forward custody (docs/protocol.md). A signed bundle cannot
 // carry a hop list, so each relay counts its own forwards of a bundle id —
 // and that count must survive a restart, or a rebooted node re-arms the bound
 // and a triangle of restarts can ping-pong a bundle until its TTL. until is
@@ -1353,7 +1353,7 @@ func migrateV49(tx MigrationExec) error {
 // migrateV50 adds tasks.spawn_depth: the sub-agent generation the task sits
 // at in its causal tree (user-submitted root = 0, its delegate children = 1,
 // grandchildren = 2…). The wire's Depth field (bus.TaskDelegatePayload) has
-// documented this semantics since §6.1 — "Parent.Depth+1 at every spawn hop"
+// documented this semantics since docs/design/routing-and-scheduling.md — "Parent.Depth+1 at every spawn hop"
 // — but producers stamped the chain length instead and receivers never
 // persisted it, so a task's true generation was lost at the first hop. The
 // column makes delegation.max_depth enforceable on every node a subtree
@@ -1454,7 +1454,7 @@ func migrateV55(tx MigrationExec) error {
 }
 
 // migrateV56 adds the cross-network mesh directory columns (author design
-// 2026-10-21 §6.2). x_pub is the peer's X25519 identity key (hex) learned
+// 2026-10-21 docs/design/routing-and-scheduling.md). x_pub is the peer's X25519 identity key (hex) learned
 // from signed hellos next to pub_key — transit sealing needs it to open an
 // ECIES-style channel to that node. addrs/relay carry the peer's
 // self-advertised dial candidates and relay capability block as JSON from

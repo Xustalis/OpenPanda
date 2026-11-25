@@ -12,7 +12,7 @@ import (
 // Snapshot is a point-in-time record of the regular files under a directory,
 // keyed by slash-separated path relative to the root and fingerprinted by size
 // plus mtime. It is the deterministic basis for scope-drift detection (design
-// §14.2 signal A): diffing a before and after snapshot reveals what an agent
+// docs/design/execution-and-defense.md signal A): diffing a before and after snapshot reveals what an agent
 // changed.
 type Snapshot struct {
 	files map[string]fileStamp
@@ -72,7 +72,7 @@ var snapshotPruneDirs = map[string]bool{
 	"__pycache__":  true,
 	".venv":        true,
 	"venv":         true,
-	// .panda-shadow holds the §5.2 preemption copies SaveShadow parks inside
+	//.panda-shadow holds the docs/design/execution-and-defense.md preemption copies SaveShadow parks inside
 	// the work tree. Hashing them would double-count the agent's own work,
 	// and diffing them would flag bookkeeping as drift.
 	".panda-shadow": true,
