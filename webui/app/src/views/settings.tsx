@@ -954,7 +954,7 @@ function settingsId(name: string): string {
   return `agent-settings-${name.replace(/[^a-zA-Z0-9_-]/g, '-')}`
 }
 
-/** Agent CLIs (queue redesign §6): which coding agents the node can drive —
+/** Agent CLIs: which coding agents the node can drive —
  *  claude code / opencode / codex — with install path, best-effort version,
  *  and a live connectivity test.
  *

@@ -110,7 +110,7 @@ func buildToolRegistry(e *Engine, hermes *memory.Hermes, projects *memory.Projec
 		},
 	})
 
-	// System-data tools (§7.3): the model has no clock or senses of its own.
+	// System-data tools (docs/design/execution-and-defense.md): the model has no clock or senses of its own.
 	registerTimeTool(reg)
 	registerWeatherTool(reg)
 
@@ -326,7 +326,7 @@ func withReadOnlyEntryTools(ctx context.Context) context.Context {
 // model can consolidate and retry). authorized is the ask's effective tier-2
 // consent: a Tier-2 tool without it is refused before Run, and the refusal —
 // with the consent instructions for the current surface — becomes the
-// tool_result the model relays to the user (design §16: the same fail-closed
+// tool_result the model relays to the user (docs/design/execution-and-defense.md: the same fail-closed
 // gate native and agent plans pass through in commander.Router.Execute).
 // denied reports a remembered "deny" for the scope: the refusal then names the
 // standing decision instead of asking for a grant the user already declined.

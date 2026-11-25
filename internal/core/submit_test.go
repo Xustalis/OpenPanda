@@ -186,7 +186,7 @@ func TestSubmitFallsBackToDTNWhenTargetNonLive(t *testing.T) {
 	}
 }
 
-// TestWaitRemoteResultHonoursRenewedLease is the §7.2 regression: a healthy
+// TestWaitRemoteResultHonoursRenewedLease is the docs/design/execution-and-defense.md regression: a healthy
 // executor keeps refreshing lease_expires_at on the origin's row, so the wait
 // must outlive the deadline stamped when the wait began — the old fixed
 // time.After(c.lease()) fired at wait-start+lease regardless and mis-killed a

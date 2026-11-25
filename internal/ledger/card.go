@@ -73,7 +73,7 @@ func (c *Card) PruneUnavailableNative() []string {
 	return dropped
 }
 
-// PruneUnavailableActuators is PruneUnavailableNative for the §7.1 actuator
+// PruneUnavailableActuators is PruneUnavailableNative for the docs/design/execution-and-defense.md actuator
 // set: an actuator whose declared driver command does not resolve on this
 // host is dropped entirely. An actuator with NO command survives — it is a
 // routing advertisement that intentionally falls through to the agent tier —

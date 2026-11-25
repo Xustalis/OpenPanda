@@ -251,7 +251,7 @@ func (c *Core) handleDecline(ctx context.Context, env bus.Envelope) {
 }
 
 // rerouteDeclined attempts to dispatch a declined task to the next-best node
-// (P1-5, design §2.4 capacity-driven delegation). It returns true when the
+// (capacity-driven delegation; see docs/design/routing-and-scheduling.md). It returns true when the
 // task was handed to a new executor; false means no route exists and the
 // caller should propagate the decline upstream.
 //
@@ -380,13 +380,13 @@ func (c *Core) rerouteDeclined(ctx context.Context, taskID string) bool {
 		Inputs:  t.Inputs,
 		// A re-route is the same task changing hands, not a new generation:
 		// carry the row's spawn depth so the next executor inherits the
-		// depth budget the subtree already spent (§6.1). MaxDepth is the
+		// depth budget the subtree already spent (docs/design/routing-and-scheduling.md). MaxDepth is the
 		// tightest bound the path has seen — a stricter receiver clamps it
 		// further, never looser.
 		Depth:    t.SpawnDepth,
 		MaxDepth: c.effectiveSpawnCap(t),
 	}
-	// Session resume hint (§5.2): only the node that minted the handle can
+	// Session resume hint (docs/design/routing-and-scheduling.md): only the node that minted the handle can
 	// use it, so it rides the wire only when the route leads back there.
 	if t.AgentSessionID != "" && t.AgentSessionNode == decision.Target {
 		payload.ResumeSessionID = t.AgentSessionID
@@ -673,7 +673,7 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 	}
 
 	// Record the executor's adapter session against our copy of the task
-	// (§5.2): the handle belongs to the reporting node's adapter store, which
+	// (docs/design/routing-and-scheduling.md): the handle belongs to the reporting node's adapter store, which
 	// is why it is keyed by env.From — a later re-dispatch offers it back as
 	// ResumeSessionID only when the target is that same node.
 	if p.AgentSessionID != "" {
@@ -932,7 +932,7 @@ func (c *Core) CancelTree(ctx context.Context, taskID string) ([]string, error) 
 // parked for its next hello.
 func (c *Core) RejectTree(ctx context.Context, taskID, reason string) error {
 	// A self-merge rejection retires the patch set with the task (design
-	// §4.2): without the archive the set would sit in the queue forever,
+	// docs/design/routing-and-scheduling.md): without the archive the set would sit in the queue forever,
 	// proposable again as if the human had never said no.
 	var selfMergeID string
 	if c.selfMgr != nil {
@@ -1514,7 +1514,7 @@ func (c *Core) handleAgentNegotiate(ctx context.Context, env bus.Envelope) {
 	// node name the payload asserts (same fail-closed posture as task auth).
 	p.FromNode = env.From
 	// Weight is wire-supplied like the rest of the claim: bound it to what a
-	// priority-derived weight can legitimately be (negoWeightOf, §5.2), or a
+	// priority-derived weight can legitimately be (negoWeightOf; see docs/design/routing-and-scheduling.md), or a
 	// peer could bid an arbitrary value and preempt every lock in the mesh.
 	if p.Weight < 0 {
 		p.Weight = 0
@@ -1621,7 +1621,7 @@ func (c *Core) handleAgentYield(ctx context.Context, env bus.Envelope) {
 	c.negoRelease(victim)
 }
 
-// SendNegotiation sends a horizontal conflict negotiation signal to target peer (whitepaper §5.1).
+// SendNegotiation sends a horizontal conflict negotiation signal to target peer (docs/design/routing-and-scheduling.md).
 func (c *Core) SendNegotiation(ctx context.Context, target string, p bus.AgentNegotiatePayload) error {
 	msgID, err := newUUID()
 	if err != nil {

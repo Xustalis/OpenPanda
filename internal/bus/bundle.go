@@ -13,7 +13,7 @@ import (
 	"fmt"
 )
 
-// bundle.go implements the far-track DTN Bundle (whitepaper §8.2/§8.3): a
+// bundle.go implements the far-track DTN Bundle (docs/protocol.md): a
 // self-contained, CBOR-encoded unit carrying an EID-addressed, lifetime-
 // bounded, HMAC-signed task payload for store-and-forward transport. Where
 // the live track is a JSON envelope over an authenticated WebSocket, a

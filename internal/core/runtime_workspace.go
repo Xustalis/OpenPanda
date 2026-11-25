@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// SetMemoryStores attaches the memory layer (design §17/§8): the Hermes
+// SetMemoryStores attaches the memory layer (docs/memory-lifecycle.md): the Hermes
 // injector (entry-model conversation context; no longer used for agent-prompt
 // injection since A1), the daily log writer feeding the Dreaming engine, and
 // the skill store for progressive loading. Any may be nil to disable its layer.

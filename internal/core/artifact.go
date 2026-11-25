@@ -107,7 +107,7 @@ func (c *Core) SetArtifactStore(s *artifact.Store) { c.artifacts = s }
 func (c *Core) Artifacts() *artifact.Store { return c.artifacts }
 
 // ImportFatBundleArtifacts imports an array of proactive bundled artifacts directly into the node's
-// local artifact pool, verifying SHA256 integrity and eliminating round-trip pulls (whitepaper §8.3).
+// local artifact pool, verifying SHA256 integrity and eliminating round-trip pulls (docs/protocol.md).
 func (c *Core) ImportFatBundleArtifacts(ctx context.Context, artifacts []bus.FatBundleArtifact) ([]artifact.Manifest, error) {
 	if c.artifacts == nil {
 		return nil, errors.New("core: no artifact pool configured")
@@ -137,7 +137,7 @@ func (c *Core) ImportFatBundleArtifacts(ctx context.Context, artifacts []bus.Fat
 }
 
 // fatBundleCap bounds the total bytes one delegate's BundledArtifacts may
-// carry (§8.3). JSON base64 inflates a byte to 4/3 on the wire and a frame
+// carry (docs/protocol.md). JSON base64 inflates a byte to 4/3 on the wire and a frame
 // must stay under readLimit, so 2 MiB of raw artifact stays comfortably
 // deliverable inside one envelope.
 const fatBundleCap = 2 << 20
@@ -145,7 +145,7 @@ const fatBundleCap = 2 << 20
 // attachFatBundle populates p.BundledArtifacts with the artifacts the payload
 // already references — the context snapshot and every declared input — so a
 // DTN delegate arrives self-contained and the executor can start with zero
-// network round trips (§8.3). Hashes this node does not hold are skipped:
+// network round trips (docs/protocol.md). Hashes this node does not hold are skipped:
 // content addressing means the receiver can still pull them later from any
 // node that does, and a missing bundle entry degrades to the fetch path
 // rather than failing the delegation.

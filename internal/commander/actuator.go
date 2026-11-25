@@ -12,7 +12,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
-// actuator.go implements the §7.2 dispatch half of the unified actuator
+// actuator.go implements the docs/design/execution-and-defense.md dispatch half of the unified actuator
 // model: a card actuator's command carries {intent}, {action} and
 // {param:<name>} placeholders, and the task's action_spec supplies the
 // concrete values. Substitution produces argv elements — never a shell line —

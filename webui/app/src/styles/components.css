@@ -996,7 +996,7 @@ dialog.confirm-modal::backdrop {
 .toast-close:hover { color: var(--text); }
 
 /* ---- Banners ----------------------------------------------------------------------
-   The .banner family lives in views.css (§4.2) — the rules that used to sit
+   The.banner family lives in views.css (docs/design/routing-and-scheduling.md) — the rules that used to sit
    here were the pre-redesign set and were fully shadowed by that layer. */
 
 /* ---- Shared error / empty state ------------------------------------------------------ */

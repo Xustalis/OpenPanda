@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Package security implements the execution-side hardening of design doc §16
+// Package security implements the execution-side hardening of docs/design/execution-and-defense.md
 // and plan P3-29..P3-32: a reduced subprocess environment, network egress
 // validation, secret scrubbing, a high-risk audit trail, and — when
 // sandbox.mode is configured — OS-level confinement for every spawned
 // subprocess (seatbelt on macOS, bubblewrap on Linux, AppContainer plus a
 // write-restricted token on Windows; see policy.go and the
 // platform sandbox_* files). Everything here is deterministic — the
-// "adversarial model review" layers (design §14.2 Layer 2/3) are a later,
+// "adversarial model review" layers (3; see docs/design/execution-and-defense.md) are a later,
 // model-dependent phase.
 package security
 

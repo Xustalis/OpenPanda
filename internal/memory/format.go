@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Package memory implements the two-layer memory system (design doc §17):
+// Package memory implements the two-layer memory system (docs/memory-lifecycle.md):
 // Hermes personal-assistant memory and per-project memory, kept physically
 // isolated by an isolation wall. The on-disk format and hot-layer model follow
 // Hermes Agent (Nous Research); the cold-layer layout follows OpenClaw.
 //
-// Layout (design doc §17.2, aligned to upstream):
+// Layout (aligned to upstream; see docs/memory-lifecycle.md):
 //
 //	memory/                  Hermes personal memory
 //	  MEMORY.md              hot layer — §-separated entries, 2200-char cap
@@ -30,7 +30,7 @@ import (
 // tokens, so they stay model-agnostic. Hermes splits memory into two files —
 // USER.md (who the user is, ~500 tokens) and MEMORY.md (what the agent knows
 // about the world, ~800 tokens) — and PANDA gives project memory more room
-// because it is injected into a full agent context (design §17.2).
+// because it is injected into a full agent context (docs/memory-lifecycle.md).
 //
 // These constants are the compile-time fallbacks; deployments configure real
 // caps via config memory.limits.{user,memory,project}, injected at store

@@ -46,7 +46,7 @@ func TestGraphFirstHopNoPath(t *testing.T) {
 	}
 }
 
-// §4.1 weighted routing: the path with more hops but cheaper links must beat
+// docs/design/routing-and-scheduling.md weighted routing: the path with more hops but cheaper links must beat
 // the short-but-slow one. BFS used to pick by hop count alone, which is how a
 // 1-hop satellite link would beat a 3-hop LAN.
 func TestGraphFirstHopPrefersCheapestPath(t *testing.T) {

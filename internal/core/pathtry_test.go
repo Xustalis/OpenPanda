@@ -351,7 +351,7 @@ func TestKickReachableDedupe(t *testing.T) {
 }
 
 // TestNatStatePersistsAcrossRestart: the nat_suspect window survives a
-// process restart (design §6.2's nat_state), so a node does not re-spray a
+// process restart ('s nat_state; see docs/protocol.md), so a node does not re-spray a
 // symmetric-NAT peer for two full windows every time it boots.
 func TestNatStatePersistsAcrossRestart(t *testing.T) {
 	ctx := context.Background()

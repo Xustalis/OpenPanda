@@ -149,7 +149,7 @@ func closeTruncatedJSON(s string) (string, bool) {
 // ParseOutput turns raw model text into a validated Output. The model may emit
 // JSON for tool_call/task or plain prose for answer. Text that is not a
 // directive falls back to KindAnswer (never a silent error for the user —
-// design doc §7.4); text that *announced* a directive and then failed to be one
+// docs/design/execution-and-defense.md); text that *announced* a directive and then failed to be one
 // is refused with ErrDirectiveProse instead, because failing open there turns
 // protocol into chat.
 func ParseOutput(raw string) (Output, error) {

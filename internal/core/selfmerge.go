@@ -136,7 +136,7 @@ func selfVersionBase(v string) string {
 }
 
 // ProposeSelfMerge turns a queued patch set into a review-gated merge task
-// (design §4.2): a human approve runs the pipeline, a reject archives the
+// (docs/design/self-evolution.md): a human approve runs the pipeline, a reject archives the
 // set. The proposal carries the manifest's recomputed critical flag so the
 // review UI can highlight what the patch touches.
 func (c *Core) ProposeSelfMerge(ctx context.Context, patchSetID string) (Task, error) {
@@ -413,7 +413,7 @@ func (c *Core) schemaFloor(ctx context.Context) (int, error) {
 }
 
 // SelfRebaseSweep carries queued patch sets onto the repo's current HEAD
-// after an official update moved the base out from under them (design §7 q3,
+// after an official update moved the base out from under them (docs/design/self-evolution.md q3,
 // phase 4 coexistence). Each stale set is rebased and re-signed with THIS
 // node's key — the node doing the rebase is the one whose operator will
 // review it — while a conflict marks the set conflicted and leaves it for

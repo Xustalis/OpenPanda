@@ -67,6 +67,22 @@ test('expandFileRefs dedupes repeated mentions and strips trailing punctuation',
   assert.deepEqual(seen, ['a.txt'])
 })
 
+test('expandFileRefs skips tokens rejected by skip predicate (e.g. @agent mentions)', async () => {
+  const seen: string[] = []
+  const r = async (p: string) => {
+    seen.push(p)
+    return { content: 'file body' }
+  }
+  const { prompt, attached } = await expandFileRefs(
+    '@codex inspect @a.txt',
+    r,
+    (token) => token === 'codex',
+  )
+  assert.deepEqual(seen, ['a.txt'])
+  assert.deepEqual(attached, ['a.txt'])
+  assert.match(prompt, /^@codex inspect @a\.txt\n\n`a\.txt`:/)
+})
+
 test('expandFileRefs marks truncated reads', async () => {
   const r = async () => ({ content: 'body', truncated: true })
   const { prompt } = await expandFileRefs('@big.txt', r)

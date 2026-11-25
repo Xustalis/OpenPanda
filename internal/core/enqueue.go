@@ -350,7 +350,7 @@ func (c *Core) runScheduled(ctx context.Context, taskID string) {
 	}
 	// Cross-device routing: when this node cannot serve the task's required
 	// abilities, hand it to a capable peer — the same root-scheduler policy
-	// Submit applies (design §2.4). The claim is re-targeted to the peer and
+	// Submit applies (docs/design/routing-and-scheduling.md). The claim is re-targeted to the peer and
 	// its task_result completes the local row via handleResult, so there is
 	// nothing left to run here. Queued tasks are first-class network
 	// citizens, not local-only work.
@@ -549,7 +549,7 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 					// live links, and the lapsed executor is down by
 					// definition of the sweep that brought us here. Parking
 					// the re-delivery for its last custodian is the
-					// store-and-forward answer (§8.2): the flush on its next
+					// store-and-forward answer (docs/protocol.md): the flush on its next
 					// hello hands the task back, and the deadline — not a
 					// verdict — bounds the wait.
 					decision = scheduler.Decision{Action: scheduler.ActionForward, Target: evicted[len(evicted)-1]}
@@ -617,7 +617,7 @@ func (c *Core) forwardClaimTo(ctx context.Context, t Task, chain []string, decis
 		PlanID:  t.PlanID,
 		StageID: t.StageID,
 		Inputs:  t.Inputs,
-		// §6.1/§8.2: the queue path carries the same mesh contract as the
+		// docs/protocol.md: the queue path carries the same mesh contract as the
 		// synchronous dispatch — spawn depth, remaining budget, transport,
 		// deadline. Depth is the task's generation in its causal tree, NOT
 		// the chain length: the chain counts routing hops, a forwarded task
@@ -643,7 +643,7 @@ func (c *Core) forwardClaimTo(ctx context.Context, t Task, chain []string, decis
 		// pin resolved through topology — Target is then only the next hop.
 		p.TargetNode = c.stablePeerID(ctx, pinWireDest(decision))
 	}
-	// Session resume hint (§5.2): the handle only means something to the node
+	// Session resume hint (docs/design/routing-and-scheduling.md): the handle only means something to the node
 	// that minted it, so it is offered only when the route leads back there.
 	if t.AgentSessionID != "" && t.AgentSessionNode == decision.Target {
 		p.ResumeSessionID = t.AgentSessionID
@@ -735,7 +735,7 @@ func (c *Core) sendClaimedDelegate(ctx context.Context, taskID, target string, p
 	if !c.clampForPeer(target, &p) {
 		return fmt.Errorf("peer %s trust ceiling refuses the task's needs (%s)", target, bus.DeclineCodeTrustCeiling)
 	}
-	// §6.1: a queue forward spends the same budget a synchronous dispatch does
+	// docs/design/routing-and-scheduling.md: a queue forward spends the same budget a synchronous dispatch does
 	// — the paths are interchangeable, so the bound must be too.
 	remaining, err := c.delegationBudget(ctx, taskID, derefBudget(p.DelegationBudget))
 	if err != nil {
@@ -775,7 +775,7 @@ func (c *Core) sendClaimedDelegate(ctx context.Context, taskID, target string, p
 	}
 	park := parkable && !c.sendableTo(target)
 	if !park && !dtn {
-		// A DTN task is lease-exempt (§8.2): the absolute deadline is its bound.
+		// A DTN task is lease-exempt (docs/protocol.md): the absolute deadline is its bound.
 		timeoutMS := p.TimeoutMS
 		if timeoutMS <= 0 {
 			timeoutMS = c.lease().Milliseconds()
@@ -793,7 +793,7 @@ func (c *Core) sendClaimedDelegate(ctx context.Context, taskID, target string, p
 	}
 	if dtn || park {
 		// A DTN or to-be-parked copy holds no lease; its bound is the
-		// absolute deadline (§8.2). Stamping it also marks the dispatched,
+		// absolute deadline (docs/protocol.md). Stamping it also marks the dispatched,
 		// lease-less row as in-flight custody, so the stale-claim sweep does
 		// not requeue a delegation that is merely riding store-and-forward.
 		if derr := c.store.SetDeadlineIfUnset(ctx, taskID, pushDeadline); derr != nil {
@@ -812,7 +812,7 @@ func (c *Core) sendClaimedDelegate(ctx context.Context, taskID, target string, p
 		env.To = target
 		if err := c.sendTo(target, env); err != nil {
 			if parkable {
-				// §8.2 store-and-forward, and the pinned variant: an
+				// docs/protocol.md store-and-forward, and the pinned variant: an
 				// undeliverable task parks in the outbox for the peer's next
 				// reconnect instead of falling back to local execution — the
 				// retarget pointing at the peer stays true: the outbox flush

@@ -288,6 +288,30 @@ for f in docs/agent-execution.md docs/agent-execution.en.md docs/agent-execution
 	done
 done
 
+# ── 8. design references resolve to published docs ──────────────────────────
+# Comments in cmd/, internal/, webui/ and Makefile must not cite private
+# design section numbers (§X) that do not exist in the repository. External
+# standards (RFC, SemVer, CCSDS, AGPL) and existing docs/ links are exempt.
+bad_refs=$(grep -rnE '§[0-9D]' cmd internal webui Makefile \
+	--exclude-dir=node_modules --exclude-dir=dist \
+	--include='*.go' --include='*.ts' --include='*.tsx' --include='*.css' --include='Makefile' \
+	2>/dev/null | grep -vE 'RFC |SemVer|CCSDS|AGPL|docs/routing-layers\.md' || true)
+if [ -n "$bad_refs" ]; then
+	echo "FAIL: unresolved section citations (§) found in code comments:"
+	echo "$bad_refs" | head -n 10 | sed 's/^/  /'
+	fail=1
+fi
+
+for doc_ref in $(grep -rnE '^[[:space:]]*(//|/\*|\*|#).*([^A-Za-z0-9_/-]|^)docs/[A-Za-z0-9_./-]+\.md([^A-Za-z0-9_-]|$)' cmd internal webui \
+	--exclude-dir=node_modules --exclude-dir=dist \
+	--include='*.go' --include='*.ts' --include='*.tsx' --include='*.css' \
+	2>/dev/null | grep -oE 'docs/[A-Za-z0-9_./-]+\.md' | sort -u); do
+	if [ ! -f "$doc_ref" ]; then
+		echo "FAIL: comment-referenced doc path does not exist: $doc_ref"
+		fail=1
+	fi
+done
+
 if [ "$fail" -ne 0 ]; then
 	echo "check-docs: FAILED"
 	exit 1

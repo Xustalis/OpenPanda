@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Package bus implements the WebSocket transport and wire protocol for
-// node-to-node task delegation (design doc §10).
+// node-to-node task delegation (docs/protocol.md).
 package bus
 
 import (
@@ -52,7 +52,7 @@ const (
 	// artifact is a build tree or a trained model.
 	MsgArtifactFetch = "artifact_fetch"
 	MsgArtifactChunk = "artifact_chunk"
-	// Artifact push is the proactive half of the data plane (whitepaper §8.3
+	// Artifact push is the proactive half of the data plane (docs/protocol.md
 	// fat-push): instead of waiting for the consumer to pull, the holder
 	// streams chunks out of a persisted outbox. The receiver stages them on
 	// disk and reports contiguous progress (status) plus the terminal
@@ -62,17 +62,17 @@ const (
 	MsgArtifactPush       = "artifact_push"
 	MsgArtifactPushStatus = "artifact_push_status"
 	MsgArtifactPushDone   = "artifact_push_done"
-	// Agent horizontal negotiation signaling (whitepaper §5.1).
+	// Agent horizontal negotiation signaling (docs/protocol.md).
 	MsgAgentNegotiate = "agent_negotiate"
 	MsgAgentGrant     = "agent_grant"
 	MsgAgentYield     = "agent_yield"
-	// MsgDTNBundle carries a signed CBOR DTN bundle (§8.3) on the wire: the
+	// MsgDTNBundle carries a signed CBOR DTN bundle (docs/protocol.md) on the wire: the
 	// bundle — not a plain task_delegate — is the canonical form a
 	// store-and-forward task takes once it leaves the origin, so a parked
 	// row redelivers byte-identical signed data and a live DTN dispatch is
 	// the same object as its outboxed copy.
 	MsgDTNBundle = "dtn_bundle"
-	// Punch coordination (farsky §9.2). The offer/ready pair are control
+	// Punch coordination (docs/protocol.md). The offer/ready pair are control
 	// envelopes routed through the mesh (direct conn or link-state next hop)
 	// to arrange a UDP pinhole between two NAT-bound nodes; the actual
 	// punching is raw punch/ack datagrams, not envelopes. TTL inside the
@@ -121,7 +121,7 @@ const (
 	MsgPairReject = "pair_reject"
 )
 
-// Envelope is the JSON wire format (design doc §10.3). MsgID is a UUIDv7
+// Envelope is the JSON wire format (docs/protocol.md). MsgID is a UUIDv7
 // used for dedup at the receiving end.
 type Envelope struct {
 	V       int             `json:"v"`

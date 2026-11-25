@@ -9,7 +9,7 @@ import (
 
 // LoopDetector counts failed attempts per task and signals when a task has
 // spent its retry budget and should pause instead of retrying again (design
-// §14.2 signal C, plan P2-18). It is the deterministic "diminishing returns"
+// docs/design/execution-and-defense.md signal C, plan P2-18). It is the deterministic "diminishing returns"
 // check: a task that keeps failing is paused for analysis rather than retried
 // forever. Keyed by task id; in-memory, so a restart resets the counters.
 type LoopDetector struct {

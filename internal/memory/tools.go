@@ -32,7 +32,7 @@ var ErrNoStore = errors.New("memory: no store configured for target")
 
 // Tool executes whitelisted memory tools against the Hermes and project stores.
 // It is the Go-side executor the entry model's tool_call output lands in; the
-// model never touches the files directly (design §7.3: Go core validates and
+// model never touches the files directly (docs/memory-lifecycle.md: Go core validates and
 // executes, the model emits only the request).
 type Tool struct {
 	hermes   *Hermes

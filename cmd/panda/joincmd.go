@@ -2,7 +2,7 @@
 
 package main
 
-// `panda join` — the cold-start front door (cross-network mesh §2). A node
+// `panda join` — the cold-start front door (docs/protocol.md). A node
 // with zero information needs exactly one address to knock on, and a URI is
 // a way to carry it:
 //

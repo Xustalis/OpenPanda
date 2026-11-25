@@ -2,7 +2,7 @@
 
 package core
 
-// Pair-over-transit (cross-network mesh design §2 "pair over transit", P4b).
+// Pair-over-transit ("pair over transit"; see docs/protocol.md).
 //
 // The problem: two nodes that have never met sit behind NATs, so neither can
 // dial the other and neither holds the shared secret that would let a hello

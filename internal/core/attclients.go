@@ -9,7 +9,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/bus"
 )
 
-// Attached clients — the return-route half of pair-over-transit (design §2
+// Attached clients — the return-route half of pair-over-transit (docs/protocol.md
 // P4b). A joiner that cannot reach the introducer directly dials a contact
 // point and asks it to forward its pair_hello; the introducer then has to
 // answer to a destination that has no meshed identity. The contact point

@@ -28,7 +28,7 @@ func read(t *testing.T, root, rel string) string {
 	return string(b)
 }
 
-// §5.2: only files under the declared scope roots are parked — the shadow
+// docs/design/execution-and-defense.md: only files under the declared scope roots are parked — the shadow
 // preserves what arbitration fought over, not the whole machine.
 func TestSaveShadowScopedOnly(t *testing.T) {
 	dir := t.TempDir()

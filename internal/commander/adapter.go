@@ -1062,7 +1062,7 @@ type AdapterRequest struct {
 	// Effort names the CLI's reasoning-effort level (claude --effort).
 	Effort string `json:"effort,omitempty"`
 	// Complexity is the task's 0–1 difficulty score from the entry
-	// classifier (§7.3). Adapters that pick among several served models
+	// classifier (docs/design/execution-and-defense.md). Adapters that pick among several served models
 	// (opencode) read it to prefer their free tier on simple tasks.
 	// 0 = unset — unclassified work gets the adapter's default ordering.
 	Complexity float64 `json:"complexity,omitempty"`

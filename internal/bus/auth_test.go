@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// TestHelloSigVerify exercises the HMAC transport signature (design §16 / P0-1):
+// TestHelloSigVerify exercises the HMAC transport signature (docs/protocol.md):
 // a valid signature passes, any mismatch fails, and an empty secret or empty
 // signature always fails (fail-closed).
 func TestHelloSigVerify(t *testing.T) {

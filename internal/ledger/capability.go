@@ -65,7 +65,7 @@ type RelayProfile struct {
 	ForTrust   string `yaml:"for_trust,omitempty" json:"for_trust,omitempty"`
 }
 
-// ActuatorProfile is the unified model equalizing software cognitive agents and hardware peripherals (whitepaper §7.1).
+// ActuatorProfile is the unified model equalizing software cognitive agents and hardware peripherals (docs/design/execution-and-defense.md).
 type ActuatorProfile struct {
 	ID           string   `yaml:"id" json:"id"`
 	Type         string   `yaml:"type" json:"type"`                               // "software" or "hardware"
@@ -75,7 +75,7 @@ type ActuatorProfile struct {
 	Capabilities []string `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
 	CostTier     string   `yaml:"cost_tier,omitempty" json:"cost_tier,omitempty"`
 	Tier         int      `yaml:"tier" json:"tier"` // 1=reversible (default), 2=irreversible (needs auth)
-	// Command/Args are the actuator's driver invocation (§7.2): the program
+	// Command/Args are the actuator's driver invocation (docs/design/execution-and-defense.md): the program
 	// that turns an intent or ActionSpec into a physical/software action —
 	// e.g. a GPIO control script on an Orange Pi. Placeholders {intent},
 	// {action} and {param:<name>} are substituted at execution. An actuator
@@ -85,7 +85,7 @@ type ActuatorProfile struct {
 	Args    []string `yaml:"args,omitempty" json:"args,omitempty"`
 }
 
-// ActionSpec defines a uniform action dispatch across both software harnesses and hardware actuators (whitepaper §7.2).
+// ActionSpec defines a uniform action dispatch across both software harnesses and hardware actuators (docs/design/execution-and-defense.md).
 type ActionSpec struct {
 	TargetActuator string         `json:"target_actuator"`
 	Action         string         `json:"action"`
@@ -207,7 +207,7 @@ type LiveMetrics struct {
 	GPUUtil int `json:"gpu_util"`
 }
 
-// ResourceProfile is a node-side, manually declared resource hint (design §13.2;
+// ResourceProfile is a node-side, manually declared resource hint (docs/design/execution-and-defense.md;
 // Sprint 5.1 consumes it for weighted scoring). It mirrors entry.ResourceProfile
 // in shape so the task and node sides compare field-for-field, but is declared in
 // ledger to avoid an entry→ledger import cycle. Static for the life of a card.
@@ -240,7 +240,7 @@ func (r ResourceProfile) Declared() bool {
 }
 
 // CapabilitySummary is the compact capability profile a node advertises in its
-// hello handshake (design doc §2.1 capability exchange). It carries only what
+// hello handshake (capability exchange; see docs/design/execution-and-defense.md). It carries only what
 // routing needs — ability IDs, scheduler tier, current capacity and the declared
 // hardware profile — not the executable commands, which stay on the owning node.
 type CapabilitySummary struct {
@@ -258,22 +258,22 @@ type CapabilitySummary struct {
 	NativeIDs     []string            `json:"native_ids,omitempty"`
 	AgentCaps     map[string][]string `json:"agent_caps,omitempty"`
 	ManualIDs     []string            `json:"manual_ids,omitempty"`
-	// ActuatorIDs advertises the unified actuator set (§7.1) so remote routing
+	// ActuatorIDs advertises the unified actuator set (docs/design/execution-and-defense.md) so remote routing
 	// can see this node's hardware "hands" — a GPIO servo on a Pi is a routing
 	// target exactly like an agent capability, and invisible if unadvertised.
 	ActuatorIDs []string `json:"actuator_ids,omitempty"`
 	// Neighbors is the link-state advertisement: the peer node ids this node
 	// currently holds a live connection to. The mesh builds its routing graph
 	// G=(V,E) from these edges, which is what makes multi-hop shortest-path
-	// forwarding (§9.3) computable off the directory.
+	// forwarding (docs/design/execution-and-defense.md) computable off the directory.
 	Neighbors []string `json:"neighbors,omitempty"`
-	// Links carries the measured edge metrics for the same adjacency (§4.1):
+	// Links carries the measured edge metrics for the same adjacency (docs/design/execution-and-defense.md):
 	// one entry per peer this node has an RTT sample for. Weighted shortest
 	// path reads these as edge costs; an advertised neighbor with no metric
 	// gets the unknown-link default.
 	Links    []LinkMetric `json:"links,omitempty"`
 	Capacity Capacity     `json:"capacity"`
-	// Contacts is the node's advertised contact plan (§8.4): scheduled
+	// Contacts is the node's advertised contact plan (docs/design/execution-and-defense.md): scheduled
 	// transmission windows toward peers that custody routing evaluates
 	// alongside live adjacency. A node with no scheduled links advertises
 	// nothing, and its row reads identically to a pre-contacts peer.
@@ -285,7 +285,7 @@ type CapabilitySummary struct {
 	ResourceProfile ResourceProfile `json:"resource_profile,omitempty"`
 	// Projects lists the project names this node holds a checkout of, so a
 	// project-bound task can be routed where its tree already lives instead of
-	// packing it across the wire (§6.3 residence term). Membership changes as
+	// packing it across the wire (residence term; see docs/design/execution-and-defense.md). Membership changes as
 	// projects land, so the regular heartbeat carries the same list.
 	Projects []string `json:"projects,omitempty"`
 	// Relay is this node's advertised relay-capability block (cross-network
@@ -299,7 +299,7 @@ type CapabilitySummary struct {
 	Addrs []string `json:"addrs,omitempty"`
 }
 
-// LinkMetric is one measured edge of the link-state graph (§4.1): the
+// LinkMetric is one measured edge of the link-state graph (docs/design/execution-and-defense.md): the
 // advertised cost of reaching Peer over this node's live connection. RTTms
 // is milliseconds; zero means the link exists but has no sample yet.
 type LinkMetric struct {
@@ -589,7 +589,7 @@ func PeerProvenance(db *sql.DB, nodeID string) string {
 }
 
 // UpdateAdjacency refreshes a node's advertised edge set, measured link
-// weights (§4.1) and contact plan (§8.4) without touching the rest of its
+// weights (docs/design/execution-and-defense.md) and contact plan (docs/design/execution-and-defense.md) without touching the rest of its
 // row — the gossip channel heartbeats drive between full card updates.
 // Empty inputs leave that column alone, so a sender that only publishes one
 // side does not blank the others.
@@ -1411,7 +1411,7 @@ type Node struct {
 	// live connections to — learned from its capability summary and stored in
 	// neighbors_json. It is the edge set E of the mesh routing graph.
 	Neighbors []string `json:"neighbors,omitempty"`
-	// LinkMetrics is the edge weight table for the same adjacency (§4.1):
+	// LinkMetrics is the edge weight table for the same adjacency (docs/design/execution-and-defense.md):
 	// peer id → RTT in milliseconds, decoded from links_json. A neighbor
 	// with no entry costs the unknown-link default in weighted routing.
 	LinkMetrics map[string]int64 `json:"link_metrics,omitempty"`
@@ -1429,7 +1429,7 @@ type Node struct {
 	// (scheduler.ContactNextHop) treats them as edges that open at a known
 	// time, alongside the always-on live adjacency above.
 	Contacts []Contact `json:"contacts,omitempty"`
-	// Projects is the advertised residence set (§6.3), decoded from
+	// Projects is the advertised residence set (docs/design/execution-and-defense.md), decoded from
 	// projects_json: the names of the projects this node holds a checkout of.
 	// A project-bound task scores a resident node higher — the tree does not
 	// have to cross the wire when the work lands where the code lives.

@@ -9,8 +9,8 @@ import (
 	"strings"
 )
 
-// Scope is the set of paths a task is allowed to touch (design doc §15.3 check
-// ① and §14.2 signal A). Roots are declared relative to the task's working
+// Scope is the set of paths a task is allowed to touch (docs/design/execution-and-defense.md check
+// ① and docs/design/execution-and-defense.md signal A). Roots are declared relative to the task's working
 // directory and are separated by commas, semicolons, or newlines in the
 // entry-model spec (e.g. "src/components/Navbar.vue" or "src/components, src/styles").
 // An empty scope declares no restriction.
@@ -98,7 +98,7 @@ func hasCJK(s string) bool {
 func (s *Scope) Empty() bool { return s == nil || len(s.roots) == 0 }
 
 // Roots returns the declared scope roots — the path set peer negotiation
-// (whitepaper §5.1) locks against.
+// (docs/design/execution-and-defense.md) locks against.
 func (s *Scope) Roots() []string {
 	if s == nil {
 		return nil

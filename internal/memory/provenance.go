@@ -3,7 +3,7 @@
 package memory
 
 // Source records where a memory candidate came from (OpenClaw provenance,
-// design §17.3). A Trusted source is the agent's own daily log; untrusted or
+// docs/memory-lifecycle.md). A Trusted source is the agent's own daily log; untrusted or
 // system sources are excluded from promotion by the provenance gate.
 type Source struct {
 	Path    string // daily log filename, e.g. "2026-08-13.md"

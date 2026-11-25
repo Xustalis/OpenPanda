@@ -75,7 +75,7 @@ func TestRendezvousManualModeClears(t *testing.T) {
 	}
 }
 
-// TestRelayPolicyDefaults pins the design's §4.2 defaults: we serve mesh and
+// TestRelayPolicyDefaults pins the design's docs/protocol.md defaults: we serve mesh and
 // guarded members, open peers are not served, and we route our own frames
 // only through mesh relays.
 func TestRelayPolicyDefaults(t *testing.T) {

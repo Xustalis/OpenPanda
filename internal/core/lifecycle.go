@@ -134,7 +134,7 @@ func (c *Core) RunMonitor(ctx context.Context) {
 			if c.dialCheckDue() {
 				c.runDialCheck(ctx)
 			}
-			// §4.1: RTT samples land after the connect-time refresh, so the
+			// docs/design/routing-and-scheduling.md: RTT samples land after the connect-time refresh, so the
 			// self row's link metrics need the periodic re-publish the tick
 			// provides; and any outbox entry whose peer reconnected between
 			// hellos is flushed here rather than waiting on a greeting.
@@ -235,7 +235,7 @@ func (c *Core) taskSweeps(ctx context.Context) {
 	// queue (or to a verdict) touches. Requeue the submits/claims, fail the
 	// leaseless executions, all past the grace window.
 	c.sweepStrandedWork(ctx)
-	// §8.3: a parked push-waiter's inputs can also land via the pull
+	// docs/design/routing-and-scheduling.md: a parked push-waiter's inputs can also land via the pull
 	// path or a fat-bundle import — neither calls the wake directly —
 	// and a staging dir whose sender died needs periodic reclamation.
 	c.wakeSatisfiedArtifactWaiters(ctx)

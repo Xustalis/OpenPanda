@@ -21,7 +21,7 @@ const MaxHelloAge = 5 * time.Minute
 // HelloSig computes the HMAC-SHA256 (hex) of nodeID and a unix timestamp under
 // the shared secret. Binding the timestamp into the signature means a captured
 // hello is only valid within the receiver's tolerance window, so it cannot be
-// replayed after that window (design §16 / P0-1).
+// replayed after that window (docs/protocol.md).
 //
 // HelloSigLegacy computes the pre-nonce hello HMAC under a name that is not
 // deprecated. Recognising a hello minted by a peer that predates the nonce

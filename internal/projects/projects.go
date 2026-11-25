@@ -18,7 +18,7 @@
 // RAM would be forgotten between two consecutive commands.
 //
 // The project's *memory* stays where it was, in internal/memory.Projects — this
-// package deliberately does not own it. The isolation wall (design §17.2) is
+// package deliberately does not own it. The isolation wall (docs/memory-lifecycle.md) is
 // structural, and moving project memory behind a store that also knows about
 // work directories and active state would be the first crack in it.
 package projects

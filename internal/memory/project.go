@@ -15,7 +15,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/util"
 )
 
-// Projects manages per-project memory files (design §17.2). Each project's
+// Projects manages per-project memory files (docs/memory-lifecycle.md). Each project's
 // memory lives at projects/{name}/MEMORY.md in the same §-separated format as
 // Hermes, and is injected only into that project's agent context — never into
 // Hermes.

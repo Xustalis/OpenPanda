@@ -99,7 +99,7 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 	}
 
 	// A bundle that outlived its TTL in transit must not start executing
-	// (§8.2): the deadline is the mesh-wide bound every hop shares, and
+	// (docs/protocol.md): the deadline is the mesh-wide bound every hop shares, and
 	// declining lets the delegator's own deadline sweep close its copy too.
 	if p.DeadlineUnix > 0 && time.Now().Unix() > p.DeadlineUnix {
 		c.logger.Warn("task_delegate arrived past deadline", "task", p.TaskID,
@@ -110,7 +110,7 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 		return
 	}
 
-	// §6.1 token budget: a task that arrives with its quota already spent is
+	// docs/design/routing-and-scheduling.md token budget: a task that arrives with its quota already spent is
 	// declined before any local resource goes to it. The budget is mesh-wide
 	// — accepting an exhausted one here would launder the bound into a fresh
 	// local quota.
@@ -215,7 +215,7 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 	if err := c.store.AdoptAttempt(ctx, t.TaskID, t.AttemptID, p.AttemptID); err != nil {
 		c.logger.Warn("adopt attempt", "task", t.TaskID, "err", err)
 	}
-	// Resume hint (§5.2): the delegator only sends ResumeSessionID when it
+	// Resume hint (docs/design/routing-and-scheduling.md): the delegator only sends ResumeSessionID when it
 	// believes this node minted the session — adopt it so the run loop picks
 	// the conversation back up. A wrong hint costs one cold start, nothing
 	// more; it names no capability and grants no privilege.
@@ -292,7 +292,7 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 		// Dropping the task costs both.
 		c.logger.Error("set task detail failed", "task", t.TaskID, "err", err)
 	}
-	// Adopt the mesh budget the payload carries (§6.1): the row's remaining
+	// Adopt the mesh budget the payload carries (docs/design/routing-and-scheduling.md): the row's remaining
 	// delegation quota must reflect what the wire declared, or this node —
 	// and every restart after it — would spend budget the mesh already used.
 	// A nil budget marks a pre-budget peer: seed the default rather than
@@ -304,7 +304,7 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 	if err := c.store.SetDelegationBudget(ctx, t.TaskID, budget); err != nil {
 		c.logger.Warn("adopt delegation budget", "task", t.TaskID, "err", err)
 	}
-	// The spawn generation travels the wire too (§6.1 Depth): without it a
+	// The spawn generation travels the wire too (Depth; see docs/design/routing-and-scheduling.md): without it a
 	// child delegated here would mint a fresh depth-0 view of a subtree
 	// already near the cap, and this node's SpawnChildTask check would
 	// approve grandchildren the origin's limit forbids.
@@ -313,7 +313,7 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 			c.logger.Warn("adopt spawn depth", "task", t.TaskID, "err", err)
 		}
 	}
-	// The depth bound travels with the generation (§6.1): the payload
+	// The depth bound travels with the generation (docs/design/routing-and-scheduling.md): the payload
 	// advertises the tightest cap any hop enforced, and this node clamps it
 	// against its own delegation.max_depth — never looser. The result lands
 	// on the row so SpawnChildTask enforces min(local, inherited) for every
@@ -354,7 +354,7 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 			}
 		}
 	}
-	// Same adoption for the token quota (§6.1): zero is the legacy/unbounded
+	// Same adoption for the token quota (docs/design/routing-and-scheduling.md): zero is the legacy/unbounded
 	// default the column already carries, so only a declared remainder needs
 	// persisting — and a negative wire value never reaches here (declined
 	// above).
@@ -384,7 +384,7 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 			c.logger.Error("set project inputs failed", "task", t.TaskID, "err", err)
 		}
 	}
-	// Import any bundled artifacts carried in Fat Bundle (whitepaper §8.3)
+	// Import any bundled artifacts carried in Fat Bundle (docs/protocol.md)
 	if len(p.BundledArtifacts) > 0 && c.artifacts != nil {
 		if _, err := c.ImportFatBundleArtifacts(ctx, p.BundledArtifacts); err != nil {
 			c.logger.Warn("import bundled artifacts", "task", t.TaskID, "err", err)
@@ -513,11 +513,11 @@ func (c *Core) landProjectPackForTask(ctx context.Context, taskID, project strin
 }
 
 // handleLocalDelegate runs a task this node can execute, resolving its context
-// first (design doc §12.4). A pointer hit executes immediately (zero transfer);
+// first (docs/design/execution-and-defense.md). A pointer hit executes immediately (zero transfer);
 // a pointer miss parks the task in waiting_context and fetches the snapshot
 // from the source node; summary and inline-full need no fetch.
 //
-// Capacity-driven accept/decline (DCPS τ_adp mapping, design §2.4): a node
+// Capacity-driven accept/decline (DCPS τ_adp mapping; see docs/design/routing-and-scheduling.md): a node
 // whose execution slots are full declines instead of silently queueing, so the
 // delegator learns immediately and can re-route to a peer with free capacity.
 func (c *Core) handleLocalDelegate(ctx context.Context, env bus.Envelope, taskID string, p bus.TaskDelegatePayload, required []string, chain []string) {
@@ -697,7 +697,7 @@ func (c *Core) proceedLocalDelegate(ctx context.Context, env bus.Envelope, taskI
 		}
 	}
 
-	// §8.3 fat-push: a dtn task's payload may still be on the wire behind the
+	// docs/protocol.md fat-push: a dtn task's payload may still be on the wire behind the
 	// delegate. Failing now — the old outcome — would defeat the push; the
 	// task parks in waiting_context until every missing input verifies or the
 	// bundle's own deadline expires. Live-transport tasks keep the pull path
@@ -836,7 +836,7 @@ func (c *Core) proceedLocalDelegate(ctx context.Context, env bus.Envelope, taskI
 }
 
 // reserveCapacity claims one execution slot for an incoming delegated task
-// (DCPS capacity-driven accept/decline, design §2.4): true unless the
+// (DCPS capacity-driven accept/decline; see docs/design/routing-and-scheduling.md): true unless the
 // capability card declares a MaxConcurrent limit and the active-task count —
 // plus the reservations already handed out — has reached it. A node with no
 // declared limit always accepts (unknown capacity is not a limit); a
@@ -1028,11 +1028,11 @@ func (c *Core) forwardDelegated(ctx context.Context, taskID, target string, p bu
 }
 
 // defaultDTNTTL bounds how long a parked DTN task stays deliverable when the
-// task itself declares no deadline (§8.2). Store-and-forward is measured in
+// task itself declares no deadline (docs/protocol.md). Store-and-forward is measured in
 // hours, not lease seconds.
 const defaultDTNTTL = 24 * time.Hour
 
-// delegationBudget resolves the remaining §6.1 forward budget for taskID and
+// delegationBudget resolves the remaining docs/design/routing-and-scheduling.md forward budget for taskID and
 // spends one hop, returning what the wire should carry. The persisted row is
 // authoritative — a received task's row was seeded from the wire on arrival —
 // with the caller's payload as fallback for a row that has no record yet. An
@@ -1064,7 +1064,7 @@ func derefBudget(p *int) int {
 	return *p
 }
 
-// tokenBudgetWire resolves the §6.1 token quota the wire should carry for
+// tokenBudgetWire resolves the docs/design/routing-and-scheduling.md token quota the wire should carry for
 // taskID. The persisted row is authoritative — local execution spend has
 // already been deducted from it — so a stored non-zero value replaces the
 // payload's. An exhausted row (-1) refuses the hop outright: forwarding it
@@ -1095,7 +1095,7 @@ func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p b
 	if !c.clampForPeer(target, &p) {
 		return fmt.Errorf("peer %s trust ceiling refuses the task's needs (%s)", target, bus.DeclineCodeTrustCeiling)
 	}
-	// §6.1 mesh budget: every forward hop spends one delegation, on the wire
+	// docs/design/routing-and-scheduling.md mesh budget: every forward hop spends one delegation, on the wire
 	// and in the row, so the mesh-wide bound survives restarts and relays.
 	remaining, err := c.delegationBudget(ctx, taskID, derefBudget(p.DelegationBudget))
 	if err != nil {
@@ -1137,7 +1137,7 @@ func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p b
 	// Stamp a lease on the local copy so a dead executor is detected and the
 	// failure propagated, instead of leaving this copy dispatched forever (D3).
 	// The timeout is carried on the wire so every hop inherits the same
-	// deadline. A DTN task is exempt (§8.2): a store-and-forward path has no
+	// deadline. A DTN task is exempt (docs/protocol.md): a store-and-forward path has no
 	// heartbeat to renew against, so the absolute DeadlineUnix is its bound.
 	// A pinned task about to be parked is exempt for the same reason.
 	timeoutMS := p.TimeoutMS
@@ -1158,7 +1158,7 @@ func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p b
 	}
 	if dtn || park {
 		// A DTN or to-be-parked copy holds no lease; its bound is the
-		// absolute deadline (§8.2). Stamping it also marks the dispatched,
+		// absolute deadline (docs/protocol.md). Stamping it also marks the dispatched,
 		// lease-less row as in-flight custody, so the stale-claim sweep does
 		// not requeue a delegation that is merely riding store-and-forward.
 		if derr := c.store.SetDeadlineIfUnset(ctx, taskID, pushDeadline); derr != nil {

@@ -623,7 +623,7 @@ func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt, workDi
 			}
 			note := progressNote(loc, p)
 			// Advance the phase chain so the status line's trailing meta shows
-			// classify → routing → executing (P0 redesign §D3 parity with the
+			// classify → routing → executing (docs/design/routing-and-scheduling.md parity with the
 			// web DecisionOrbit). Tools run inside exec; planning/task creation
 			// is classified as routing work because the scheduler has to pick
 			// a node at that boundary.

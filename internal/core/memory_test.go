@@ -94,7 +94,7 @@ func TestAgentPromptCarriesOnlyProjectMemoryManifest(t *testing.T) {
 
 // TestWithSkills verifies progressive skill loading at the core layer: a
 // matched active skill's body is prepended to the intent, and project-scoped
-// skills never leak into a different project (design §8.5).
+// skills never leak into a different project (docs/memory-lifecycle.md).
 func TestWithSkills(t *testing.T) {
 	store := skills.NewStore(t.TempDir())
 	global := &skills.Skill{Name: "deploy-panda", Description: "Deploy to Orange Pi", Scope: skills.ScopeGlobal, Status: skills.StatusActive, Body: "run deploy.sh"}

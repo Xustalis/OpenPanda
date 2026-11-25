@@ -14,7 +14,7 @@ import (
 )
 
 // Deep-phase thresholds, matching OpenClaw's documented defaults (design
-// §17.3): a candidate must clear minScore, minRecallCount and minUniqueQueries
+// docs/memory-lifecycle.md): a candidate must clear minScore, minRecallCount and minUniqueQueries
 // before it is eligible for promotion.
 const (
 	defaultMinScore   = 0.8
@@ -52,7 +52,7 @@ type Candidate struct {
 	Score   float64 // filled during Deep
 }
 
-// Dreamer runs the three-phase memory consolidation (design §17.3), aligned
+// Dreamer runs the three-phase memory consolidation (docs/memory-lifecycle.md), aligned
 // with OpenClaw: Light dedupes daily-log lines into candidates, REM groups them
 // into themes, and Deep scores them on six signals and promotes the ones that
 // clear the threshold + provenance gates into MEMORY.md. Profile facts go to USER.md and reusable environment knowledge to MEMORY.md.

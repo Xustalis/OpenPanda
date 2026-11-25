@@ -18,7 +18,7 @@ import (
 )
 
 // runSkill implements `panda skill list|approve|reject|import|hub|install|add` —
-// management of procedural workflows (design §8.2, §8.3): auto-generated skills,
+// management of procedural workflows (docs/design/execution-and-defense.md): auto-generated skills,
 // local and remote imported skills, and curated/community Skills Hub packages.
 func runSkill(args []string) {
 	// --config is a global flag: extractGlobalFlags already lifted it into

@@ -284,7 +284,7 @@ func (m *Manager) fetchAndExtract(job *downloadJob, dir string) (string, error) 
 }
 
 // StageLocal stages a locally built release tree for the same Apply path a
-// downloaded release takes — the self-evolution seam (design §2.2). root must
+// downloaded release takes — the self-evolution seam (docs/design/self-evolution.md). root must
 // already hold the release layout ({root}/bin/panda plus the optional
 // adapters/ and extensions/voice/ resource dirs the apply step syncs). The
 // tree is COPIED into a Manager-owned staging dir, because Apply and Cancel

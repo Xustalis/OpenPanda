@@ -9,7 +9,7 @@ import (
 )
 
 // networkPolicy is the resolved cross-network half of network.* — the knobs
-// the mesh design (§4.2) promises are the operator's to turn, rather than
+// the mesh design (docs/protocol.md) promises are the operator's to turn, rather than
 // constants compiled into the transport. The zero value is not a valid
 // policy: defaultNetworkPolicy is what an unconfigured node runs.
 type networkPolicy struct {

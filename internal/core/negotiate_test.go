@@ -178,7 +178,7 @@ func TestAgentYieldOnlyFromArbitrator(t *testing.T) {
 	}
 
 	// The recorded arbitrator's yield is honored: lock dropped, task
-	// interrupted — the preemption semantics §5.2 promises.
+	// interrupted — the preemption semantics docs/design/routing-and-scheduling.md promises.
 	yield("arbiter-b")
 	if !cancelled {
 		t.Fatal("the arbitrator's yield did not interrupt the task")

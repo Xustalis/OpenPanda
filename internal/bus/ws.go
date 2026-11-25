@@ -47,7 +47,7 @@ func KeepaliveTimeout() time.Duration { return pongWait }
 // hello before the server drops it. This bounds slow-/never-handshake DoS.
 const defaultHelloTimeout = 10 * time.Second
 
-// QoS lanes (whitepaper §5.3): control beats signal beats data beats bulk.
+// QoS lanes (docs/protocol.md): control beats signal beats data beats bulk.
 // The lanes exist so a task_cancel or a negotiation yield jumps ahead of the
 // artifact stream that would otherwise hold the write slot — the mesh's
 // "control plane can always speak" guarantee.
@@ -125,7 +125,7 @@ type Conn struct {
 	localNonce  string
 	remoteNonce string
 	dialAddr    string
-	// rttNanos is the last measured ping/pong round trip (§4.1 link metric):
+	// rttNanos is the last measured ping/pong round trip (link metric; see docs/protocol.md):
 	// nanoseconds, zero until the first pong answers a timestamped ping.
 	rttNanos atomic.Int64
 	pingMu   sync.Mutex
@@ -461,7 +461,7 @@ func (c *Conn) enqueueFrame(data []byte, binaryFrame bool, lane int) error {
 }
 
 // Send marshals v to JSON and queues it on its QoS lane — an Envelope's own
-// type picks the lane, so callers get §5.3 priority without any change.
+// type picks the lane, so callers get docs/protocol.md priority without any change.
 func (c *Conn) Send(v any) error {
 	lane := QoSBulk
 	var data []byte
@@ -588,7 +588,7 @@ func (c *Conn) LiveWithin(d time.Duration) bool {
 
 // RTT returns the last measured ping/pong round trip on this link, or 0
 // before the first sample. It is the edge weight the mesh's weighted
-// shortest-path routing consumes (§4.1).
+// shortest-path routing consumes (docs/protocol.md).
 func (c *Conn) RTT() time.Duration {
 	return time.Duration(c.rttNanos.Load())
 }

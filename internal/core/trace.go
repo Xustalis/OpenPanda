@@ -53,7 +53,7 @@ const (
 	// ev/id/parent/name/tool_use_id/text/thinking/content/input/is_error.
 	EvAgentEvent = "agent_event"
 	// EvClarification records an agent parking the task on a PANDA_QUESTION
-	// marker (§4.3): the question and the round it surfaced in.
+	// marker (docs/design/execution-and-defense.md): the question and the round it surfaced in.
 	EvClarification = "clarification"
 	// EvUserMsg records a user message delivered into a task (steer.go) —
 	// mode=queue (next-round context) or mode=inject (leads the next round,

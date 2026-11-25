@@ -1321,7 +1321,7 @@ func (r *repl) cmdTaskAdd(fields []string) {
 	if len(agentList) == 1 {
 		requiresList = append(requiresList, "agent:"+agentList[0])
 	}
-	// --action-spec carries the §7.2 actuator dispatch, same contract as the
+	// --action-spec carries the docs/design/execution-and-defense.md actuator dispatch, same contract as the
 	// CLI flag: parsed into the wire type here so a malformed spec fails in
 	// the REPL, not at the executor.
 	contextType := ""

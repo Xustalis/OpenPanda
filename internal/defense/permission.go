@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Package defense implements the task-loop defense chain (design doc §14) and
-// the permission model (design doc §16). MVP scope is the deterministic layer:
+// Package defense implements the task-loop defense chain (docs/design/execution-and-defense.md) and
+// the permission model (docs/design/execution-and-defense.md). MVP scope is the deterministic layer:
 // command-tier classification and authorization gating. The adversarial model
-// review and upper-layer judgment (§14.2 Layer 2+) are later phases.
+// review and upper-layer judgment (docs/design/execution-and-defense.md) are later phases.
 package defense
 
 import (
@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-// Command tiers (design doc §16). Tier 1 operations are reversible and may be
+// Command tiers (docs/design/execution-and-defense.md). Tier 1 operations are reversible and may be
 // auto-approved; Tier 2 operations are irreversible and require explicit user
 // authorization before execution.
 const (

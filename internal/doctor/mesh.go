@@ -15,7 +15,7 @@ import (
 )
 
 // checkMesh answers the cross-network question a doctor run can answer from
-// the store alone (design §8): does this node have anywhere to rendezvous,
+// the store alone (docs/protocol.md): does this node have anywhere to rendezvous,
 // how much of its directory arrived by gossip, and is anything currently
 // suspended as unpunchable? The live half — the elected edge count, dir
 // gossip lag against each neighbour — needs the daemon's in-memory state and

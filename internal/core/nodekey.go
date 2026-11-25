@@ -19,7 +19,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/security"
 )
 
-// Node identity (design §16, P2-8 follow-up). The shared-secret HMAC proves a
+// Node identity (P2-8 follow-up; see docs/protocol.md). The shared-secret HMAC proves a
 // peer holds the mesh key; it cannot prove WHICH node sent a message or minted
 // a consent. The Ed25519 keypair in this file closes that gap: each node keeps
 // a persistent private key in the settings table, signs its hellos with it,
@@ -35,7 +35,7 @@ import (
 const nodeKeySetting = "node_ed25519_priv"
 
 // nodeXKeySetting is the X25519 half of the dual-key identity (cross-network
-// mesh design §3): the signing key above attests WHO a node is, this
+// mesh docs/protocol.md): the signing key above attests WHO a node is, this
 // agreement key is what transit frames seal TO. Separate key, separate job —
 // a signing key never does ECDH, and this key never signs.
 const nodeXKeySetting = "node_x25519_priv"

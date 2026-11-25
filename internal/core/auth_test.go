@@ -80,7 +80,7 @@ func taskEventsContain(c *Core, ctx context.Context, taskID, substr string) bool
 
 // TestRejectBadHelloSig verifies a hello carrying a bad HMAC is rejected: the
 // peer is not registered, no hello reply is sent, and the one frame the
-// listener owes the dialer is a hello_reject naming the reason (design §16 /
+// listener owes the dialer is a hello_reject naming the reason (docs/protocol.md /
 // P0-1) — without it the dialer saw "connected" then EOF and kept redialing.
 func TestRejectBadHelloSig(t *testing.T) {
 	ctx := context.Background()
@@ -270,7 +270,7 @@ var replayHelloTS = time.Now().Unix()
 
 // TestRejectSpoofedSender verifies that once a connection is authenticated as
 // one node id, a message claiming a different sender is dropped and the
-// connection is closed (design §16 / P0-1 identity binding).
+// connection is closed (identity binding; see docs/protocol.md).
 func TestRejectSpoofedSender(t *testing.T) {
 	ctx := context.Background()
 	worker := newCoreWithNative(t, "worker", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
@@ -322,7 +322,7 @@ func TestRejectSpoofedSender(t *testing.T) {
 // TestDelegatedTier2CannotForgeAuthorization verifies a delegated task cannot
 // escalate to tier-2 authorization: the wire payload no longer carries an
 // authorized flag, so the worker reads it from the DB (default false) and denies
-// the tier-2 command (design §16 / P0-1). The denial parks the task in review
+// the tier-2 command (docs/protocol.md). The denial parks the task in review
 // — the same shape as the local refusal — rather than failing it, so the
 // delegator's user can resolve it by approving the re-run.
 func TestDelegatedTier2CannotForgeAuthorization(t *testing.T) {

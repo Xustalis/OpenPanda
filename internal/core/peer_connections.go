@@ -74,7 +74,7 @@ func (c *Core) handleInbound(ctx context.Context, conn *bus.Conn) {
 			c.logger.Debug("inbound read closed", "err", err)
 			return
 		}
-		// Identity binding (design §16 / P0-1): the hello handshake binds an
+		// Identity binding (docs/design/routing-and-scheduling.md): the hello handshake binds an
 		// authenticated node id to this conn. Before binding, only hello is
 		// accepted; after binding, every message must carry the bound id or the
 		// sender is spoofed and the conn is dropped.
@@ -434,7 +434,7 @@ func (c *Core) ensurePeer(id string, conn *bus.Conn, auth bool) (accepted bool) 
 // of each edge, and its configured contact plan into its own directory row's
 // neighbors_json/links_json/contacts_json: the self-edge of the weighted
 // link-state graph the routing layer's multi-hop and earliest-arrival
-// searches read (§4.1, §8.4, §9.3). Best-effort: a failed write just leaves
+// searches read (docs/design/routing-and-scheduling.md). Best-effort: a failed write just leaves
 // the last advertisement in place.
 func (c *Core) refreshSelfNeighbors(ctx context.Context) {
 	if c.db == nil {

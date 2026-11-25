@@ -25,7 +25,7 @@ import (
 // SetState is the patch-set lifecycle, derived from which directory the set
 // lives in plus an optional marker file: queue/ holds sets awaiting (or mid-)
 // review, archive/ holds terminal sets. A "conflicted" marker inside a queue
-// dir marks a set whose rebase onto a newer base failed (design §7 q3).
+// dir marks a set whose rebase onto a newer base failed (docs/design/self-evolution.md).
 type SetState string
 
 const (
@@ -499,7 +499,7 @@ func (m *Manager) ApplyLocked(ctx context.Context, id string) error {
 	return nil
 }
 
-// RebaseOnto rewrites a queued set onto a new base (design §7 q3): apply onto
+// RebaseOnto rewrites a queued set onto a new base (docs/design/self-evolution.md): apply onto
 // the new base, regenerate the diff, re-mint the manifest with the SAME id
 // and producer signature preserved is impossible — the local node re-signs
 // the rebased set with its own key and notes the origin in the title. This

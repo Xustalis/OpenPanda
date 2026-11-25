@@ -69,7 +69,7 @@ func TestSpawnChildTaskDepthBound(t *testing.T) {
 	}
 }
 
-// The wire's Depth field is the spawn generation (§6.1): a delegated child
+// The wire's Depth field is the spawn generation (docs/design/routing-and-scheduling.md): a delegated child
 // lands on the worker already carrying its depth, so the receiving node's
 // own max_depth check sees the real generation rather than minting a fresh
 // depth-0 subtree. A legacy/zero payload leaves the column default.

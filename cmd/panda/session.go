@@ -799,7 +799,7 @@ func runSessionAsk(args []string) {
 	}
 
 	// Repo sessions run in their worktree, non-repo ones in the project work dir
-	// or shared work path (memory wall §17.2: personal memory never enters a session prompt).
+	// or shared work path (personal memory never enters a session prompt; see docs/memory-lifecycle.md).
 	workDir := sess.Worktree
 	if workDir == "" && sess.Project != "" {
 		pStore, _, _, closeDB := projectStores(*configPath)

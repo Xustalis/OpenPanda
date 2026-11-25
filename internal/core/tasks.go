@@ -157,7 +157,7 @@ func (s *TaskStore) SetOnReview(fn func(Task)) {
 // every task event is appended. It is a best-effort, display-only feed: the
 // callback must not touch the store or block, since it runs synchronously on
 // the recording goroutine. The ask engine uses it to surface live route/exec/
-// judge progress while a synchronous Submit blocks (P0 §1.4).
+// judge progress while a synchronous Submit blocks.
 func (s *TaskStore) SetOnEvent(fn func(taskID, typ string, data any)) {
 	s.onEventMu.Lock()
 	s.onEvent = fn
@@ -570,7 +570,7 @@ func (s *TaskStore) recordEventTx(ctx context.Context, tx *sql.Tx, taskID, typ s
 	// judge — events that do not change state) still moves the row's freshness
 	// stamp. The web panel's change detector fingerprints (id, state, updated_at);
 	// without this bump, tool/route/delegation events never flip the fingerprint
-	// and the console silently misses them until the next state change (P0 §1.5).
+	// and the console silently misses them until the next state change.
 	// A no-op when the caller (applyCAS/applyState) already set updated_at to the
 	// same tick in this transaction.
 	if _, err := tx.ExecContext(ctx,
@@ -1318,7 +1318,7 @@ func (s *TaskStore) RequeueForRetry(ctx context.Context, taskID, owner string, c
 }
 
 // Review transitions a failed task to review, pausing a task that has spent its
-// retry budget for human analysis (design §14.2 "pause → analyze"). A reviewer
+// retry budget for human analysis ("pause → analyze"; see docs/design/routing-and-scheduling.md). A reviewer
 // may later send it back to queued, mark it done, or fail it.
 func (s *TaskStore) Review(ctx context.Context, taskID, owner, reason string) error {
 	return s.ReviewWithDisposition(ctx, taskID, owner, reason, ApprovalNeedsChangedInput)
@@ -1342,7 +1342,7 @@ func (s *TaskStore) ReviewAttempt(ctx context.Context, taskID, owner, attemptID,
 }
 
 // Pause transitions a running task to review, pausing it for human analysis
-// after a deterministic intercept such as scope drift (design §14.2 "拦截 →
+// after a deterministic intercept such as scope drift (docs/design/execution-and-defense.md "拦截 →
 // 暂停 → 分析"). It is the running-state counterpart of Review (which pauses a
 // failed task after its retry budget is spent) and never enters the retry loop,
 // because a deterministic intercept will not improve on retry.
@@ -1475,7 +1475,7 @@ const (
 	// for — must not talk the executor out of its own review.
 	ApprovalAdmissionReview ApprovalDisposition = "admission_review"
 	// ApprovalSelfMerge marks a review row carrying a self-evolution patch-set
-	// merge proposal (design §4.2). Approving it runs the merge pipeline —
+	// merge proposal (docs/design/routing-and-scheduling.md). Approving it runs the merge pipeline —
 	// worktree apply, gate, build, StageLocal, Apply — never agent execution,
 	// so it deliberately does NOT appear in resumesOnApprove: the queue
 	// scheduler must never pick the row up as ordinary work, and a bare
@@ -1937,7 +1937,7 @@ func (s *TaskStore) ClearLease(ctx context.Context, taskID string) error {
 
 // SetDeadlineIfUnset stamps an absolute deadline on a task that has none. The
 // store-and-forward paths use it: a DTN/parked copy holds no lease, so this
-// deadline is its only bound (§8.2) — and it doubles as the marker that tells
+// deadline is its only bound (docs/protocol.md) — and it doubles as the marker that tells
 // RequeueStaleClaims a dispatched, lease-less row is legitimate in-flight
 // custody, not a claim whose process died before the run began. An explicit
 // task deadline is never overwritten.
@@ -1952,7 +1952,7 @@ func (s *TaskStore) SetDeadlineIfUnset(ctx context.Context, taskID string, unix 
 }
 
 // SetAuthorized persists whether the task's tier-2 (irreversible) commands were
-// consented to by the user. It is server-side state (design §16 / P0-1): only
+// consented to by the user. It is server-side state (docs/protocol.md): only
 // the local entry path sets it, and a delegated task cannot forge authorization
 // on the wire because the wire payload no longer carries it.
 func (s *TaskStore) SetAuthorized(ctx context.Context, taskID string, authorized bool) error {
@@ -1979,7 +1979,7 @@ func (s *TaskStore) SetAuthorizedGrant(ctx context.Context, taskID, sig, pub str
 	return nil
 }
 
-// SetDetail persists the entry-model-derived task metadata (design doc §6.1
+// SetDetail persists the entry-model-derived task metadata (docs/design/routing-and-scheduling.md
 // tasks schema): context type, intent, spec, complexity, risk, and resource
 // profile. Called once after creation; the fields default to zero/empty until
 // then. A zero TaskDetail clears the fields.
@@ -2001,7 +2001,7 @@ func (s *TaskStore) SetDetail(ctx context.Context, taskID string, d TaskDetail) 
 	return nil
 }
 
-// SetSpawnDepth persists the task's sub-agent generation (§6.1 Depth on the
+// SetSpawnDepth persists the task's sub-agent generation (docs/design/routing-and-scheduling.md Depth on the
 // wire). Stamped at spawn on the parent side and adopted from the payload on
 // a delegate accept — never recomputed from the chain, which records routing
 // hops, not spawn generations.
@@ -2065,7 +2065,7 @@ func (s *TaskStore) SetScopePaths(ctx context.Context, taskID string, paths []st
 }
 
 // SetDelegationBudget persists the remaining mesh-wide delegation budget the
-// task carries (whitepaper §6.1). Stamped on creation — locally at submit,
+// task carries (docs/design/routing-and-scheduling.md). Stamped on creation — locally at submit,
 // remotely when a delegate envelope adopts the payload's budget — so a
 // restarted node cannot re-mint budget the mesh already spent.
 func (s *TaskStore) SetDelegationBudget(ctx context.Context, taskID string, budget int) error {
@@ -2078,7 +2078,7 @@ func (s *TaskStore) SetDelegationBudget(ctx context.Context, taskID string, budg
 }
 
 // SetTokenBudget persists the remaining mesh-wide token quota the task
-// carries (whitepaper §6.1). Stamped on creation — locally at submit when the
+// carries (docs/design/routing-and-scheduling.md). Stamped on creation — locally at submit when the
 // caller declared one, remotely when a delegate envelope adopts the wire's
 // remainder — so a restarted node cannot re-mint quota the mesh already spent.
 func (s *TaskStore) SetTokenBudget(ctx context.Context, taskID string, budget int64) error {
@@ -2124,7 +2124,7 @@ func (s *TaskStore) SpendTokens(ctx context.Context, taskID string, n int64) (in
 
 // CountActive returns the number of this node's tasks currently occupying an
 // execution slot (running or waiting_context). The capacity-driven
-// accept/decline check (DCPS τ_adp mapping, design §2.4) compares it against
+// accept/decline check (DCPS τ_adp mapping; see docs/design/routing-and-scheduling.md) compares it against
 // the card's MaxConcurrent before accepting delegated work.
 func (s *TaskStore) CountActive(ctx context.Context, owner string) (int, error) {
 	var n int
@@ -2291,7 +2291,7 @@ func (s *TaskStore) SetSessionID(ctx context.Context, taskID, sessionID string) 
 }
 
 // SetAgentSessionID persists the adapter conversation handle for the task
-// (§5.2 breakpoint mooring). Written every round as the session evolves and
+// (breakpoint mooring; see docs/design/routing-and-scheduling.md). Written every round as the session evolves and
 // cleared when the run ends, so a task that is interrupted mid-flight
 // resumes its agent session while a finished one never drags a dead handle
 // into a re-run.
@@ -2481,7 +2481,7 @@ type ExpiredRow struct {
 	// downstream cancel carries it so a copy already superseded by a newer
 	// delegation survives the kill order.
 	AttemptID string
-	// Deadline marks an absolute-lifetime expiry (§8.2 DTN bound): those
+	// Deadline marks an absolute-lifetime expiry (DTN bound; see docs/protocol.md): those
 	// settle terminally regardless of retry budget — the bundle outlived
 	// its lifetime and re-running cannot extend it.
 	Deadline bool

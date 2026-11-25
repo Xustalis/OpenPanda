@@ -29,7 +29,7 @@ const sessionFinalizeInterval = 5 * time.Second
 const evSessionSummary = "session_summary"
 
 // startSessionFinalizer runs the summary sweep until ctx ends (queue
-// redesign §5: a finished task solidifies its result as an assistant turn
+// rea finished task solidifies its result as an assistant turn
 // in the linked session). No-op pieces when the sessions store is absent.
 func (h *handler) startSessionFinalizer(ctx context.Context) {
 	if h.sessions == nil || h.store == nil {

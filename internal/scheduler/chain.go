@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Package scheduler implements the P2P per-edge routing decision (design doc
-// §6.4, §2.4 DCPS analogy). It is pure: it inspects the local capability match
+// docs/design/routing-and-scheduling.md, docs/design/routing-and-scheduling.md DCPS analogy). It is pure: it inspects the local capability match
 // and the known peer directory and returns a Decision, leaving all side effects
 // (message sends, state transitions) to the core package.
 package scheduler

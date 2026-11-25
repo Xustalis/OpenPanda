@@ -29,7 +29,7 @@ func ClassKey(abilities []string) string {
 // Generate builds a pending skill from a task class's execution history using a
 // deterministic template, so generation runs without an LLM. The body records
 // what the class does and its observed success; the LLM distillation
-// (design §8.2) can enrich it later. The result is StatusPending — it is not
+// (docs/design/execution-and-defense.md) can enrich it later. The result is StatusPending — it is not
 // loaded until the user approves it.
 func Generate(scope Scope, key, class, description string, records []Record) *Skill {
 	var success, total int

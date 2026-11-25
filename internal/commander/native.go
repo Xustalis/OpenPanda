@@ -2,7 +2,7 @@
 
 // Package commander implements the three-tier capability execution:
 // native (deterministic commands, no model), agent (AI CLI via adapter), and
-// manual (human-notified). Design doc §6.
+// manual (human-notified). docs/design/execution-and-defense.md
 package commander
 
 import (

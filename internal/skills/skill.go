@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Package skills implements the self-evolving procedural-memory layer (design
-// §8): reusable workflows distilled from task history into SKILL.md files.
+// docs/design/execution-and-defense.md): reusable workflows distilled from task history into SKILL.md files.
 // Declarative memory (the memory package) stores facts; skills store procedures
 // ("how to do X, what to avoid, how to verify success").
 //
@@ -9,7 +9,7 @@
 // Markdown body — and the trigger + progressive-loading model follows Hermes
 // Agent (should_create_skill, skill index). A skill is scoped to global /
 // project / device so project-specific workflows never leak into other
-// projects (design §8.3).
+// projects (docs/design/execution-and-defense.md).
 package skills
 
 import (
@@ -25,7 +25,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/util"
 )
 
-// Scope is the visibility tier of a skill (design §8.3).
+// Scope is the visibility tier of a skill (docs/design/execution-and-defense.md).
 type Scope string
 
 const (
@@ -153,7 +153,7 @@ func NewStore(root string) *Store {
 }
 
 // Path returns the on-disk location for a skill, determined by its scope.
-// The directory layout keeps project/device skills segregated (design §8.3).
+// The directory layout keeps project/device skills segregated (docs/design/execution-and-defense.md).
 func (s *Store) Path(sk *Skill) (string, error) {
 	dir, err := scopeDir(sk)
 	if err != nil {

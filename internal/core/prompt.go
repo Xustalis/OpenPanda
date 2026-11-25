@@ -408,7 +408,7 @@ Execution contract:
 
 // buildAgentPrompt assembles the full agent execution prompt — the memory
 // file manifest (A3 selective loading) plus the task intent plus any matched
-// skills (design §8.5) — and returns the skills that were actually loaded, so
+// skills (docs/design/execution-and-defense.md) — and returns the skills that were actually loaded, so
 // the caller can record their use. Skill matching keys off the short title,
 // not the full intent, so a long instruction does not over-match on common
 // words. The assembly stays under promptBudget (agentPromptBudget when it is
@@ -492,10 +492,10 @@ func buildAgentPromptWithEnvironment(c *Core, intent, project, title, workDir st
 	// the agent's exploration. Execution details stay in the task's event
 	// stream (panda task <id>) for anyone who wants the full trail.
 	prompt += rider
-	// The §4.2 delegation-protocol hint is appended by the run loop instead:
+	// The docs/design/execution-and-defense.md delegation-protocol hint is appended by the run loop instead:
 	// only a task with spawn budget left (delegation.max_depth) may learn
 	// the marker format, which this builder cannot see.
-	// §4.3 clarification protocol hint: headless execution cannot prompt
+	// docs/design/execution-and-defense.md clarification protocol hint: headless execution cannot prompt
 	// mid-run, so a blocked agent ends its turn with the marker the run
 	// loop parks on. Same rider placement — every agent round.
 	prompt += questionHint
@@ -591,7 +591,7 @@ func nodeDeviceKeys(c *Core) []string {
 const skillIntentSample = 512
 
 // withSkills prepends matched active skills to the intent via the lightweight
-// index (design §8.5 progressive loading): only a matched skill's full body is
+// index (docs/design/execution-and-defense.md): only a matched skill's full body is
 // loaded, never the whole bank. Global, project and device skills are ranked
 // together in one pass, and a bounded slice of the intent supplements the
 // short title so Chinese titles can reach curated bilingual triggers. budget
@@ -738,7 +738,7 @@ func recordSkillUse(c *Core, used []*skills.Skill, ok bool) {
 }
 
 // trackTask feeds the skill tracker with one task outcome, so a recurring task
-// class can eventually clear the quality gate and generate a skill (design §8.2).
+// class can eventually clear the quality gate and generate a skill (docs/design/execution-and-defense.md).
 func trackTask(c *Core, project string, required []string, title string, ok bool) {
 	if c.tracker == nil {
 		return

@@ -770,7 +770,7 @@ func (c *Core) claimForRun(ctx context.Context, taskID, intent string, plan *com
 			c.logger.Warn("queue: reclaim claimed task", "task", taskID, "err", rerr)
 		}
 	}
-	// §7.2: an actuator plan's argv is a template — fill {intent}/{action}/
+	// docs/design/execution-and-defense.md: an actuator plan's argv is a template — fill {intent}/{action}/
 	// {param:<name>} from the task's action_spec before anything runs. A
 	// substitution failure means the spec and the card disagree, which no
 	// retry fixes: fail at the gate, not inside the driver.
@@ -1072,7 +1072,7 @@ func (c *Core) prepareRunDir(execCtx, ctx context.Context, task Task, taskID str
 		return runPrep{}, fmt.Errorf("resume execution workspace locks: %w", err)
 	}
 
-	// §5.2 shadow resume: a task preempted mid-edit parked its scoped files
+	// docs/design/routing-and-scheduling.md shadow resume: a task preempted mid-edit parked its scoped files
 	// before the cancel landed (negoInterruptLocal). Merging happens before
 	// the drift snapshot so restored paths count as pre-existing state, not
 	// agent writes — and before anything runs, so the agent resumes on top
@@ -1103,7 +1103,7 @@ func (c *Core) prepareRunDir(execCtx, ctx context.Context, task Task, taskID str
 			fmt.Sprintf("restored %d preempted git files; %d contested", len(gitRestored), len(gitConflicts)))
 	}
 
-	// §6.2 monotonic-progress bookkeeping: the oscillation window is keyed by
+	// docs/design/routing-and-scheduling.md monotonic-progress bookkeeping: the oscillation window is keyed by
 	// the project or plan whose tree this task works on — the unit a mesh of
 	// agents "revisits". Anonymous tasks get a private per-task dir, so no
 	// shared tree exists to track oscillation across; they are exempt.
@@ -1112,13 +1112,13 @@ func (c *Core) prepareRunDir(execCtx, ctx context.Context, task Task, taskID str
 		oscKey = task.PlanID
 	}
 
-	// Scope drift (design §14.2 signal A): for an agent task that declares a
+	// Scope drift (docs/design/execution-and-defense.md): for an agent task that declares a
 	// scope, snapshot the working directory before execution so changes outside
 	// the scope can be intercepted rather than silently committed. The snapshot
 	// is taken once and reused across supervision rounds.
 	scope := defense.NewScope(taskScope(task.SpecJSON))
 	if plan.Kind == "agent" && !scope.Empty() {
-		// §5.1 conflict negotiation: before the agent touches the declared
+		// docs/design/routing-and-scheduling.md conflict negotiation: before the agent touches the declared
 		// scope, arbitrate it against every peer's lock table. A denial fails
 		// the run and the retry loop re-negotiates later — the mesh's "wait".
 		if err := c.negotiateTaskScope(execCtx, task, scope, plan.Agent); err != nil {
@@ -1553,7 +1553,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 	// keeps its reasoning trail; multi-round supervision stops paying the
 	// full re-orientation cost every round). Adapters without session
 	// support leave it empty and every round starts fresh, as before.
-	// The session id is also the task's resume checkpoint (§5.2): the row
+	// The session id is also the task's resume checkpoint (docs/design/routing-and-scheduling.md): the row
 	// carries the last round's handle, so a run that comes back after a
 	// yield/restart/redelegation continues the same agent conversation rather
 	// than cold-starting on the shadow copy. The shadow path still runs —
@@ -1587,7 +1587,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 	var filesTruncated bool
 	verdict := entry.SuperviseVerdict{Status: entry.VerdictDone}
 	// delegations bounds how many PANDA_DELEGATE promotions one task may make
-	// (§4.2): the configured delegation.max_children, with the schema's
+	// (docs/design/routing-and-scheduling.md): the configured delegation.max_children, with the schema's
 	// maxItems as the protocol ceiling. Each promotion re-runs the round
 	// with the child's result folded into the intent, so the counter — not
 	// the judge budget — is the guard against a marker-happy agent; the
@@ -1665,7 +1665,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// never saw: re-read the rows so a mid-run child enters the pending
 		// set and later rounds fold its result like any other delegate's.
 		c.mergeLiveChildren(execCtx, taskID, &pendingChildren)
-		// §6.1 token budget: a task whose quota is already spent — by an
+		// docs/design/routing-and-scheduling.md token budget: a task whose quota is already spent — by an
 		// earlier round's judge charge, or before it ever reached this
 		// executor — must not run another metered round. The check reads the
 		// persisted row because the task snapshot predates any spend, and it
@@ -1694,7 +1694,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 			}}, nil
 		}
-		// §6.2 monotonic progress: hashing the work tree at each round's head
+		// docs/design/routing-and-scheduling.md monotonic progress: hashing the work tree at each round's head
 		// means a later round that regresses to a state an earlier round (or
 		// an earlier task on this project) already produced is caught before
 		// more tokens are spent — agent B silently undoing agent A's fix can
@@ -1783,7 +1783,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// skill degrades to its index line.
 		assemblePrompt := func(currentIntent string, promptBudget int) string {
 			var p string
-			// §4.2 Sub-MainAgent protocol hint: only a task with depth budget
+			// docs/design/routing-and-scheduling.md Sub-MainAgent protocol hint: only a task with depth budget
 			// left learns the marker format — a task at delegation.max_depth
 			// gets no rope it cannot use.
 			if canSpawn {
@@ -2037,7 +2037,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			}
 		}
 
-		// §6.1 token budget: the adapter's reported usage is billed against
+		// docs/design/routing-and-scheduling.md token budget: the adapter's reported usage is billed against
 		// the task's mesh-wide quota as soon as the round lands. The spend is
 		// atomic in the row, so this charge and a judge charge cannot both
 		// draw on the same remainder. An exhausted task stops spending — the
@@ -2060,7 +2060,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			return roundOutcome{}, ctx.Err()
 		}
 
-		// §4.2 Sub-MainAgent promotion: an agent that hits a resource it lacks
+		// docs/design/routing-and-scheduling.md Sub-MainAgent promotion: an agent that hits a resource it lacks
 		// (GPU, tool, hardware actuator) may emit PANDA_DELEGATE markers — one
 		// turn can request several children at once, and they dispatch in
 		// parallel rather than serializing round trips. This node — now
@@ -2128,7 +2128,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			}
 		}
 
-		// §4.3 clarification loop: an agent blocked on input only the user
+		// docs/design/execution-and-defense.md clarification loop: an agent blocked on input only the user
 		// has ends its turn with a PANDA_QUESTION line. Parking in review —
 		// not retrying — is what hands the question to the origin: no retry
 		// can produce the answer, and the delegator's task_resume.answer is
@@ -2220,7 +2220,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			if plan.Kind == "agent" {
 				op = plan.Agent
 			}
-			// Design doc §3.1.1: operations: [{op, target, risk}] array.
+			// operations: [{op, target, risk}] array.
 			// If the gate refused we have a raw reason string; translate
 			// target/risk to "unknown" when the defense layer did not
 			// decompose them for us.
@@ -2722,7 +2722,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		}
 		if tokenExhausted {
 			// The metered spend above drained the quota: park what the round
-			// produced rather than paying a judge call on top of it (§6.1).
+			// produced rather than paying a judge call on top of it (docs/design/routing-and-scheduling.md).
 			verdict.Status = entry.VerdictReview
 			verdict.Reason = "token budget exhausted"
 			break
@@ -2902,7 +2902,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			unverified = true
 		}
 	}
-	// §4.2 final fold: a run must not report a verdict while children it
+	// docs/design/routing-and-scheduling.md final fold: a run must not report a verdict while children it
 	// delegated are still outstanding — that is the "declared done while a
 	// sub-task is still running" lie from the orchestrator's side. Hold until
 	// they land (folded into the reported output), park (annotated), or the
@@ -3156,7 +3156,7 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 	if plan.Kind == "agent" && plan.Tier >= defense.TierIrreversible {
 		parked := !task.Authorized
 		// — Trace: the terminal Tier-2 agent outcome. Wire shape matches
-		// design doc §3.1.1: operations: [{op,target,risk}].
+		// operations: [{op,target,risk}].
 		c.EvTrace(context.WithoutCancel(ctx), taskID, EvTier2Triggered, map[string]any{
 			"operations":       []map[string]any{{"op": plan.Agent, "target": "", "risk": "medium"}},
 			"kind":             plan.Kind,

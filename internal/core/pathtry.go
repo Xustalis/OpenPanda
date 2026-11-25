@@ -101,7 +101,7 @@ type pathState struct {
 }
 
 // natStateSetting is the settings key carrying the nat_suspect bookkeeping
-// across restarts (design §6.2's nat_state table, held in the KV store the
+// across restarts (docs/protocol.md nat_state table, held in the KV store the
 // node key already uses). Losing it means re-spraying a symmetric-NAT peer
 // for two full windows after every restart, which is exactly the behaviour
 // the suspect window exists to stop.

@@ -19,7 +19,7 @@ import (
 
 // The entry model otherwise has no clock of its own — it cannot answer "what
 // time is it", "what day is today", or anything date-aware without a tool.
-// time_now gives it the host's current time (design §7.3: the entry model
+// time_now gives it the host's current time (docs/design/execution-and-defense.md: the entry model
 // runs on a host and may read its system clock). Underscored name: the
 // Anthropic tools API restricts names to ^[a-zA-Z0-9_-]+$ and strict
 // providers (DeepSeek /anthropic) 400 on dots.
@@ -122,7 +122,7 @@ type forecastResponse struct {
 	} `json:"daily"`
 }
 
-// registerWeatherTool imports weather.get (design §7.3's example controlled
+// registerWeatherTool imports weather.get (docs/design/execution-and-defense.md example controlled
 // tool) backed by the keyless Open-Meteo API: geocode the location name,
 // then fetch current conditions plus today/tomorrow.
 func registerWeatherTool(reg *entry.Registry) {

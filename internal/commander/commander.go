@@ -316,7 +316,7 @@ type Plan struct {
 	Ability string
 	Command string
 	Args    []string
-	Tier    int // native command tier (defense §16)
+	Tier    int // native command tier (docs/design/execution-and-defense.md)
 	Agent   string
 	Adapter string
 	Notify  string
@@ -328,7 +328,7 @@ type Plan struct {
 	// When availability displaces the top-ranked agent, retain the decision for the task trace.
 	FallbackFrom   string
 	FallbackReason string
-	// ActuatorID is set when the plan resolves to a card actuator (§7.2):
+	// ActuatorID is set when the plan resolves to a card actuator (docs/design/execution-and-defense.md):
 	// the command is that actuator's driver invocation, and the run path
 	// substitutes its {intent}/{action}/{param:<name>} placeholders from the
 	// task's action_spec before execution. Empty for ordinary plans.
@@ -348,7 +348,7 @@ func (r *Router) MatchNative(required []string) (ledger.NativeAbility, bool) {
 }
 
 // MatchActuator finds a card actuator whose id satisfies any of required
-// (§7.1). Actuators live on the card's own list — not in card.Native — so
+// (docs/design/execution-and-defense.md). Actuators live on the card's own list — not in card.Native — so
 // they need their own matcher; the ability namespace is shared, which is
 // what makes a required "hardware:gpio_servo" route here at all.
 func (r *Router) MatchActuator(required []string) (ledger.ActuatorProfile, bool) {
@@ -641,7 +641,7 @@ func (r *Router) MatchManual(required []string) (ledger.ManualAbility, bool) {
 }
 
 // Route picks the best way to execute required capabilities on this node.
-// Priority: native > agent > manual (design doc §6.4) — except an explicit
+// Priority: native > agent > manual (docs/design/execution-and-defense.md) — except an explicit
 // `agent:<name>` pin: a bare native or actuator command can never satisfy a
 // demand for an agent run, so letting MatchNative win on a sibling
 // capability token silently drops the pin. requires ["agent:x","git"] used
@@ -673,7 +673,7 @@ func (r *Router) route(required []string, task TaskRouting) (Plan, error) {
 		}
 		return Plan{Kind: "native", Ability: ab.ID, Command: ab.Command, Args: ab.Args, Tier: tier}, nil
 	}
-	// §7.1/§7.2: an actuator with a declared driver command executes through
+	// docs/design/execution-and-defense.md: an actuator with a declared driver command executes through
 	// the same native path — its args are ActionSpec templates the run path
 	// substitutes before exec. One without a command stays a routing
 	// advertisement only and falls through to the agent tier, which scripts

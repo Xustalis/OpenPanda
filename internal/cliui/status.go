@@ -64,7 +64,7 @@ type Status struct {
 	stop    chan struct{}
 	done    chan struct{}
 
-	// phase chain (P0 redesign §4). Phase records are kept ordered; the
+	// phase chain. Phase records are kept ordered; the
 	// current phase also duplicates into .note so it still surfaces on a
 	// repaint even when we haven't reworked the render chrome yet.
 	phases       []PhaseRecord
@@ -185,7 +185,7 @@ func (s *Status) Hint(h string) {
 //
 // Completes any previously in-flight phase and prints a lightweight progress
 // summary to .note ("classify → route → executing"), which keeps the full
-// render chrome untouched (§D3 render is still handled by the front-end
+// render chrome untouched (render is still handled by the front-end
 // DecisionOrbit component; CLI here only gives at-a-glance parity).
 func (s *Status) Phase(name, label string) {
 	s.mu.Lock()

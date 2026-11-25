@@ -13,9 +13,9 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/defense"
 )
 
-// negotiate.go implements the substance behind the §5 peer-negotiation wire
-// protocol: a scope lock table with weight arbitration (§5.1/§5.2) and the
-// §6.3 distributed wait-for graph whose cycles are broken by preempting the
+// negotiate.go implements the substance behind the docs/design/routing-and-scheduling.md peer-negotiation wire
+// protocol: a scope lock table with weight arbitration (docs/design/routing-and-scheduling.md) and the
+// docs/design/routing-and-scheduling.md distributed wait-for graph whose cycles are broken by preempting the
 // weakest holder.
 //
 // Model: each node keeps a table of scope locks keyed by repo|file|symbol.
@@ -83,10 +83,10 @@ type negoDecision struct {
 }
 
 // negoDecide arbitrates one request against the lock table, applying the
-// §5.2 three-strategy rule in the only order that converges: uncontended →
+// docs/design/routing-and-scheduling.md three-strategy rule in the only order that converges: uncontended →
 // grant; same principal → renew; strictly higher weight → preempt and yield;
 // otherwise deny and record the wait-for edge — breaking the edge cycle, when
-// one forms, by yielding the weakest holder in it (§6.3).
+// one forms, by yielding the weakest holder in it (docs/design/routing-and-scheduling.md).
 func (c *Core) negoDecide(now time.Time, p bus.AgentNegotiatePayload, holderTask string) negoDecision {
 	key := negoScopeKey(p.TargetScope)
 	requester := negoHolder(p.FromNode, p.FromAgent)
@@ -125,7 +125,7 @@ func (c *Core) negoDecide(now time.Time, p bus.AgentNegotiatePayload, holderTask
 		l.holder, l.weight, l.expiresAt, l.holderTask = requester, p.Weight, now.Add(negoLease), holderTask
 		return negoDecision{granted: true, leaseMS: int64(negoLease / time.Millisecond), preempted: preempted}
 	}
-	// Denied: wait-for edge requester -> holder (§6.3).
+	// Denied: wait-for edge requester -> holder (docs/design/routing-and-scheduling.md).
 	if c.negoWait[requester] == nil {
 		c.negoWait[requester] = make(map[string]bool)
 	}
@@ -289,7 +289,7 @@ func (c *Core) negoYieldTo(ctx context.Context, holder string, scope bus.TargetS
 	_ = c.sendTo(node, env) // best-effort: the lease expiry frees the lock anyway
 }
 
-// negoInterruptLocal parks the local task holding a lock for scope. §5.2:
+// negoInterruptLocal parks the local task holding a lock for scope. docs/design/routing-and-scheduling.md:
 // before the cancel lands, the task's scoped files are copied into a shadow
 // work copy (defense.SaveShadow) so its interrupted edits survive the
 // preemption — the next run merges them back instead of restarting the work
@@ -356,7 +356,7 @@ func (c *Core) taskWorkDir(t Task) string {
 }
 
 // shadowForYield snapshots the preempted task's scoped files into its shadow
-// dir (§5.2). The copy races the still-unwinding agent by a hair — cancel
+// dir (docs/design/routing-and-scheduling.md). The copy races the still-unwinding agent by a hair — cancel
 // lands after it, not before — which is the right ordering: whatever the
 // agent wrote before the interrupt is captured, torn lines and all, and the
 // resumed run's conflict note tells it to re-verify contested files. A
@@ -389,7 +389,7 @@ func (c *Core) shadowForYield(ctx context.Context, taskID string) {
 	})
 }
 
-// negotiateTaskScope runs §5.1 arbitration for every declared scope root —
+// negotiateTaskScope runs docs/design/routing-and-scheduling.md arbitration for every declared scope root —
 // locally, then with each live peer — and returns the first denial. A denial
 // fails the run so the normal retry/backoff loop retries later, which is the
 // honest "wait" semantic: the holder's lease expires or its yield lands, and
@@ -450,7 +450,7 @@ func (c *Core) livePeerIDs() []string {
 }
 
 // Negotiate sends one scope request to a peer and waits synchronously for its
-// grant/deny verdict — the caller-side half of §5.1 that turns the wire
+// grant/deny verdict — the caller-side half of docs/design/routing-and-scheduling.md that turns the wire
 // messages into an arbitration primitive.
 func (c *Core) Negotiate(ctx context.Context, target string, p bus.AgentNegotiatePayload) (bus.AgentGrantPayload, error) {
 	msgID, err := newUUID()

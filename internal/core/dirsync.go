@@ -19,7 +19,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/version"
 )
 
-// Epidemic directory sync (cross-network mesh design M1/§2).
+// Epidemic directory sync (docs/protocol.md).
 //
 // Every heartbeat carries dir_digest — SHA-256 over the sender's sorted
 // "id:content_hash" stamp table — so two peers holding identical directories
@@ -42,7 +42,7 @@ const (
 	dirPullEvery = 30 * time.Second
 	// dirPullMaxPages caps continuation pulls per sync conversation.
 	dirPullMaxPages = 8
-	// dirRowsPerFrame / dirRowsMaxBytes are the response budgets (§2):
+	// dirRowsPerFrame / dirRowsMaxBytes are the response budgets (docs/protocol.md):
 	// whichever fills first ends the page and sets the resume cursor.
 	dirRowsPerFrame = 256
 	dirRowsMaxBytes = 1 << 20

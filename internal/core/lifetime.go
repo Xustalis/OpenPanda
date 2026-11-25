@@ -56,7 +56,7 @@ func (c *Core) SetTimeouts(t config.TimeoutsConfig) {
 	c.mu.Lock()
 	c.leaseTimeout = lease
 	c.agentByKind = t.AgentByKind
-	// §6.1 quota for locally-created top-level tasks. TokenBudget() resolves
+	// docs/design/routing-and-scheduling.md quota for locally-created top-level tasks. TokenBudget resolves
 	// an explicit disable (-1) to 0 here so createTask's "stamp when >0" test
 	// is the only branch the write path needs.
 	if tb := t.TokenBudget(); tb > 0 {

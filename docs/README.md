@@ -21,6 +21,7 @@ OpenPanda project docs that are intentionally part of the public source tree.
 - [`protocol.md`](protocol.md) — P2P bus protocol distilled from `internal/bus`: WS + sealed-UDP transports, negotiated per-session AEAD and binary data frames, message envelope, hello/heartbeat/delegation/result/artifact/DTN/punch/pair frames, frame caps, the HMAC-membership + Ed25519-identity hello auth, LAN discovery beacons, trust-zone clamping, and the mesh-only rule for screen-capture tasks and their output. (中文 · [English](protocol.en.md))
 - [`../SECURITY.md`](../SECURITY.md) — trust model (single shared secret, negotiated session AEAD + gated plaintext fallback, encrypted UDP/DTN planes, mesh-exclusive display content), deployment red lines, and the vulnerability reporting channel. (中文 · [English](../SECURITY.en.md) · [日本語](../SECURITY.ja.md) · [Español](../SECURITY.es.md) · [Deutsch](../SECURITY.de.md))
 - [`windows-sandbox.md`](windows-sandbox.md) — Windows AppContainer task sandbox: temporary ACL grants, toolchain compatibility, strict read-policy refusals, hardlinks, loopback, pinned paths and recovery. (中文 · [English](windows-sandbox.en.md))
+- [`design/`](design/README.md) — public architectural notes distilled from the implementation: routing/scoring/negotiation, entry/commander/defense/skills, and self-evolution.
 
 The repository root also carries the public policy and legal texts (SECURITY,
 CLA, TERMS, COMMERCIAL, CONTRIBUTING, CODE_OF_CONDUCT), the licensing note

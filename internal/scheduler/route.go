@@ -45,7 +45,7 @@ func Route(self string, chain []string, employees []ledger.Node, localMatch func
 }
 
 // RouteP is Route plus the task's project name, which feeds the residence
-// term in the score (§6.3): a node holding a checkout of that project wins a
+// term in the score (docs/design/routing-and-scheduling.md): a node holding a checkout of that project wins a
 // bonus because the tree does not have to cross the wire.
 func RouteP(self string, chain []string, employees []ledger.Node, localMatch func(required []string) bool, required []string, req ledger.ResourceProfile, preferred, project string) Decision {
 	return RouteAtP(self, chain, employees, localMatch, required, req, preferred, project, time.Now().Unix())
@@ -157,7 +157,7 @@ const localBias = 0.15
 //
 // Otherwise the shape is unchanged: a user-named node (preferred) that is online,
 // not already on the chain, and capable is honoured over scored ranking; ranking
-// is the DCPS weighted score (design §6.3: resource_efficiency 0.4 +
+// is the DCPS weighted score (docs/design/routing-and-scheduling.md: resource_efficiency 0.4 +
 // user_priority 0.3 + scheduler_tier 0.2 + wait_time 0.1) discounted by the
 // TMB heartbeat-freshness weight (exp decay, 30-minute half-life); with no
 // capable peer it falls back to a sub-scheduler (tier > 1) that can route the
@@ -287,7 +287,7 @@ func RouteAtP(self string, chain []string, employees []ledger.Node, localMatch f
 	if target != "" {
 		return Decision{Action: ActionForward, Target: target}
 	}
-	// §9.3 graph routing: no capable direct peer — walk the link-state graph
+	// docs/design/routing-and-scheduling.md graph routing: no capable direct peer — walk the link-state graph
 	// the nodes' neighbor advertisements build (G=(V,E)) and forward to the
 	// first hop of the shortest path that reaches a capable node. The forward
 	// is an ordinary delegation: the receiving node runs its own Route and
@@ -309,7 +309,7 @@ func RouteAtP(self string, chain []string, employees []ledger.Node, localMatch f
 }
 
 // unknownLinkCost is the edge weight (ms) assigned to an advertised neighbor
-// that has no measured RTT (§4.1). It sits deliberately far above a healthy
+// that has no measured RTT (docs/design/routing-and-scheduling.md). It sits deliberately far above a healthy
 // LAN link's few milliseconds so a measured cheap path always beats an
 // unmeasured one, while staying finite so an unmeasured path still beats
 // no path at all.
@@ -317,7 +317,7 @@ const unknownLinkCost int64 = 1000
 
 // linkCost reads the edge weight u advertises for its link to v: the RTT
 // sample u published in its link metrics, or the unknown-link default when
-// the measurement never arrived (a peer that predates §4.1, or a link too
+// the measurement never arrived (a peer that predates docs/design/routing-and-scheduling.md, or a link too
 // young to have a pong back).
 func linkCost(u ledger.Node, v string) int64 {
 	if w, ok := u.LinkMetrics[v]; ok && w > 0 {
@@ -330,7 +330,7 @@ func linkCost(u ledger.Node, v string) int64 {
 // cheapest online node that can run the task (ability match + hardware fit),
 // returning the first hop of that minimum-cost path — the only hop this node
 // needs, since every relay re-runs Route on arrival. Edges are the nodes'
-// advertised Neighbors weighted by their advertised link metrics (§4.1):
+// advertised Neighbors weighted by their advertised link metrics (docs/design/routing-and-scheduling.md):
 // hop count used to be the implicit metric, which preferred a two-hop path
 // over a three-hop one regardless of what each hop actually costs; with RTT
 // on the edges a long-but-fast path now wins, as the whitepaper's weighted
@@ -465,7 +465,7 @@ func RouteToFirstHop(self ledger.Node, employees []ledger.Node, dest string, see
 }
 
 // DTNNextHop picks the first hop of the cheapest advertised path toward a
-// specific destination for store-and-forward custody (§8.3). It differs from
+// specific destination for store-and-forward custody (docs/design/routing-and-scheduling.md). It differs from
 // graphFirstHop in three ways that all follow from the DTN setting: the
 // target is a fixed node rather than "anyone capable"; that node may be
 // offline — the normal case, since the bundle only needs to reach the online

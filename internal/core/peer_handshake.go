@@ -157,7 +157,7 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 		return
 	}
 	// Verify the transport signature before trusting the claimed identity
-	// (design §16 / P0-1). Fail closed: an unauthenticated or stale hello
+	// (docs/design/routing-and-scheduling.md). Fail closed: an unauthenticated or stale hello
 	// registers nothing and receives no reply — but it DOES receive a
 	// hello_reject first, so the dialer can tell "my credential is wrong"
 	// from "the network dropped us". Our own id goes in so a hello bound to

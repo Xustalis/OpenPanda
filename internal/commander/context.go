@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// FileContext is the file-type task context (design doc §12.5). It records
+// FileContext is the file-type task context (docs/design/execution-and-defense.md). It records
 // repo identity plus optional scope so the executor knows what to touch.
 type FileContext struct {
 	Type   string            `json:"type"`

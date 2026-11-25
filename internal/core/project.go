@@ -640,7 +640,7 @@ func attachedInputs(t Task) bool {
 
 // projectNames lists the projects this node holds a checkout of — the
 // residence set it advertises on hello, card beats and heartbeats so routing
-// can prefer landing a project-bound task where its tree already lives (§6.3).
+// can prefer landing a project-bound task where its tree already lives (docs/design/routing-and-scheduling.md).
 // A read failure returns nil, which the wire reads as "no list sent": peers
 // leave their stored set alone rather than clobbering it on a transient
 // error. A node with no project store reports an empty set — accurate, and it

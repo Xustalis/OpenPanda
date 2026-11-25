@@ -10,7 +10,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/util"
 )
 
-// Deep-ranking weights, matching OpenClaw's six signals (design §17.3). The
+// Deep-ranking weights, matching OpenClaw's six signals (docs/memory-lifecycle.md). The
 // order is fixed: novelty, frequency, query diversity, recency,
 // consolidation, conceptual richness; the slice sums to 1.0.
 var dreamWeights = [6]float64{0.30, 0.24, 0.15, 0.15, 0.10, 0.06}

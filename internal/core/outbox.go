@@ -26,7 +26,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/trust"
 )
 
-// Batch-6 restart continuity (confirmed-issues §14): outbox rows used to key
+// Batch-6 restart continuity (docs/design/routing-and-scheduling.md): outbox rows used to key
 // the DESTINATION by the peer's instance id, so a node that restarted — new
 // process, new node id — could never claim work parked for its old self. The
 // protocol now separates the three identities the doc requires:
@@ -426,7 +426,7 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 				c.rerouteDeclined(flushCtx, e.taskID)
 				continue
 			}
-			// §8.2 TTL: a bundle parked past its deadline is dead — delivering
+			// docs/design/routing-and-scheduling.md TTL: a bundle parked past its deadline is dead — delivering
 			// it now would run work whose result the mesh already abandoned.
 			// Drop the entry and expire the local copy so it stops occupying
 			// the dispatched slot it was parked under.
@@ -439,7 +439,7 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 				continue
 			}
 			// The CBOR bundle is the authoritative record AND the wire form
-			// (§8.3): verified on our side, then delivered verbatim as a
+			// (docs/design/routing-and-scheduling.md): verified on our side, then delivered verbatim as a
 			// dtn_bundle so the receiver checks the same signature. A row
 			// that was tampered while parked fails closed here instead of
 			// executing forged work on delivery.
@@ -481,7 +481,7 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 			c.restampParkedLease(flushCtx, e.taskID)
 			c.logger.Info("outbox: redelivered forward task", "task", e.taskID, "peer", peer)
 		}
-		// §8.3 chunked push rides the same custody model as the parked
+		// docs/design/routing-and-scheduling.md chunked push rides the same custody model as the parked
 		// bundles above: rows retire on the receiver's acked waterline, and
 		// the stream resumes — not restarts — after a reconnect. Ordering
 		// matters: delegates go first so the task row exists when the chunks
@@ -859,9 +859,9 @@ func (c *Core) deliverCancel(ctx context.Context, peer, taskID, attemptID, reaso
 }
 
 // taskOutboxPersist stores a forward task that could not be delivered immediately,
-// implementing the universal DTN store-and-forward relay outbox (whitepaper §8.2, §9.1).
+// implementing the universal DTN store-and-forward relay outbox (docs/design/routing-and-scheduling.md).
 // The task is parked both as its JSON payload (legacy decode path) and as a
-// CBOR-signed DTN bundle (§8.3): EID addressing, a relative lifetime, and an
+// CBOR-signed DTN bundle (docs/design/routing-and-scheduling.md): EID addressing, a relative lifetime, and an
 // HMAC that keeps a parked row tamper-evident for as long as it waits. ttl is
 // this node's local expiry for the row; the bundle converts it to a lifetime
 // so relays downstream re-anchor custody to their own clocks.
@@ -885,7 +885,7 @@ func (c *Core) taskOutboxPersist(ctx context.Context, peer string, p bus.TaskDel
 			lifetimeSec = 1
 		}
 		// A parked copy holds no lease: the bundle TTL is the row's absolute
-		// bound (§8.2), and the stamp also keeps RequeueStaleClaims from
+		// bound (docs/design/routing-and-scheduling.md), and the stamp also keeps RequeueStaleClaims from
 		// treating in-flight custody as an orphaned claim.
 		if derr := c.store.SetDeadlineIfUnset(ctx, p.TaskID, ttl); derr != nil {
 			c.logger.Warn("task_outbox: stamp dtn deadline", "task", p.TaskID, "err", derr)
@@ -1023,7 +1023,7 @@ func (c *Core) restampParkedLease(ctx context.Context, taskID string) {
 }
 
 // deliverBundle places a dtn_bundle envelope carrying a verbatim signed CBOR
-// bundle on the wire (§8.3). It is the flush path's send for a parked row:
+// bundle on the wire (docs/design/routing-and-scheduling.md). It is the flush path's send for a parked row:
 // the stored blob IS the signed object, so redelivery is byte-identical to
 // the dispatch that parked it.
 func (c *Core) deliverBundle(ctx context.Context, peer string, blob []byte) bool {
@@ -1045,7 +1045,7 @@ func (c *Core) deliverBundle(ctx context.Context, peer string, blob []byte) bool
 	return true
 }
 
-// sweepOutboxes is the monitor tick's periodic redelivery pass (§9.1): parked
+// sweepOutboxes is the monitor tick's periodic redelivery pass (docs/design/routing-and-scheduling.md): parked
 // entries only flushed on the peer's hello before, which meant a peer that
 // stayed CONNECTED but briefly dropped a send (a transient write error, a
 // lane that was full for a beat) kept its parked work until the next
@@ -1086,7 +1086,7 @@ func (c *Core) sweepOutboxes(ctx context.Context) {
 			c.outboxFlush(ctx, inst) // claims internally; skips if one is running
 		}
 	}
-	// §8.3 multi-hop: rows keyed to a destination that never connects
+	// docs/design/routing-and-scheduling.md multi-hop: rows keyed to a destination that never connects
 	// directly would wait out their TTL parked. Recompute a live next hop
 	// for each signed bundle and move custody closer.
 	c.relayParked(ctx, "")
@@ -1094,7 +1094,7 @@ func (c *Core) sweepOutboxes(ctx context.Context) {
 
 // relayParked re-routes parked task_outbox bundles through the link-state
 // graph: for every signed row whose final destination is unreachable, the
-// first hop of the cheapest advertised path is tried instead (§8.3). Rows
+// first hop of the cheapest advertised path is tried instead (docs/design/routing-and-scheduling.md). Rows
 // stay keyed by destination — custody moves, addressing does not. via on the
 // row is excluded as a next hop so a flush can never echo a bundle back the
 // way it arrived, and relayForwardOK bounds how often this node will carry

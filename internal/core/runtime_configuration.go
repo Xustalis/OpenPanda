@@ -14,7 +14,7 @@ import (
 	"strings"
 )
 
-// SetContacts installs this node's advertised contact plan (§8.4). Call it
+// SetContacts installs this node's advertised contact plan (docs/design/routing-and-scheduling.md). Call it
 // after NewCore, before the serving goroutines start — the slice is read
 // unsynchronized afterward. The plan gossips out in every heartbeat and
 // lands in the local directory row via refreshSelfNeighbors.

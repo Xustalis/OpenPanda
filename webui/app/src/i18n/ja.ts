@@ -1630,7 +1630,7 @@ const ja: Messages = {
   'card.raw.save': 'カードを保存',
   'card.raw.hint': 'ファイル全体でカードを置き換えます。書き込み前に検証し、旧カードは .bak として保持されます。',
 
-  // — Decision orbit & fleet topology (P0 redesign, §4)
+  // — Decision orbit & fleet topology
   'orbit.step.classify': '意図の分類',
   'orbit.step.route': 'ルーティング',
   'orbit.step.exec': '実行中',

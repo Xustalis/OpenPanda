@@ -5081,6 +5081,15 @@
 .complete-item.active {
   background: var(--accent-soft);
 }
+.complete-item.disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.complete-check {
+  color: var(--accent);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
 .complete-label {
   font-family: var(--font-mono);
   font-size: var(--text-sm);

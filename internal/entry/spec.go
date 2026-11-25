@@ -18,7 +18,7 @@ var validRisk = map[string]bool{
 	"low": true, "medium": true, "high": true, "critical": true,
 }
 
-// validContextType is the set of context kinds (design doc §12.5). The model
+// validContextType is the set of context kinds (docs/design/execution-and-defense.md). The model
 // chooses one; the Go core validates it rather than trusting the model.
 var validContextType = map[string]bool{
 	"file": true, "command": true, "hardware": true, "stream": true,
@@ -80,7 +80,7 @@ func ValidateTaskSpec(t *TaskSpec) error {
 const maxActionParams = 32
 
 // validateActionSpec checks the actuator dispatch block a model may attach to
-// a task (§7.2). The executor re-checks everything at substitution, but the
+// a task (docs/design/execution-and-defense.md). The executor re-checks everything at substitution, but the
 // boundary validation exists for the same reason the rest of
 // ValidateTaskSpec does: a malformed spec must be refused while the model can
 // still fix it, not after it has been persisted and routed to a device.

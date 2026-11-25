@@ -77,7 +77,7 @@ func TestListBySession(t *testing.T) {
 }
 
 // TestRecordEventBumpsUpdatedAt guards the web-console live-refresh path (P0
-// §1.5): an appended event that does not change state must still move
+// ): an appended event that does not change state must still move
 // tasks.updated_at, because the panel's SSE change detector fingerprints on
 // (id, state, updated_at). Without the bump, progress/trace/tool events never
 // flip the fingerprint and the console silently misses them.

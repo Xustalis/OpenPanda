@@ -18,7 +18,7 @@ import { toast, toastError } from '../components/toast'
 import { fmtElapsed, isActiveState, latestActivity } from '../components/task-activity'
 import { PlansView } from './plans'
 
-// The queue is a kanban board (design §11.2): the user never navigates a task
+// The queue is a kanban board: the user never navigates a task
 // tree — they see what is waiting, what is running, what needs their approval,
 // and what just finished. Grouping is by state; dependencies stay a system
 // concern and live in the task detail view.
@@ -34,7 +34,7 @@ const COLUMNS: { key: 'todo' | 'doing' | 'review' | 'done'; states: string[] }[]
 const DELETABLE_STATES = new Set(['submitted', 'queued', 'done', 'failed', 'cancelled', 'expired'])
 
 // Cap per column: recent history stays scannable without an endless wall of
-// finished cards (design §11.2 shows "DONE · last 24h"; a count cap is the
+// finished cards (shows "DONE · last 24h"; a count cap is the
 // simpler equivalent for now).
 const DONE_COLUMN_LIMIT = 8
 
@@ -1091,7 +1091,7 @@ function KanbanCard({
       </div>
       {isActiveState(task.state) && <LiveLine task={task} />}
       {isReview && (
-        // Approval is the whole point of the review column (design §11.2):
+        // Approval is the whole point of the review column:
         // act on the card itself, no detour into the detail page. The
         // disposition line says what approve will DO — accept finished work,
         // resume a parked run, or refuse until the input changes — instead of

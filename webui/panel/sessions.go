@@ -1710,7 +1710,7 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 
 	// Every panel session is a workspace conversation: repo sessions run in
 	// their worktree, non-repo ones in the shared work path. Pinning a
-	// non-empty workDir for both keeps the memory wall (§17.2) intact —
+	// non-empty workDir for both keeps the memory wall (docs/memory-lifecycle.md) intact —
 	// personal memory never enters a session prompt.
 	workDir := eng.SessionWorkDir(sess)
 	// Run under the panel lifetime, not the HTTP connection. Only the matching

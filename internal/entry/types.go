@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Package entry implements the unified entry model (design doc §7): one model
+// Package entry implements the unified entry model (docs/design/execution-and-defense.md): one model
 // call classifies a user request as an answer, a controlled tool call, a
 // structured task, or a multi-stage plan. The model never performs side
 // effects — the Go core validates and executes whatever the model emits.
@@ -162,7 +162,7 @@ type ToolCall struct {
 }
 
 // TaskSpec is the structured task payload the model emits for KindTask
-// (design doc §7.3).
+// (docs/design/execution-and-defense.md).
 type TaskSpec struct {
 	Title       string          `json:"title"`
 	Project     string          `json:"project"`
@@ -183,7 +183,7 @@ type TaskSpec struct {
 	MaxTurns int `json:"max_turns,omitempty"`
 }
 
-// Requires lists the abilities a task needs (design doc §7.3).
+// Requires lists the abilities a task needs (docs/design/execution-and-defense.md).
 type Requires struct {
 	Abilities []string `json:"abilities"`
 }
@@ -227,7 +227,7 @@ type TaskSpecDetail struct {
 	// this task (defense.ModeManual, ModePlan, …). Empty means auto: the
 	// thread never picked one, and the executor's ordinary tier gate applies.
 	PermissionMode string `json:"permission_mode,omitempty"`
-	// ActionSpec is the hardware/software actuator dispatch (§7.2): when the
+	// ActionSpec is the hardware/software actuator dispatch (docs/design/execution-and-defense.md): when the
 	// request drives a declared actuator (a hardware:* ability on a device),
 	// the model names the target actuator, the action verb and the scalar
 	// parameters the actuator's driver placeholders need. It lives inside
@@ -247,7 +247,7 @@ type TaskSpecDetail struct {
 }
 
 // ResourceProfile is a coarse resource hint, not a safety rating (design doc
-// §7.3; complexity/risk are recorded but do not auto-switch model tiers in MVP).
+// docs/design/execution-and-defense.md; complexity/risk are recorded but do not auto-switch model tiers in MVP).
 type ResourceProfile struct {
 	CPU          int     `json:"cpu"`
 	RAMGB        float64 `json:"ram_gb"`

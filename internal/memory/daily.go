@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// Daily retention windows (design §17.2): logs older than dailyArchiveDays are
+// Daily retention windows (docs/memory-lifecycle.md): logs older than dailyArchiveDays are
 // moved to daily/archive/ (kept, but out of the warm scan path); logs older
 // than dailyDeleteDays are deleted.
 const (
@@ -55,7 +55,7 @@ func (d *Daily) PathFor(date time.Time) string {
 // ExternalMarker prefixes a daily-log line whose content derives from
 // external input (task titles, user text, wire payloads) rather than the
 // agent's own observations. The Dreaming engine's provenance gate (design
-// §17.3, OpenClaw taint model) treats such lines as untrusted and never
+// docs/memory-lifecycle.md, OpenClaw taint model) treats such lines as untrusted and never
 // promotes them into MEMORY.md (P1-22).
 const ExternalMarker = "[ext]"
 

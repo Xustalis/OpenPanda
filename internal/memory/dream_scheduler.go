@@ -16,7 +16,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/util"
 )
 
-// dreamInterval is the minimum gap between Deep promotions (design §17.3:
+// dreamInterval is the minimum gap between Deep promotions (docs/memory-lifecycle.md:
 // Dreaming runs when the node is idle, at most once per day).
 const dreamInterval = 24 * time.Hour
 

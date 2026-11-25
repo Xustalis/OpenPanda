@@ -12,7 +12,7 @@ import (
 )
 
 // TestProgressForEvent pins the mapping from scheduler-core trace events to the
-// CLI's live progress phases (P0 §1.4): the bridge in submitTask forwards these
+// CLI's live progress phases (docs/design/execution-and-defense.md): the bridge in submitTask forwards these
 // while a synchronous Submit blocks, so a delegated agent run shows routing →
 // executing → judging instead of a frozen spinner. Events with no live-progress
 // meaning must report ok=false so the caller stays silent.
